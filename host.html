@@ -222,52 +222,14 @@ window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideN
 
 // ============================================================
 // SESSION API
+// (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  // Fixed internal host account — signed in automatically and silently,
-  // no login screen. Keeps RLS (host_id = auth.uid()) working as-is.
-  const HOST_INTERNAL_EMAIL = 'stack@istackyyy.local';
-  const HOST_INTERNAL_PASSWORD = 'stack123';
-
-  async function ensureAuth() {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (session) return session.user;
-
-    const { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({
-      email: HOST_INTERNAL_EMAIL,
-      password: HOST_INTERNAL_PASSWORD,
-    });
-
-    if (!signInErr) return signInData.user;
-
-    if (!/invalid login credentials/i.test(signInErr.message)) {
-      throw new Error(`Auth error: ${signInErr.message}`);
-    }
-
-    const { error: signUpErr } = await supabaseClient.auth.signUp({
-      email: HOST_INTERNAL_EMAIL,
-      password: HOST_INTERNAL_PASSWORD,
-    });
-    if (signUpErr) throw new Error(`Setup error: ${signUpErr.message}`);
-
-    const { data: retryData, error: retryErr } = await supabaseClient.auth.signInWithPassword({
-      email: HOST_INTERNAL_EMAIL,
-      password: HOST_INTERNAL_PASSWORD,
-    });
-    if (retryErr) throw new Error(`Auth error: ${retryErr.message}`);
-    return retryData.user;
-  }
-
-  async function getCurrentUser() {
-    const { data: { user } } = await supabaseClient.auth.getUser();
-    return user;
-  }
   async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled }) {
-    const user = await ensureAuth();
     const { data: session, error } = await supabaseClient
       .from('sessions')
       .insert({
-        host_id: user.id, name, format, court_count: courtCount,
+        name, format, court_count: courtCount,
         stacking_mode: stackingMode || 'win_loss_queue',
         pairing_default: pairingDefault || 'fixed',
         skill_match_mode: skillMatchMode || 'open',
@@ -281,8 +243,7 @@ const SessionAPI = (() => {
     return session;
   }
   async function getMySessions() {
-    const user = await ensureAuth();
-    const { data, error } = await supabaseClient.from('sessions').select('*').eq('host_id', user.id).order('created_at', { ascending: false });
+    const { data, error } = await supabaseClient.from('sessions').select('*').order('created_at', { ascending: false });
     if (error) throw error;
     return data;
   }
@@ -378,7 +339,7 @@ const SessionAPI = (() => {
     if (error) throw error;
   }
   return {
-    getCurrentUser, createSession, getMySessions, getSession,
+    createSession, getMySessions, getSession,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
     getCourts, assignCourt, recordResult, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
