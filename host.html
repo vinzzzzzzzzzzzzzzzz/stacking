@@ -224,13 +224,16 @@ window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideN
 // SESSION API
 // ============================================================
 const SessionAPI = (() => {
-  async function signIn(email, password) {
-    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  async function sendOtp(email) {
+    const { data, error } = await supabaseClient.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: true },
+    });
     if (error) throw error;
     return data;
   }
-  async function signUp(email, password) {
-    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+  async function verifyOtp(email, token) {
+    const { data, error } = await supabaseClient.auth.verifyOtp({ email, token, type: 'email' });
     if (error) throw error;
     return data;
   }
@@ -360,7 +363,7 @@ const SessionAPI = (() => {
     if (error) throw error;
   }
   return {
-    signIn, signUp, signOut, getCurrentUser, createSession, getMySessions, getSession,
+    sendOtp, verifyOtp, signOut, getCurrentUser, createSession, getMySessions, getSession,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
     getCourts, assignCourt, recordResult, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
@@ -377,13 +380,21 @@ let activeTab = 'roster';
 let selectedPlayerIds = [];
 let realtimeChannel = null;
 
+// Only this email is allowed to host sessions
+const ALLOWED_HOST_EMAIL = 'llanes.v.bscs@gmail.com';
+
 init();
 
 async function init() {
   currentUser = await SessionAPI.getCurrentUser();
-  if (currentUser) {
+  if (currentUser && currentUser.email?.toLowerCase() === ALLOWED_HOST_EMAIL) {
     renderTopbarLoggedIn();
     await renderSessionList();
+  } else if (currentUser) {
+    // Logged in as an unauthorized email somehow — kick them out
+    await SessionAPI.signOut();
+    currentUser = null;
+    renderAuthScreen();
   } else {
     renderAuthScreen();
   }
@@ -394,42 +405,65 @@ function renderAuthScreen() {
   document.getElementById('appRoot').innerHTML = `
     <div class="auth-box">
       <h1>Host Console</h1>
-      <p class="sub">Sign in to run your open play session.</p>
-      <div class="field"><label>Email</label><input type="email" id="authEmail" placeholder="you@example.com"></div>
-      <div class="field"><label>Password</label><input type="password" id="authPassword" placeholder="••••••••"></div>
-      <button class="btn-primary" onclick="handleSignIn()">Sign In</button>
-      <button class="btn-secondary" onclick="handleSignUp()">Create Account</button>
+      <p class="sub">Enter the host email to receive a one-time code.</p>
+      <div class="field"><label>Email</label><input type="email" id="authEmail" placeholder="${ALLOWED_HOST_EMAIL}" value="${ALLOWED_HOST_EMAIL}"></div>
+      <button class="btn-primary" onclick="handleSendOtp()">Send Code</button>
       <div class="auth-error" id="authError"></div>
+
+      <div id="otpStep" style="display:none; margin-top:18px; padding-top:18px; border-top:1px solid #eee;">
+        <div class="field"><label>6-Digit Code</label><input type="text" id="authOtp" placeholder="123456" maxlength="6" inputmode="numeric"></div>
+        <button class="btn-primary" onclick="handleVerifyOtp()">Verify & Sign In</button>
+        <button class="btn-secondary" onclick="handleSendOtp()">Resend Code</button>
+      </div>
     </div>
   `;
 }
 
-async function handleSignIn() {
-  const email = document.getElementById('authEmail').value.trim();
-  const password = document.getElementById('authPassword').value;
+async function handleSendOtp() {
+  const email = document.getElementById('authEmail').value.trim().toLowerCase();
+  const errorEl = document.getElementById('authError');
+  errorEl.style.color = 'var(--loser-coral)';
+
+  if (email !== ALLOWED_HOST_EMAIL) {
+    errorEl.textContent = 'This email is not authorized to host sessions.';
+    return;
+  }
+
   try {
-    await SessionAPI.signIn(email, password);
+    await SessionAPI.sendOtp(email);
+    errorEl.style.color = 'var(--winner-green)';
+    errorEl.textContent = `Code sent to ${email}. Check your inbox.`;
+    document.getElementById('otpStep').style.display = 'block';
+  } catch (err) {
+    errorEl.style.color = 'var(--loser-coral)';
+    errorEl.textContent = err.message;
+  }
+}
+
+async function handleVerifyOtp() {
+  const email = document.getElementById('authEmail').value.trim().toLowerCase();
+  const token = document.getElementById('authOtp').value.trim();
+  const errorEl = document.getElementById('authError');
+
+  if (email !== ALLOWED_HOST_EMAIL) {
+    errorEl.style.color = 'var(--loser-coral)';
+    errorEl.textContent = 'This email is not authorized to host sessions.';
+    return;
+  }
+  if (!token) {
+    errorEl.style.color = 'var(--loser-coral)';
+    errorEl.textContent = 'Enter the 6-digit code from your email.';
+    return;
+  }
+
+  try {
+    await SessionAPI.verifyOtp(email, token);
     currentUser = await SessionAPI.getCurrentUser();
     renderTopbarLoggedIn();
     await renderSessionList();
   } catch (err) {
-    document.getElementById('authError').textContent = err.message;
-  }
-}
-
-async function handleSignUp() {
-  const email = document.getElementById('authEmail').value.trim();
-  const password = document.getElementById('authPassword').value;
-  if (password.length < 6) {
-    document.getElementById('authError').textContent = 'Password must be at least 6 characters.';
-    return;
-  }
-  try {
-    await SessionAPI.signUp(email, password);
-    document.getElementById('authError').style.color = 'var(--winner-green)';
-    document.getElementById('authError').textContent = 'Account created — check your email to confirm, then sign in.';
-  } catch (err) {
-    document.getElementById('authError').textContent = err.message;
+    errorEl.style.color = 'var(--loser-coral)';
+    errorEl.textContent = err.message;
   }
 }
 
