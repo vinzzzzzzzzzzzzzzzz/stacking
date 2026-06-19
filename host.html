@@ -6,94 +6,79 @@
 <title>iStackyyy — Host Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../css/tokens.css">
 <style>
+  /* ============ DESIGN TOKENS ============ */
+  :root {
+    --court-green: #1B4D3E;
+    --court-green-dark: #123329;
+    --kitchen-gold: #E8B84B;
+    --line-paint: #F7F5EF;
+    --ink: #15201C;
+    --winner-green: #3FA66B;
+    --loser-coral: #E0654F;
+    --resting-slate: #8E9B97;
+    --waiting-blue: #4E7FB5;
+    --font-display: 'Archivo Black', 'Arial Black', sans-serif;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --shadow-card: 0 2px 14px rgba(21, 32, 28, 0.12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--line-paint); color: var(--ink); font-family: var(--font-body); }
+  h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; }
+  a { color: inherit; }
+  button { font-family: var(--font-body); cursor: pointer; }
+  ::selection { background: var(--kitchen-gold); color: var(--ink); }
+  :focus-visible { outline: 3px solid var(--kitchen-gold); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+  .mono { font-family: var(--font-mono); }
+
+  /* ============ PAGE STYLES ============ */
   body { padding-bottom: 60px; }
 
-  .topbar {
-    background: var(--ink);
-    color: var(--line-paint);
-    padding: 16px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
+  .topbar { background: var(--ink); color: var(--line-paint); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
   .brand .display { font-size: 20px; }
   .brand .dot { color: var(--kitchen-gold); }
   .topbar-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
-  .topbar-right button {
-    background: transparent; border: 1px solid rgba(255,255,255,0.3);
-    color: var(--line-paint); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 12px;
-  }
+  .topbar-right button { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: var(--line-paint); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 12px; }
 
   .container { max-width: 1100px; margin: 0 auto; padding: 28px 24px; }
 
-  /* ---------- Auth screen ---------- */
-  .auth-box {
-    max-width: 380px; margin: 80px auto;
-    background: white; border-radius: var(--radius); box-shadow: var(--shadow-card);
-    padding: 32px;
-  }
+  .auth-box { max-width: 380px; margin: 80px auto; background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 32px; }
   .auth-box h1 { font-size: 22px; margin: 0 0 4px; }
   .auth-box p.sub { color: var(--resting-slate); font-size: 13px; margin: 0 0 20px; }
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .field input, .field select {
-    width: 100%; padding: 10px 12px; border: 1.5px solid #ddd; border-radius: var(--radius-sm); font-size: 14px;
-  }
-  .btn-primary {
-    width: 100%; background: var(--court-green); color: white; border: none;
-    padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; margin-top: 6px;
-  }
-  .btn-secondary {
-    width: 100%; background: transparent; color: var(--court-green); border: 1.5px solid var(--court-green);
-    padding: 10px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; margin-top: 8px;
-  }
+  .field input, .field select { width: 100%; padding: 10px 12px; border: 1.5px solid #ddd; border-radius: var(--radius-sm); font-size: 14px; }
+  .btn-primary { width: 100%; background: var(--court-green); color: white; border: none; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; margin-top: 6px; }
+  .btn-secondary { width: 100%; background: transparent; color: var(--court-green); border: 1.5px solid var(--court-green); padding: 10px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; margin-top: 8px; }
   .auth-error { color: var(--loser-coral); font-size: 12px; margin-top: 8px; }
 
-  /* ---------- Session list ---------- */
-  .card {
-    background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 20px; margin-bottom: 20px;
-  }
+  .card { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 20px; margin-bottom: 20px; }
   .card h2 { font-size: 16px; margin: 0 0 14px; }
-  .session-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 12px 0; border-bottom: 1px solid #eee;
-  }
+  .session-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #eee; }
   .session-row:last-child { border-bottom: none; }
   .session-row .meta { font-size: 12px; color: var(--resting-slate); }
-  .session-row button {
-    background: var(--court-green); color: white; border: none; padding: 7px 14px;
-    border-radius: var(--radius-sm); font-size: 12px; font-weight: 700;
-  }
+  .session-row button { background: var(--court-green); color: white; border: none; padding: 7px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; }
 
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
 
-  /* ---------- Active session console ---------- */
-  .console-header {
-    display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px;
-  }
+  .console-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
   .console-header h1 { font-size: 22px; margin: 0; }
-  .share-link {
-    background: white; border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--font-mono);
-    font-size: 12px; display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card);
-  }
+  .share-link { background: white; border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card); }
   .share-link button { background: var(--kitchen-gold); border: none; padding: 5px 10px; border-radius: 4px; font-weight: 700; font-size: 11px; }
 
   .tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 2px solid #e5e0d5; }
-  .tab-btn {
-    background: none; border: none; padding: 10px 16px; font-weight: 700; font-size: 13px;
-    color: var(--resting-slate); border-bottom: 3px solid transparent; margin-bottom: -2px;
-  }
+  .tab-btn { background: none; border: none; padding: 10px 16px; font-weight: 700; font-size: 13px; color: var(--resting-slate); border-bottom: 3px solid transparent; margin-bottom: -2px; }
   .tab-btn.active { color: var(--court-green); border-bottom-color: var(--court-green); }
-
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
-  /* roster */
   .add-player-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .add-player-row input { flex: 1; min-width: 140px; padding: 10px 12px; border: 1.5px solid #ddd; border-radius: var(--radius-sm); }
   .add-player-row select { padding: 10px; border: 1.5px solid #ddd; border-radius: var(--radius-sm); }
@@ -111,36 +96,24 @@
   .roster-table button.remove-btn { background: none; border: none; color: var(--loser-coral); font-size: 11px; font-weight: 700; }
 
   .player-checklist { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-  .player-check {
-    border: 1.5px solid #ddd; padding: 7px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
-    cursor: pointer; user-select: none;
-  }
+  .player-check { border: 1.5px solid #ddd; padding: 7px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
   .player-check.selected { background: var(--court-green); color: white; border-color: var(--court-green); }
-  .player-check.disabled { opacity: 0.35; cursor: not-allowed; }
 
-  /* courts */
   .courts-host-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
   .court-host-card { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
   .court-host-label { background: var(--court-green); color: white; padding: 10px 14px; font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; }
   .court-host-body { padding: 14px; }
   .matchup-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 600; }
   .matchup-vs { color: var(--resting-slate); font-size: 11px; }
-  .win-select-btn {
-    background: var(--winner-green); color: white; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;
-  }
+  .win-select-btn { background: var(--winner-green); color: white; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
   .court-empty-msg { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 12px 0; }
-  .court-empty-msg.eligible { color: var(--court-green); font-weight: 700; }
-  .assign-btn {
-    width: 100%; background: var(--kitchen-gold); color: var(--ink); border: none; padding: 9px; border-radius: var(--radius-sm); font-weight: 700; font-size: 12px; margin-top: 8px;
-  }
+  .assign-btn { width: 100%; background: var(--kitchen-gold); color: var(--ink); border: none; padding: 9px; border-radius: var(--radius-sm); font-weight: 700; font-size: 12px; margin-top: 8px; }
 
-  /* messages / rest requests */
   .inbox-item { padding: 12px; border-radius: var(--radius-sm); background: #fafaf7; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
   .inbox-item .who { font-weight: 700; font-size: 13px; }
   .inbox-item .what { font-size: 13px; color: var(--ink); }
   .inbox-item .when { font-size: 11px; color: var(--resting-slate); }
   .inbox-actions button { font-size: 11px; font-weight: 700; border: none; padding: 6px 10px; border-radius: 6px; margin-left: 6px; }
-  .btn-confirm { background: var(--winner-green); color: white; }
   .btn-dismiss { background: #eee; color: var(--ink); }
   .empty-inbox { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 20px; }
 </style>
@@ -152,14 +125,616 @@
   <div class="topbar-right" id="topbarRight"></div>
 </div>
 
-<div class="container" id="appRoot">
-  <!-- rendered by host-app.js -->
-</div>
+<div class="container" id="appRoot"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="../js/supabase-config.js"></script>
-<script src="../js/stacking-engine.js"></script>
-<script src="../js/session-api.js"></script>
-<script src="../js/host-app.js"></script>
+<script>
+// ============================================================
+// SUPABASE CONFIG
+// ============================================================
+const SUPABASE_URL = 'https://srkmbofgyajdairkjwti.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNya21ib2ZneWFqZGFpcmtqd3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4Nzk3NDQsImV4cCI6MjA5NzQ1NTc0NH0.GxSJ2RH2txJLM2VjJ0t-Q0Yqd_6M2TrO6BS7Cq17QuY';
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ============================================================
+// STACKING ENGINE
+// ============================================================
+const TIER_RANK = { beginner: 0, intermediate: 1, advanced: 2, open: -1 };
+
+function tiersCompatible(teamATier, teamBTier, skillMatchMode) {
+  if (skillMatchMode === 'open') return true;
+  if (teamATier === 'open' || teamBTier === 'open') return true;
+  const rankA = TIER_RANK[teamATier];
+  const rankB = TIER_RANK[teamBTier];
+  if (skillMatchMode === 'strict') return rankA === rankB;
+  if (skillMatchMode === 'adjacent') return Math.abs(rankA - rankB) <= 1;
+  return true;
+}
+
+function getTeamTier(team, playersById) {
+  const tiers = team.player_ids.map(pid => playersById[pid]?.skill_tier).filter(Boolean);
+  if (tiers.length === 0) return 'open';
+  if (tiers.includes('open')) {
+    const nonOpen = tiers.filter(t => t !== 'open');
+    if (nonOpen.length === 0) return 'open';
+    tiers.length = 0;
+    tiers.push(...nonOpen);
+  }
+  const ranks = tiers.map(t => TIER_RANK[t]);
+  const minRank = Math.min(...ranks);
+  return Object.keys(TIER_RANK).find(k => TIER_RANK[k] === minRank);
+}
+
+function popEligibleTeam(queueTeams, opponentTier, skillMatchMode, playersById) {
+  for (let i = 0; i < queueTeams.length; i++) {
+    const candidate = queueTeams[i];
+    const candidateTier = getTeamTier(candidate, playersById);
+    if (tiersCompatible(candidateTier, opponentTier, skillMatchMode)) {
+      return { team: candidate, index: i };
+    }
+  }
+  return null;
+}
+
+function decideNextMatch({ stackingMode, skillMatchMode, winnersQueue, losersQueue, waitingQueue, playersById, preferredLane = null }) {
+  if (stackingMode === 'fifo') {
+    if (waitingQueue.length < 2) return null;
+    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
+  }
+  const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
+  for (const lane of lanesToTry) {
+    const queue = lane === 'winners' ? winnersQueue : losersQueue;
+    if (queue.length >= 2) {
+      const teamA = queue[0];
+      const teamATier = getTeamTier(teamA, playersById);
+      const rest = queue.slice(1);
+      const found = popEligibleTeam(rest, teamATier, skillMatchMode, playersById);
+      if (found) return { teamA, teamB: found.team, lane };
+    }
+  }
+  const combined = [...winnersQueue, ...losersQueue, ...waitingQueue];
+  if (combined.length >= 2) {
+    const teamA = combined[0];
+    const teamATier = getTeamTier(teamA, playersById);
+    const found = popEligibleTeam(combined.slice(1), teamATier, skillMatchMode, playersById);
+    if (found) return { teamA, teamB: found.team, lane: 'mixed' };
+  }
+  return null;
+}
+
+function calculateReturnPosition(queueTeams, restPriorityEnabled) {
+  if (queueTeams.length === 0) return 1;
+  if (restPriorityEnabled) {
+    const minPos = Math.min(...queueTeams.map(t => t.queue_position ?? 0));
+    return minPos - 1;
+  }
+  const maxPos = Math.max(...queueTeams.map(t => t.queue_position ?? 0));
+  return maxPos + 1;
+}
+
+function calculateBackOfQueuePosition(queueTeams) {
+  if (queueTeams.length === 0) return 1;
+  const maxPos = Math.max(...queueTeams.map(t => t.queue_position ?? 0));
+  return maxPos + 1;
+}
+
+window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
+
+// ============================================================
+// SESSION API
+// ============================================================
+const SessionAPI = (() => {
+  async function signIn(email, password) {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+  }
+  async function signUp(email, password) {
+    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) throw error;
+    return data;
+  }
+  async function signOut() {
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) throw error;
+  }
+  async function getCurrentUser() {
+    const { data: { user } } = await supabaseClient.auth.getUser();
+    return user;
+  }
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled }) {
+    const user = await getCurrentUser();
+    if (!user) throw new Error('Not logged in');
+    const { data: session, error } = await supabaseClient
+      .from('sessions')
+      .insert({
+        host_id: user.id, name, format, court_count: courtCount,
+        stacking_mode: stackingMode || 'win_loss_queue',
+        pairing_default: pairingDefault || 'fixed',
+        skill_match_mode: skillMatchMode || 'open',
+        rest_priority_enabled: restPriorityEnabled !== false,
+      })
+      .select().single();
+    if (error) throw error;
+    const courtRows = Array.from({ length: courtCount }, (_, i) => ({ session_id: session.id, court_number: i + 1, status: 'open' }));
+    const { error: courtError } = await supabaseClient.from('courts').insert(courtRows);
+    if (courtError) throw courtError;
+    return session;
+  }
+  async function getMySessions() {
+    const user = await getCurrentUser();
+    if (!user) return [];
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('host_id', user.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    return data;
+  }
+  async function getSession(sessionId) {
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).single();
+    if (error) throw error;
+    return data;
+  }
+  async function addPlayer(sessionId, name, skillTier = 'open') {
+    const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
+    if (error) throw error;
+    return data;
+  }
+  async function getPlayers(sessionId) {
+    const { data, error } = await supabaseClient.from('players').select('*').eq('session_id', sessionId).neq('status', 'left').order('joined_at', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+  async function removePlayer(playerId) {
+    const { error } = await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
+    if (error) throw error;
+  }
+  async function createTeam(sessionId, playerIds, pairingMode = 'fixed', queueLane = 'waiting') {
+    const { data: existing } = await supabaseClient.from('teams').select('queue_position').eq('session_id', sessionId).eq('queue_lane', queueLane);
+    const position = window.StackingEngine.calculateBackOfQueuePosition(existing || []);
+    const { data, error } = await supabaseClient.from('teams').insert({ session_id: sessionId, player_ids: playerIds, pairing_mode: pairingMode, queue_lane: queueLane, queue_position: position }).select().single();
+    if (error) throw error;
+    return data;
+  }
+  async function getTeams(sessionId) {
+    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('is_active', true);
+    if (error) throw error;
+    return data;
+  }
+  async function getQueueLane(sessionId, lane) {
+    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('queue_lane', lane).eq('is_active', true).order('queue_position', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+  async function getCourts(sessionId) {
+    const { data, error } = await supabaseClient.from('courts').select('*, team_a:team_a_id(*), team_b:team_b_id(*)').eq('session_id', sessionId).order('court_number', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+  async function assignCourt(courtId, teamAId, teamBId) {
+    const { error } = await supabaseClient.from('courts').update({ status: 'in_progress', team_a_id: teamAId, team_b_id: teamBId, game_started_at: new Date().toISOString() }).eq('id', courtId);
+    if (error) throw error;
+    await supabaseClient.from('teams').update({ queue_lane: 'playing', queue_position: null }).in('id', [teamAId, teamBId]);
+  }
+  async function recordResult(courtId, winnerTeamId) {
+    const { data: court, error: courtErr } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+    if (courtErr) throw courtErr;
+    const loserTeamId = court.team_a_id === winnerTeamId ? court.team_b_id : court.team_a_id;
+    await supabaseClient.from('matches').insert({
+      session_id: court.session_id, court_id: courtId, team_a_id: court.team_a_id, team_b_id: court.team_b_id,
+      winner_team_id: winnerTeamId, started_at: court.game_started_at, ended_at: new Date().toISOString(),
+      duration_seconds: court.game_started_at ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
+    });
+    const [winnersQ, losersQ] = await Promise.all([getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue')]);
+    await supabaseClient.from('teams').update({ queue_lane: 'winners_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(winnersQ) }).eq('id', winnerTeamId);
+    await supabaseClient.from('teams').update({ queue_lane: 'losers_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(losersQ) }).eq('id', loserTeamId);
+    await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
+    await tryRefillCourt(courtId);
+  }
+  async function tryRefillCourt(courtId) {
+    const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+    if (!court || court.status === 'in_progress') return null;
+    const session = await getSession(court.session_id);
+    const [winnersQueue, losersQueue, waitingQueue, players] = await Promise.all([
+      getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue'),
+      getQueueLane(court.session_id, 'waiting'), getPlayers(court.session_id),
+    ]);
+    const playersById = Object.fromEntries(players.map(p => [p.id, p]));
+    const decision = window.StackingEngine.decideNextMatch({ stackingMode: session.stacking_mode, skillMatchMode: session.skill_match_mode, winnersQueue, losersQueue, waitingQueue, playersById });
+    if (!decision) return null;
+    await assignCourt(courtId, decision.teamA.id, decision.teamB.id);
+    return decision;
+  }
+  async function getPendingRestRequests(sessionId) {
+    const { data, error } = await supabaseClient.from('rest_requests').select('*, player:player_id(*)').eq('session_id', sessionId).eq('status', 'pending');
+    if (error) throw error;
+    return data;
+  }
+  async function getMessages(sessionId, statusFilter = null) {
+    let query = supabaseClient.from('messages').select('*').eq('session_id', sessionId).order('created_at', { ascending: false });
+    if (statusFilter) query = query.eq('status', statusFilter);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data;
+  }
+  async function markMessageStatus(messageId, status) {
+    const { error } = await supabaseClient.from('messages').update({ status }).eq('id', messageId);
+    if (error) throw error;
+  }
+  return {
+    signIn, signUp, signOut, getCurrentUser, createSession, getMySessions, getSession,
+    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
+    getCourts, assignCourt, recordResult, tryRefillCourt,
+    getPendingRestRequests, getMessages, markMessageStatus,
+  };
+})();
+window.SessionAPI = SessionAPI;
+
+// ============================================================
+// HOST APP
+// ============================================================
+let currentUser = null;
+let activeSession = null;
+let activeTab = 'roster';
+let selectedPlayerIds = [];
+let realtimeChannel = null;
+
+init();
+
+async function init() {
+  currentUser = await SessionAPI.getCurrentUser();
+  if (currentUser) {
+    renderTopbarLoggedIn();
+    await renderSessionList();
+  } else {
+    renderAuthScreen();
+  }
+}
+
+function renderAuthScreen() {
+  document.getElementById('topbarRight').innerHTML = '';
+  document.getElementById('appRoot').innerHTML = `
+    <div class="auth-box">
+      <h1>Host Console</h1>
+      <p class="sub">Sign in to run your open play session.</p>
+      <div class="field"><label>Email</label><input type="email" id="authEmail" placeholder="you@example.com"></div>
+      <div class="field"><label>Password</label><input type="password" id="authPassword" placeholder="••••••••"></div>
+      <button class="btn-primary" onclick="handleSignIn()">Sign In</button>
+      <button class="btn-secondary" onclick="handleSignUp()">Create Account</button>
+      <div class="auth-error" id="authError"></div>
+    </div>
+  `;
+}
+
+async function handleSignIn() {
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  try {
+    await SessionAPI.signIn(email, password);
+    currentUser = await SessionAPI.getCurrentUser();
+    renderTopbarLoggedIn();
+    await renderSessionList();
+  } catch (err) {
+    document.getElementById('authError').textContent = err.message;
+  }
+}
+
+async function handleSignUp() {
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  if (password.length < 6) {
+    document.getElementById('authError').textContent = 'Password must be at least 6 characters.';
+    return;
+  }
+  try {
+    await SessionAPI.signUp(email, password);
+    document.getElementById('authError').style.color = 'var(--winner-green)';
+    document.getElementById('authError').textContent = 'Account created — check your email to confirm, then sign in.';
+  } catch (err) {
+    document.getElementById('authError').textContent = err.message;
+  }
+}
+
+async function handleSignOut() {
+  await SessionAPI.signOut();
+  currentUser = null;
+  activeSession = null;
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  renderAuthScreen();
+}
+
+function renderTopbarLoggedIn() {
+  document.getElementById('topbarRight').innerHTML = `<span>${escapeHtml(currentUser.email)}</span><button onclick="handleSignOut()">Sign Out</button>`;
+}
+
+async function renderSessionList() {
+  const sessions = await SessionAPI.getMySessions();
+  const activeOnes = sessions.filter(s => s.status === 'active');
+  document.getElementById('appRoot').innerHTML = `
+    <div class="card">
+      <h2>Your Sessions</h2>
+      ${activeOnes.length ? activeOnes.map(s => `
+        <div class="session-row">
+          <div><div style="font-weight:700;">${escapeHtml(s.name)}</div><div class="meta">${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div></div>
+          <button onclick="openSession('${s.id}')">Open</button>
+        </div>
+      `).join('') : '<p style="color:var(--resting-slate); font-size:13px;">No active sessions yet.</p>'}
+    </div>
+    <div class="card">
+      <h2>Start New Session</h2>
+      <div class="form-grid">
+        <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
+        <div class="field"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
+        <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
+        <div class="field"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
+        <div class="field"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
+        <div class="field"><label>Skill Matching</label><select id="newSkillMode"><option value="open">Open (anyone vs anyone)</option><option value="adjacent">Adjacent tiers only (±1 level)</option><option value="strict">Strict (same tier only)</option></select></div>
+      </div>
+      <button class="btn-primary" onclick="handleCreateSession()">Create Session</button>
+    </div>
+  `;
+}
+
+async function handleCreateSession() {
+  const name = document.getElementById('newName').value.trim() || 'Open Play';
+  const format = document.getElementById('newFormat').value;
+  const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
+  const stackingMode = document.getElementById('newStackingMode').value;
+  const pairingDefault = document.getElementById('newPairingDefault').value;
+  const skillMatchMode = document.getElementById('newSkillMode').value;
+  const session = await SessionAPI.createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled: true });
+  await openSession(session.id);
+}
+
+async function openSession(sessionId) {
+  activeSession = await SessionAPI.getSession(sessionId);
+  activeTab = 'roster';
+  renderConsole();
+  subscribeRealtime();
+}
+
+function backToSessionList() {
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  activeSession = null;
+  renderSessionList();
+}
+
+async function renderConsole() {
+  const shareUrl = `${window.location.origin}${window.location.pathname.replace('host.html', 'index.html')}?session=${activeSession.id}`;
+  document.getElementById('appRoot').innerHTML = `
+    <div class="console-header">
+      <div>
+        <button class="btn-secondary" style="width:auto; padding:6px 12px; font-size:12px; margin-bottom:8px;" onclick="backToSessionList()">← All Sessions</button>
+        <h1>${escapeHtml(activeSession.name)}</h1>
+      </div>
+      <div class="share-link"><span id="shareUrlText">${shareUrl}</span><button onclick="copyShareLink('${shareUrl}')">Copy</button></div>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
+      <button class="tab-btn ${activeTab === 'courts' ? 'active' : ''}" onclick="switchTab('courts')">Courts</button>
+      <button class="tab-btn ${activeTab === 'inbox' ? 'active' : ''}" onclick="switchTab('inbox')">Inbox</button>
+    </div>
+    <div class="tab-panel active" id="tabPanel"></div>
+  `;
+  await renderActiveTab();
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  renderActiveTab();
+}
+
+async function renderActiveTab() {
+  const panel = document.getElementById('tabPanel');
+  if (activeTab === 'roster') panel.innerHTML = await rosterTabHtml();
+  if (activeTab === 'courts') panel.innerHTML = await courtsTabHtml();
+  if (activeTab === 'inbox') panel.innerHTML = await inboxTabHtml();
+}
+
+function copyShareLink(url) {
+  navigator.clipboard.writeText(url);
+  event.target.textContent = 'Copied!';
+  setTimeout(() => { event.target.textContent = 'Copy'; }, 1500);
+}
+
+async function rosterTabHtml() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  return `
+    <div class="card">
+      <h2>Add Player</h2>
+      <div class="add-player-row">
+        <input type="text" id="newPlayerName" placeholder="Player name">
+        <select id="newPlayerTier"><option value="open">No tier</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select>
+        <button onclick="handleAddPlayer()">Add</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Roster (${players.length})</h2>
+      ${players.length ? `
+        <table class="roster-table">
+          <thead><tr><th>Name</th><th>Tier</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${players.map(p => `
+              <tr>
+                <td>${escapeHtml(p.name)}</td>
+                <td>${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
+                <td><span class="status-pill status-${p.status}">${p.status.replace('_', ' ')}</span></td>
+                <td>
+                  ${p.status === 'resting' ? `<button onclick="handleReturnFromRest('${p.id}')" style="background:none;border:none;color:var(--winner-green);font-size:11px;font-weight:700;">Mark Ready</button>` : ''}
+                  <button class="remove-btn" onclick="handleRemovePlayer('${p.id}')">Remove</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : '<p style="color:var(--resting-slate); font-size:13px;">No players yet — add some above.</p>'}
+    </div>
+  `;
+}
+
+async function handleAddPlayer() {
+  const name = document.getElementById('newPlayerName').value.trim();
+  const tier = document.getElementById('newPlayerTier').value;
+  if (!name) return;
+  await SessionAPI.addPlayer(activeSession.id, name, tier);
+  document.getElementById('newPlayerName').value = '';
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+async function handleRemovePlayer(playerId) {
+  await SessionAPI.removePlayer(playerId);
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+async function handleReturnFromRest(playerId) {
+  await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', playerId);
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+async function courtsTabHtml() {
+  const [courts, players] = await Promise.all([SessionAPI.getCourts(activeSession.id), SessionAPI.getPlayers(activeSession.id)]);
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const availablePlayers = players.filter(p => p.status === 'waiting');
+
+  const courtCards = courts.map(court => {
+    if (court.status === 'in_progress') {
+      const namesA = playerNamesForTeam(court.team_a, players).join(' & ');
+      const namesB = playerNamesForTeam(court.team_b, players).join(' & ');
+      return `
+        <div class="court-host-card">
+          <div class="court-host-label"><span>Court ${court.court_number}</span><span class="mono" id="hostTimer-${court.id}">00:00</span></div>
+          <div class="court-host-body">
+            <div class="matchup-row"><span>${escapeHtml(namesA)}</span><button class="win-select-btn" onclick="handleRecordWin('${court.id}', '${court.team_a_id}')">Won</button></div>
+            <div class="matchup-vs">vs</div>
+            <div class="matchup-row"><span>${escapeHtml(namesB)}</span><button class="win-select-btn" onclick="handleRecordWin('${court.id}', '${court.team_b_id}')">Won</button></div>
+          </div>
+        </div>
+      `;
+    } else {
+      return `
+        <div class="court-host-card">
+          <div class="court-host-label"><span>Court ${court.court_number}</span><span>OPEN</span></div>
+          <div class="court-host-body">
+            <div class="court-empty-msg">No match assigned</div>
+            <button class="assign-btn" onclick="handleAutoRefill('${court.id}')">Try Auto-Fill from Queue</button>
+            <button class="assign-btn" style="background:#eee;color:var(--ink);margin-top:6px;" onclick="openManualAssign('${court.id}')">Manually Assign Players</button>
+          </div>
+        </div>
+      `;
+    }
+  }).join('');
+
+  return `
+    <div class="card" id="manualAssignCard" style="display:none;">
+      <h2>Manual Assign — Court</h2>
+      <p style="font-size:12px;color:var(--resting-slate);">Select ${teamSize === 2 ? '4 players (2 vs 2)' : '2 players (1 vs 1)'} from waiting players.</p>
+      <div class="player-checklist" id="manualPlayerChecklist">
+        ${availablePlayers.length ? availablePlayers.map(p => `<div class="player-check" data-id="${p.id}" onclick="togglePlayerSelect('${p.id}')">${escapeHtml(p.name)}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No waiting players. Add players in the Roster tab.</p>'}
+      </div>
+      <button class="btn-primary" style="width:auto;padding:10px 20px;" onclick="confirmManualAssign()">Confirm Match</button>
+      <button class="btn-secondary" style="width:auto;padding:10px 20px;margin-left:8px;" onclick="closeManualAssign()">Cancel</button>
+    </div>
+    <div class="courts-host-grid">${courtCards}</div>
+  `;
+}
+
+let manualAssignCourtId = null;
+
+function openManualAssign(courtId) {
+  manualAssignCourtId = courtId;
+  selectedPlayerIds = [];
+  document.getElementById('manualAssignCard').style.display = 'block';
+  document.getElementById('manualAssignCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeManualAssign() {
+  manualAssignCourtId = null;
+  selectedPlayerIds = [];
+  document.getElementById('manualAssignCard').style.display = 'none';
+}
+
+function togglePlayerSelect(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const maxPlayers = teamSize * 2;
+  const idx = selectedPlayerIds.indexOf(playerId);
+  if (idx >= 0) {
+    selectedPlayerIds.splice(idx, 1);
+  } else {
+    if (selectedPlayerIds.length >= maxPlayers) return;
+    selectedPlayerIds.push(playerId);
+  }
+  document.querySelectorAll('.player-check').forEach(el => {
+    el.classList.toggle('selected', selectedPlayerIds.includes(el.dataset.id));
+  });
+}
+
+async function confirmManualAssign() {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const needed = teamSize * 2;
+  if (selectedPlayerIds.length !== needed) {
+    alert(`Select exactly ${needed} players first.`);
+    return;
+  }
+  const teamAPlayers = selectedPlayerIds.slice(0, teamSize);
+  const teamBPlayers = selectedPlayerIds.slice(teamSize);
+  const teamA = await SessionAPI.createTeam(activeSession.id, teamAPlayers, activeSession.pairing_default, 'playing');
+  const teamB = await SessionAPI.createTeam(activeSession.id, teamBPlayers, activeSession.pairing_default, 'playing');
+  await SessionAPI.assignCourt(manualAssignCourtId, teamA.id, teamB.id);
+  await supabaseClient.from('players').update({ status: 'playing' }).in('id', selectedPlayerIds);
+  closeManualAssign();
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
+
+async function handleAutoRefill(courtId) {
+  const result = await SessionAPI.tryRefillCourt(courtId);
+  if (!result) alert('Not enough eligible players in queue yet to fill this court.');
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
+
+async function handleRecordWin(courtId, winnerTeamId) {
+  await SessionAPI.recordResult(courtId, winnerTeamId);
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
+
+function playerNamesForTeam(team, players) {
+  if (!team) return [];
+  return team.player_ids.map(pid => players.find(p => p.id === pid)?.name || '—');
+}
+
+async function inboxTabHtml() {
+  const messages = await SessionAPI.getMessages(activeSession.id, 'pending');
+  return `
+    <div class="card">
+      <h2>Player Messages</h2>
+      ${messages.length ? messages.map(m => `
+        <div class="inbox-item">
+          <div><div class="who">${escapeHtml(m.player_name)}</div><div class="what">${escapeHtml(m.message)}</div><div class="when">${new Date(m.created_at).toLocaleTimeString()}</div></div>
+          <div class="inbox-actions"><button class="btn-dismiss" onclick="handleDismissMessage('${m.id}')">Dismiss</button></div>
+        </div>
+      `).join('') : '<div class="empty-inbox">No messages</div>'}
+    </div>
+  `;
+}
+
+async function handleDismissMessage(messageId) {
+  await SessionAPI.markMessageStatus(messageId, 'seen');
+  document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+}
+
+function subscribeRealtime() {
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  realtimeChannel = supabaseClient
+    .channel(`host-${activeSession.id}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
+    .subscribe();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+</script>
 </body>
 </html>
