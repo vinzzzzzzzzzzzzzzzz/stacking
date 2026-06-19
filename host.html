@@ -128,6 +128,7 @@
 <div class="container" id="appRoot"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 // ============================================================
 // SUPABASE CONFIG
@@ -135,6 +136,12 @@
 const SUPABASE_URL = 'https://srkmbofgyajdairkjwti.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNya21ib2ZneWFqZGFpcmtqd3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4Nzk3NDQsImV4cCI6MjA5NzQ1NTc0NH0.GxSJ2RH2txJLM2VjJ0t-Q0Yqd_6M2TrO6BS7Cq17QuY';
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ============================================================
+// EMAILJS CONFIG (used for custom OTP delivery — bypasses
+// Supabase's rate-limited default mailer)
+// ============================================================
+emailjs.init({ publicKey: 'p7H_l-TeDNyOoT4VI' });
 
 // ============================================================
 // STACKING ENGINE
@@ -224,19 +231,64 @@ window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideN
 // SESSION API
 // ============================================================
 const SessionAPI = (() => {
+  function generateCode() {
+    return String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+  }
+
   async function sendOtp(email) {
-    const { data, error } = await supabaseClient.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: true },
+    const code = generateCode();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min validity
+
+    const { error: dbError } = await supabaseClient.from('host_otp').insert({
+      email, code, expires_at: expiresAt.toISOString(),
     });
-    if (error) throw error;
-    return data;
+    if (dbError) throw dbError;
+
+    try {
+      await emailjs.send('service_3xmocsf', 'template_d28365t', {
+        email: email,
+        passcode: code,
+        time: expiresAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      });
+    } catch (emailErr) {
+      throw new Error('Could not send email. Please try again.');
+    }
+
+    return { email };
   }
+
   async function verifyOtp(email, token) {
-    const { data, error } = await supabaseClient.auth.verifyOtp({ email, token, type: 'email' });
+    const { data: rows, error } = await supabaseClient
+      .from('host_otp')
+      .select('*')
+      .eq('email', email)
+      .eq('code', token)
+      .eq('used', false)
+      .order('created_at', { ascending: false })
+      .limit(1);
     if (error) throw error;
-    return data;
+
+    if (!rows || rows.length === 0) {
+      throw new Error('Invalid code. Please check and try again.');
+    }
+    const otpRow = rows[0];
+    if (new Date(otpRow.expires_at).getTime() < Date.now()) {
+      throw new Error('Code expired. Please request a new one.');
+    }
+
+    // mark code as used
+    await supabaseClient.from('host_otp').update({ used: true }).eq('id', otpRow.id);
+
+    // establish a real Supabase auth session so RLS (auth.uid()) works
+    let { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session) {
+      const { error: anonErr } = await supabaseClient.auth.signInAnonymously();
+      if (anonErr) throw anonErr;
+    }
+
+    return { email };
   }
+
   async function signOut() {
     const { error } = await supabaseClient.auth.signOut();
     if (error) throw error;
@@ -387,13 +439,16 @@ init();
 
 async function init() {
   currentUser = await SessionAPI.getCurrentUser();
-  if (currentUser && currentUser.email?.toLowerCase() === ALLOWED_HOST_EMAIL) {
+  const verifiedEmail = localStorage.getItem('istackyyy_host_email');
+
+  if (currentUser && verifiedEmail === ALLOWED_HOST_EMAIL) {
     renderTopbarLoggedIn();
     await renderSessionList();
   } else if (currentUser) {
-    // Logged in as an unauthorized email somehow — kick them out
+    // Signed into Supabase but no verified host email on this device — kick them back to login
     await SessionAPI.signOut();
     currentUser = null;
+    localStorage.removeItem('istackyyy_host_email');
     renderAuthScreen();
   } else {
     renderAuthScreen();
@@ -459,6 +514,7 @@ async function handleVerifyOtp() {
   try {
     await SessionAPI.verifyOtp(email, token);
     currentUser = await SessionAPI.getCurrentUser();
+    localStorage.setItem('istackyyy_host_email', email);
     renderTopbarLoggedIn();
     await renderSessionList();
   } catch (err) {
@@ -471,12 +527,14 @@ async function handleSignOut() {
   await SessionAPI.signOut();
   currentUser = null;
   activeSession = null;
+  localStorage.removeItem('istackyyy_host_email');
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
   renderAuthScreen();
 }
 
 function renderTopbarLoggedIn() {
-  document.getElementById('topbarRight').innerHTML = `<span>${escapeHtml(currentUser.email)}</span><button onclick="handleSignOut()">Sign Out</button>`;
+  const email = localStorage.getItem('istackyyy_host_email') || ALLOWED_HOST_EMAIL;
+  document.getElementById('topbarRight').innerHTML = `<span>${escapeHtml(email)}</span><button onclick="handleSignOut()">Sign Out</button>`;
 }
 
 async function renderSessionList() {
