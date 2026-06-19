@@ -242,17 +242,22 @@ const SessionAPI = (() => {
     });
 
     if (signInErr) {
+      // If sign-in failed for a reason other than "user doesn't exist yet", surface it directly
+      if (!/invalid login credentials/i.test(signInErr.message)) {
+        throw new Error(`Login error: ${signInErr.message}`);
+      }
+
       const { error: signUpErr } = await supabaseClient.auth.signUp({
         email: HOST_INTERNAL_EMAIL,
         password: HOST_PASSWORD,
       });
-      if (signUpErr) throw signUpErr;
+      if (signUpErr) throw new Error(`Setup error: ${signUpErr.message}`);
 
       const { error: retrySignInErr } = await supabaseClient.auth.signInWithPassword({
         email: HOST_INTERNAL_EMAIL,
         password: HOST_PASSWORD,
       });
-      if (retrySignInErr) throw retrySignInErr;
+      if (retrySignInErr) throw new Error(`Login error: ${retrySignInErr.message}`);
     }
 
     return { username: HOST_USERNAME };
