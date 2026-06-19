@@ -224,56 +224,46 @@ window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideN
 // SESSION API
 // ============================================================
 const SessionAPI = (() => {
-  // Fixed host credentials — mapped internally to a real email so
-  // Supabase Auth (and existing RLS policies) work normally.
-  const HOST_USERNAME = 'stack';
-  const HOST_PASSWORD = 'stack123';
+  // Fixed internal host account — signed in automatically and silently,
+  // no login screen. Keeps RLS (host_id = auth.uid()) working as-is.
   const HOST_INTERNAL_EMAIL = 'stack@istackyyy.local';
+  const HOST_INTERNAL_PASSWORD = 'stack123';
 
-  async function login(username, password) {
-    if (username !== HOST_USERNAME || password !== HOST_PASSWORD) {
-      throw new Error('Incorrect username or password.');
-    }
+  async function ensureAuth() {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session) return session.user;
 
-    // Try signing in; if the internal account doesn't exist yet, create it once.
-    const { error: signInErr } = await supabaseClient.auth.signInWithPassword({
+    const { data: signInData, error: signInErr } = await supabaseClient.auth.signInWithPassword({
       email: HOST_INTERNAL_EMAIL,
-      password: HOST_PASSWORD,
+      password: HOST_INTERNAL_PASSWORD,
     });
 
-    if (signInErr) {
-      // If sign-in failed for a reason other than "user doesn't exist yet", surface it directly
-      if (!/invalid login credentials/i.test(signInErr.message)) {
-        throw new Error(`Login error: ${signInErr.message}`);
-      }
+    if (!signInErr) return signInData.user;
 
-      const { error: signUpErr } = await supabaseClient.auth.signUp({
-        email: HOST_INTERNAL_EMAIL,
-        password: HOST_PASSWORD,
-      });
-      if (signUpErr) throw new Error(`Setup error: ${signUpErr.message}`);
-
-      const { error: retrySignInErr } = await supabaseClient.auth.signInWithPassword({
-        email: HOST_INTERNAL_EMAIL,
-        password: HOST_PASSWORD,
-      });
-      if (retrySignInErr) throw new Error(`Login error: ${retrySignInErr.message}`);
+    if (!/invalid login credentials/i.test(signInErr.message)) {
+      throw new Error(`Auth error: ${signInErr.message}`);
     }
 
-    return { username: HOST_USERNAME };
+    const { error: signUpErr } = await supabaseClient.auth.signUp({
+      email: HOST_INTERNAL_EMAIL,
+      password: HOST_INTERNAL_PASSWORD,
+    });
+    if (signUpErr) throw new Error(`Setup error: ${signUpErr.message}`);
+
+    const { data: retryData, error: retryErr } = await supabaseClient.auth.signInWithPassword({
+      email: HOST_INTERNAL_EMAIL,
+      password: HOST_INTERNAL_PASSWORD,
+    });
+    if (retryErr) throw new Error(`Auth error: ${retryErr.message}`);
+    return retryData.user;
   }
 
-  async function signOut() {
-    const { error } = await supabaseClient.auth.signOut();
-    if (error) throw error;
-  }
   async function getCurrentUser() {
     const { data: { user } } = await supabaseClient.auth.getUser();
     return user;
   }
   async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled }) {
-    const user = await getCurrentUser();
-    if (!user) throw new Error('Not logged in');
+    const user = await ensureAuth();
     const { data: session, error } = await supabaseClient
       .from('sessions')
       .insert({
@@ -291,8 +281,7 @@ const SessionAPI = (() => {
     return session;
   }
   async function getMySessions() {
-    const user = await getCurrentUser();
-    if (!user) return [];
+    const user = await ensureAuth();
     const { data, error } = await supabaseClient.from('sessions').select('*').eq('host_id', user.id).order('created_at', { ascending: false });
     if (error) throw error;
     return data;
@@ -389,7 +378,7 @@ const SessionAPI = (() => {
     if (error) throw error;
   }
   return {
-    login, signOut, getCurrentUser, createSession, getMySessions, getSession,
+    getCurrentUser, createSession, getMySessions, getSession,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
     getCourts, assignCourt, recordResult, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
@@ -400,7 +389,6 @@ window.SessionAPI = SessionAPI;
 // ============================================================
 // HOST APP
 // ============================================================
-let currentUser = null;
 let activeSession = null;
 let activeTab = 'roster';
 let selectedPlayerIds = [];
@@ -409,66 +397,14 @@ let realtimeChannel = null;
 init();
 
 async function init() {
-  currentUser = await SessionAPI.getCurrentUser();
-  const loggedInFlag = localStorage.getItem('istackyyy_host_logged_in');
-
-  if (currentUser && loggedInFlag === 'true') {
-    renderTopbarLoggedIn();
-    await renderSessionList();
-  } else if (currentUser) {
-    // Supabase session exists but wasn't established through our login flow — kick back to login
-    await SessionAPI.signOut();
-    currentUser = null;
-    localStorage.removeItem('istackyyy_host_logged_in');
-    renderAuthScreen();
-  } else {
-    renderAuthScreen();
-  }
-}
-
-function renderAuthScreen() {
   document.getElementById('topbarRight').innerHTML = '';
-  document.getElementById('appRoot').innerHTML = `
-    <div class="auth-box">
-      <h1>Host Console</h1>
-      <p class="sub">Sign in to run your open play session.</p>
-      <div class="field"><label>Username</label><input type="text" id="authUsername" placeholder="stack" autocomplete="username"></div>
-      <div class="field"><label>Password</label><input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') handleLogin()"></div>
-      <button class="btn-primary" onclick="handleLogin()">Sign In</button>
-      <div class="auth-error" id="authError"></div>
-    </div>
-  `;
-}
-
-async function handleLogin() {
-  const username = document.getElementById('authUsername').value.trim();
-  const password = document.getElementById('authPassword').value;
-  const errorEl = document.getElementById('authError');
-  errorEl.style.color = 'var(--loser-coral)';
-  errorEl.textContent = '';
-
   try {
-    await SessionAPI.login(username, password);
-    currentUser = await SessionAPI.getCurrentUser();
-    localStorage.setItem('istackyyy_host_logged_in', 'true');
-    renderTopbarLoggedIn();
     await renderSessionList();
   } catch (err) {
-    errorEl.textContent = err.message;
+    document.getElementById('appRoot').innerHTML = `
+      <div class="card"><h2>Couldn't load sessions</h2><p style="color:var(--loser-coral); font-size:13px;">${escapeHtml(err.message)}</p></div>
+    `;
   }
-}
-
-async function handleSignOut() {
-  await SessionAPI.signOut();
-  currentUser = null;
-  activeSession = null;
-  localStorage.removeItem('istackyyy_host_logged_in');
-  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
-  renderAuthScreen();
-}
-
-function renderTopbarLoggedIn() {
-  document.getElementById('topbarRight').innerHTML = `<span>stack</span><button onclick="handleSignOut()">Sign Out</button>`;
 }
 
 async function renderSessionList() {
