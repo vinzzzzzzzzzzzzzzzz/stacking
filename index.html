@@ -44,7 +44,7 @@
   body { padding-bottom: 80px; }
 
   .topbar {
-    background: var(--court-green); color: var(--line-paint); padding: 18px 24px;
+    background: linear-gradient(135deg, var(--court-green) 0%, var(--court-green-dark) 100%); color: var(--line-paint); padding: 18px 24px;
     display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
     position: sticky; top: 0; z-index: 10; box-shadow: var(--shadow-card);
   }
@@ -66,7 +66,7 @@
   .court-timer { font-family: var(--font-mono); font-weight: 700; font-size: 15px; color: var(--kitchen-gold); }
   .court-timer.idle { color: var(--resting-slate); }
 
-  .court-diagram { background: var(--court-green); aspect-ratio: 4 / 5; position: relative; display: flex; flex-direction: column; padding: 14px; }
+  .court-diagram { background: linear-gradient(160deg, var(--court-green) 0%, var(--court-green-dark) 100%); aspect-ratio: 4 / 5; position: relative; display: flex; flex-direction: column; padding: 14px; }
   .court-diagram::before { content: ''; position: absolute; inset: 14px; border: 3px solid var(--line-paint); opacity: 0.85; }
   .net-line { position: absolute; left: 14px; right: 14px; top: 50%; height: 4px; background: var(--line-paint); transform: translateY(-50%); opacity: 0.9; }
   .net-line::after { content: ''; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
