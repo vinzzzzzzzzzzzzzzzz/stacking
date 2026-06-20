@@ -315,15 +315,24 @@ function popFront(queueTeams) {
 /**
  * Decide the next match for a freed court.
  *
- * Default behavior (win_loss_queue mode): strict FIFO within each lane.
- * - Try to fill the court with 2 teams from the SAME lane (winner vs
- *   winner, or loser vs loser), always taking the longest-waiting team(s)
- *   in that lane — never skipping ahead for any reason.
- * - If a lane alone doesn't have 2 teams waiting, and `allowCrossLaneFill`
- *   is true (host-customizable, default true), fall back to pairing the
- *   front of winners queue against the front of losers queue so the court
- *   doesn't sit empty. If `allowCrossLaneFill` is false, the court just
- *   waits until a lane fills naturally.
+ * The cycle works as ONE continuous line: everyone who has never played
+ * (or has cycled back around after playing) sits in the WAITING queue,
+ * strict FIFO, no skipping. Fresh/waiting teams always get priority over
+ * teams that just finished a match — so 8 people who haven't played yet
+ * always go before 2 people replaying each other immediately.
+ *
+ * Win/loss is tracked so that WHEN a team's turn comes back around, the
+ * system tries to match them against another team with the same recent
+ * result (winner vs winner, loser vs loser) — but it never jumps them
+ * ahead of people who are still waiting for their first/next turn.
+ *
+ * Priority order:
+ *  1. Waiting queue has 2+ teams -> play from waiting (the default, normal case)
+ *  2. Waiting queue has fewer than 2 -> only then consider winners/losers
+ *     lanes facing each other (winner vs winner, loser vs loser), oldest
+ *     first in each lane
+ *  3. If still nothing fills the court and allowCrossLaneFill is on,
+ *     mix winners front vs losers front so the court doesn't sit idle
  */
 function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue, allowCrossLaneFill = true, preferredLane = null }) {
   if (stackingMode === 'fifo') {
@@ -331,9 +340,15 @@ function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue
     return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
   }
 
-  const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
+  // 1. Waiting queue takes priority — fresh/cycled-back teams play before
+  // anyone gets matched again off a recent win or loss.
+  if (waitingQueue.length >= 2) {
+    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
+  }
 
-  // 1. Same-lane FIFO match (winner vs winner, or loser vs loser)
+  // 2. Not enough in waiting — try same-lane FIFO match (winner vs winner,
+  // or loser vs loser), oldest first.
+  const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
   for (const lane of lanesToTry) {
     const queue = lane === 'winners' ? winnersQueue : losersQueue;
     if (queue.length >= 2) {
@@ -343,7 +358,7 @@ function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue
 
   if (!allowCrossLaneFill) return null;
 
-  // 2. Cross-lane fallback: front of winners vs front of losers, so an
+  // 3. Cross-lane fallback: front of winners vs front of losers, so an
   // uneven head count (not divisible by 4 for doubles) doesn't stall a court.
   const winnerFront = popFront(winnersQueue);
   const loserFront = popFront(losersQueue);
@@ -351,10 +366,11 @@ function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue
     return { teamA: winnerFront, teamB: loserFront, lane: 'mixed' };
   }
 
-  // 3. Last resort: pull from the general waiting queue if nothing in
-  // winners/losers can fill the court (e.g. very start of session).
-  if (waitingQueue.length >= 2) {
-    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
+  // 4. Last resort: a single leftover waiting team paired against whichever
+  // lane has someone available, so a lone team doesn't get stuck forever.
+  if (waitingQueue.length === 1) {
+    const opponent = popFront(winnersQueue) || popFront(losersQueue);
+    if (opponent) return { teamA: waitingQueue[0], teamB: opponent, lane: 'mixed' };
   }
 
   return null;
