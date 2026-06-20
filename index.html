@@ -25,17 +25,20 @@
     --radius-sm: 6px;
     --shadow-card: 0 2px 14px rgba(21, 32, 28, 0.12);
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--line-paint); color: var(--ink); font-family: var(--font-body); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--line-paint); color: var(--ink); font-family: var(--font-body); overflow-x: hidden; }
   h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; }
   a { color: inherit; }
-  button { font-family: var(--font-body); cursor: pointer; }
+  button { font-family: var(--font-body); cursor: pointer; touch-action: manipulation; }
   ::selection { background: var(--kitchen-gold); color: var(--ink); }
   :focus-visible { outline: 3px solid var(--kitchen-gold); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   }
   .mono { font-family: var(--font-mono); }
+
+  input, select, textarea { font-size: 16px; min-height: 44px; }
+  button { min-height: 44px; }
 
   /* ============ PAGE STYLES ============ */
   body { padding-bottom: 80px; }
@@ -45,12 +48,13 @@
     display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
     position: sticky; top: 0; z-index: 10; box-shadow: var(--shadow-card);
   }
-  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-paddle { width: 22px; height: 30px; color: var(--kitchen-gold); flex-shrink: 0; }
   .brand .display { font-size: 22px; color: var(--line-paint); }
   .brand .dot { color: var(--kitchen-gold); }
   .session-name { font-size: 13px; opacity: 0.8; font-weight: 500; }
   .session-picker { display: flex; gap: 8px; align-items: center; }
-  .session-picker input { font-family: var(--font-mono); padding: 8px 10px; border-radius: var(--radius-sm); border: none; width: 220px; font-size: 13px; }
+  .session-picker input { font-family: var(--font-mono); padding: 10px 12px; border-radius: var(--radius-sm); border: none; width: 220px; font-size: 16px; }
   .session-picker button { background: var(--kitchen-gold); color: var(--ink); border: none; font-weight: 700; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
 
   .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
@@ -66,6 +70,7 @@
   .court-diagram::before { content: ''; position: absolute; inset: 14px; border: 3px solid var(--line-paint); opacity: 0.85; }
   .net-line { position: absolute; left: 14px; right: 14px; top: 50%; height: 4px; background: var(--line-paint); transform: translateY(-50%); opacity: 0.9; }
   .net-line::after { content: ''; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
+  .net-ball { position: absolute; width: 18px; height: 18px; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--kitchen-gold); z-index: 3; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
   .kitchen-line-top, .kitchen-line-bottom { position: absolute; left: 14px; right: 14px; height: 2px; background: var(--line-paint); opacity: 0.55; }
   .kitchen-line-top { top: 32%; }
   .kitchen-line-bottom { bottom: 32%; }
@@ -75,6 +80,23 @@
   .empty-court-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--line-paint); opacity: 0.6; font-size: 13px; font-weight: 600; z-index: 2; }
 
   .queues { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 36px; }
+
+  .tournament-round-banner { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .round-pill { background: var(--court-green); color: white; font-family: var(--font-display); font-size: 13px; padding: 8px 16px; border-radius: 999px; }
+  .format-pill { background: var(--kitchen-gold); color: var(--ink); font-weight: 700; font-size: 12px; padding: 6px 14px; border-radius: 999px; }
+
+  .matchup-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px; }
+  .matchup-card { background: white; box-shadow: var(--shadow-card); display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600; flex-wrap: wrap; gap: 8px; }
+  .matchup-card.in-progress { box-shadow: 0 0 0 2px var(--kitchen-gold), var(--shadow-card); }
+  .matchup-card.completed { opacity: 0.7; }
+  .status-waiting { background: var(--resting-slate); }
+  .status-playing { background: var(--kitchen-gold); color: var(--ink); }
+
+  .standings-card { margin-bottom: 28px; background: white; box-shadow: var(--shadow-card); border-radius: var(--radius); padding: 18px; }
+  .standings-title { font-size: 15px; margin: 0 0 12px; }
+  .roster-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .roster-table th { text-align: left; padding: 8px; color: var(--resting-slate); font-size: 11px; text-transform: uppercase; border-bottom: 2px solid #eee; }
+  .roster-table td { padding: 8px; border-bottom: 1px solid #f0f0f0; }
   .lane { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
   .lane-header { padding: 12px 16px; font-family: var(--font-display); font-size: 13px; letter-spacing: 0.04em; color: white; display: flex; justify-content: space-between; align-items: center; }
   .lane-header .count { font-family: var(--font-mono); opacity: 0.85; }
@@ -90,13 +112,13 @@
   .lane-empty { padding: 16px; text-align: center; color: var(--resting-slate); font-size: 12px; }
 
   .find-me { background: var(--kitchen-gold); border-radius: var(--radius); padding: 16px; margin-bottom: 28px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .find-me input { flex: 1; min-width: 180px; padding: 10px 12px; border-radius: var(--radius-sm); border: none; font-size: 14px; }
+  .find-me input { flex: 1; min-width: 180px; padding: 12px; border-radius: var(--radius-sm); border: none; font-size: 16px; }
   .find-me-result { font-weight: 700; font-size: 13px; background: var(--ink); color: white; padding: 8px 12px; border-radius: var(--radius-sm); }
 
   .message-box { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; }
   .message-box h3 { font-size: 13px; margin: 0 0 10px; }
   .message-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .message-row input { padding: 9px 10px; border: 1px solid #ddd; border-radius: var(--radius-sm); font-size: 13px; }
+  .message-row input { padding: 12px; border: 1px solid #ddd; border-radius: var(--radius-sm); font-size: 16px; }
   .message-row input[name="from"] { width: 120px; }
   .message-row input[name="msg"] { flex: 1; min-width: 160px; }
   .message-row button { background: var(--court-green); color: white; border: none; padding: 9px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; }
@@ -104,12 +126,68 @@
 
   .empty-state { text-align: center; padding: 60px 20px; color: var(--resting-slate); }
   .empty-state .display { font-size: 18px; color: var(--ink); margin-bottom: 8px; }
+  .empty-state-paddle { width: 56px; height: 75px; color: var(--court-green); opacity: 0.25; margin-bottom: 16px; }
+
+  /* ============================================================
+     MOBILE BREAKPOINT — tablet and below
+     ============================================================ */
+  @media (max-width: 768px) {
+    .container { padding: 16px 14px; }
+    .topbar { padding: 12px 16px; flex-wrap: wrap; }
+    .brand { flex: 1 1 100%; }
+    .session-picker { flex: 1 1 100%; }
+    .session-picker input { width: 100%; }
+
+    .courts-grid { grid-template-columns: 1fr; gap: 14px; margin-bottom: 24px; }
+    .queues { grid-template-columns: 1fr; gap: 12px; margin-bottom: 24px; }
+
+    /* court diagram: cap height so a single-column phone layout doesn't
+       turn each court into a huge nearly-square block requiring lots of
+       scrolling to see all courts at a glance */
+    .court-diagram { aspect-ratio: 3 / 4; }
+    .player-chip { font-size: 12px; padding: 5px 10px; max-width: 110px; }
+
+    .find-me { flex-direction: column; align-items: stretch; padding: 14px; }
+    .find-me input { width: 100%; }
+    .find-me-result { text-align: center; }
+
+    .message-row { flex-direction: column; }
+    .message-row input[name="from"], .message-row input[name="msg"], .message-row button { width: 100%; }
+
+    .matchup-card { flex-direction: column; align-items: stretch; text-align: left; gap: 6px; }
+    .tournament-round-banner { flex-wrap: wrap; }
+
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -2px; }
+    .roster-table { min-width: 420px; }
+
+    h1 { font-size: 18px; }
+    .standings-title { font-size: 14px; }
+  }
+
+  @media (max-width: 420px) {
+    .brand .display { font-size: 18px; }
+    .empty-state { padding: 40px 16px; }
+  }
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="brand">
+    <svg class="brand-paddle" viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/>
+      <ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/>
+      <circle cx="16" cy="18" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="14" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="32" cy="18" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="14" cy="26" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="22" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="34" cy="26" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="16" cy="34" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="30" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="32" cy="34" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="38" r="1.4" fill="white" opacity="0.4"/>
+    </svg>
     <span class="display">iStackyyy<span class="dot">.</span></span>
     <span class="session-name" id="sessionNameLabel"></span>
   </div>
@@ -121,6 +199,20 @@
 
 <div class="container" id="mainContent">
   <div class="empty-state">
+    <svg class="empty-state-paddle" viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/>
+      <ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/>
+      <circle cx="16" cy="18" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="24" cy="14" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="32" cy="18" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="14" cy="26" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="24" cy="22" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="34" cy="26" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="16" cy="34" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="24" cy="30" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="32" cy="34" r="1.4" fill="white" opacity="0.5"/>
+      <circle cx="24" cy="38" r="1.4" fill="white" opacity="0.5"/>
+    </svg>
     <div class="display">No session loaded</div>
     <p>Ask your host for the session link, or paste the session ID above.</p>
   </div>
@@ -219,6 +311,16 @@ function calculateBackOfQueuePosition(queueTeams) {
 
 window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
 
+function computeStandings(teams) {
+  return [...teams].sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    const diffA = a.points_for - a.points_against;
+    const diffB = b.points_for - b.points_against;
+    if (diffB !== diffA) return diffB - diffA;
+    return b.points_for - a.points_for;
+  });
+}
+
 // ============================================================
 // SESSION API
 // ============================================================
@@ -252,11 +354,18 @@ const SessionAPI = (() => {
     if (error) throw error;
     return data;
   }
+  async function getMatchups(sessionId, roundNumber = null) {
+    let query = supabaseClient.from('tournament_matchups').select('*, team_a:team_a_id(*), team_b:team_b_id(*)').eq('session_id', sessionId);
+    if (roundNumber !== null) query = query.eq('round_number', roundNumber);
+    const { data, error } = await query.order('created_at', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
   async function sendMessage(sessionId, playerName, message) {
     const { error } = await supabaseClient.from('messages').insert({ session_id: sessionId, player_name: playerName, message });
     if (error) throw error;
   }
-  return { getCurrentUser, getSession, getPlayers, getTeams, getQueueLane, getCourts, sendMessage };
+  return { getCurrentUser, getSession, getPlayers, getTeams, getQueueLane, getCourts, getMatchups, sendMessage };
 })();
 window.SessionAPI = SessionAPI;
 
@@ -282,18 +391,28 @@ function loadSessionFromInput() {
   loadSession(id);
 }
 
+let currentSession = null;
+
 async function loadSession(sessionId) {
   try {
     const session = await SessionAPI.getSession(sessionId);
     currentSessionId = sessionId;
+    currentSession = session;
     document.getElementById('sessionNameLabel').textContent = session.name;
     document.getElementById('sessionPicker').style.display = 'none';
     const newUrl = `${window.location.pathname}?session=${sessionId}`;
     window.history.replaceState({}, '', newUrl);
-    renderShell();
-    await refreshAll();
-    subscribeRealtime();
-    startTimerLoop();
+
+    if (session.session_type === 'tournament') {
+      renderTournamentShell();
+      await refreshTournamentView();
+      subscribeTournamentRealtime();
+    } else {
+      renderShell();
+      await refreshAll();
+      subscribeRealtime();
+      startTimerLoop();
+    }
   } catch (err) {
     document.getElementById('mainContent').innerHTML = `
       <div class="empty-state">
@@ -301,6 +420,99 @@ async function loadSession(sessionId) {
         <p>Double check the link or ID your host gave you.</p>
       </div>`;
   }
+}
+
+function renderTournamentShell() {
+  document.getElementById('mainContent').innerHTML = `
+    <div class="find-me">
+      <input type="text" id="findMeInput" placeholder="Type your name to find your spot..." oninput="handleTournamentFindMe()">
+      <div id="findMeResult"></div>
+    </div>
+    <div class="tournament-round-banner" id="tournamentRoundBanner"></div>
+    <div class="matchup-list" id="tournamentMatchups"></div>
+    <div class="card standings-card">
+      <h2 class="standings-title">Standings</h2>
+      <div class="table-scroll">
+      <table class="roster-table" id="standingsTable"></table>
+      </div>
+    </div>
+    <div class="message-box">
+      <h3>Message the host</h3>
+      <div class="message-row">
+        <input type="text" name="from" id="msgFrom" placeholder="Your name">
+        <input type="text" name="msg" id="msgText" placeholder="e.g. Vince rest please" maxlength="280">
+        <button onclick="sendHostMessage()">Send</button>
+      </div>
+      <p class="message-hint">Optional — let the host know if you need to rest, swap, or have a question.</p>
+    </div>
+  `;
+}
+
+let _tournamentTeamsCache = [];
+let _tournamentPlayersCache = [];
+
+async function refreshTournamentView() {
+  if (!currentSessionId) return;
+  const [session, teams, players, matchups] = await Promise.all([
+    SessionAPI.getSession(currentSessionId),
+    SessionAPI.getTeams(currentSessionId),
+    SessionAPI.getPlayers(currentSessionId),
+    SessionAPI.getMatchups(currentSessionId),
+  ]);
+  currentSession = session;
+  _tournamentTeamsCache = teams;
+  _tournamentPlayersCache = players;
+
+  const currentRoundMatchups = matchups.filter(m => m.round_number === session.current_round);
+  const roundLabel = session.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin';
+  document.getElementById('tournamentRoundBanner').innerHTML = `
+    <span class="round-pill">Round ${session.current_round}${session.rounds_total ? ` of ${session.rounds_total}` : ''}</span>
+    <span class="format-pill">${roundLabel}</span>
+  `;
+
+  document.getElementById('tournamentMatchups').innerHTML = currentRoundMatchups.map(m => {
+    const namesA = playerNamesForTeam(m.team_a, players).join(' & ');
+    const namesB = playerNamesForTeam(m.team_b, players).join(' & ');
+    const statusLabel = m.status === 'completed' ? 'Final' : (m.status === 'in_progress' ? 'Playing' : 'Waiting');
+    const statusClass = m.status === 'completed' ? 'completed' : (m.status === 'in_progress' ? 'in-progress' : 'pending');
+    return `<div class="matchup-card ${statusClass}"><span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span><span class="status-pill status-${m.status === 'in_progress' ? 'playing' : 'waiting'}">${statusLabel}</span></div>`;
+  }).join('') || '<p style="color:var(--resting-slate); font-size:13px; text-align:center; padding:16px;">No matchups yet for this round.</p>';
+
+  const standings = computeStandings(teams);
+  document.getElementById('standingsTable').innerHTML = `
+    <thead><tr><th>#</th><th>Team</th><th>W-L</th><th>Diff</th></tr></thead>
+    <tbody>
+      ${standings.map((t, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</td>
+          <td>${t.wins}-${t.losses}</td>
+          <td>${t.points_for - t.points_against >= 0 ? '+' : ''}${t.points_for - t.points_against}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+}
+
+function handleTournamentFindMe() {
+  const query = document.getElementById('findMeInput').value.trim().toLowerCase();
+  const resultEl = document.getElementById('findMeResult');
+  if (!query) { resultEl.textContent = ''; return; }
+  const player = _tournamentPlayersCache.find(p => p.name.toLowerCase().includes(query));
+  if (!player) { resultEl.textContent = 'Not found yet'; return; }
+  const team = _tournamentTeamsCache.find(t => t.player_ids.includes(player.id));
+  if (!team) { resultEl.textContent = 'Not on a team yet'; return; }
+  resultEl.textContent = `${team.wins}-${team.losses} record so far`;
+}
+
+function subscribeTournamentRealtime() {
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  realtimeChannel = supabaseClient
+    .channel(`session-${currentSessionId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matchups', filter: `session_id=eq.${currentSessionId}` }, refreshTournamentView)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `session_id=eq.${currentSessionId}` }, refreshTournamentView)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `id=eq.${currentSessionId}` }, refreshTournamentView)
+    .subscribe();
 }
 
 function renderShell() {
@@ -364,7 +576,7 @@ function renderCourts(courts, players, teams) {
         <div class="court-diagram">
           <div class="court-side">${isActive ? sideA : ''}</div>
           <div class="kitchen-line-top"></div>
-          <div class="net-line"></div>
+          <div class="net-line">${isActive ? '<svg class="net-ball" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="currentColor"/><circle cx="10" cy="9" r="1.3" fill="white" opacity="0.5"/><circle cx="18" cy="7" r="1.3" fill="white" opacity="0.5"/><circle cx="24" cy="12" r="1.3" fill="white" opacity="0.5"/><circle cx="25" cy="19" r="1.3" fill="white" opacity="0.5"/><circle cx="19" cy="25" r="1.3" fill="white" opacity="0.5"/><circle cx="11" cy="24" r="1.3" fill="white" opacity="0.5"/><circle cx="6" cy="17" r="1.3" fill="white" opacity="0.5"/><circle cx="7" cy="10" r="1.3" fill="white" opacity="0.5"/></svg>' : ''}</div>
           <div class="kitchen-line-bottom"></div>
           <div class="court-side">${isActive ? sideB : ''}</div>
           ${!isActive ? '<div class="empty-court-msg">Waiting for next match</div>' : ''}
