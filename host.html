@@ -248,11 +248,25 @@ function calculateBackOfQueuePosition(queueTeams) {
 window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
 
 // ============================================================
+// PASSWORD UTILITY (SHA-256 via Web Crypto API — no library needed)
+// ============================================================
+async function hashPassword(plainText) {
+  const data = new TextEncoder().encode(plainText);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================
 // SESSION API
 // (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled }) {
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId }) {
+    if (!password || password.length < 4) {
+      throw new Error('Session password must be at least 4 characters.');
+    }
+    const passwordHash = await hashPassword(password);
+
     const { data: session, error } = await supabaseClient
       .from('sessions')
       .insert({
@@ -261,6 +275,8 @@ const SessionAPI = (() => {
         pairing_default: pairingDefault || 'fixed',
         skill_match_mode: skillMatchMode || 'open',
         rest_priority_enabled: restPriorityEnabled !== false,
+        password_hash: passwordHash,
+        parent_session_id: parentSessionId || null,
       })
       .select().single();
     if (error) throw error;
@@ -278,6 +294,29 @@ const SessionAPI = (() => {
     const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).single();
     if (error) throw error;
     return data;
+  }
+  async function verifySessionPassword(sessionId, password) {
+    const session = await getSession(sessionId);
+    if (!session.password_hash) return true; // legacy sessions with no password set
+    const hash = await hashPassword(password);
+    return hash === session.password_hash;
+  }
+  async function finishSession(sessionId) {
+    const { error } = await supabaseClient.from('sessions').update({ status: 'completed', ended_at: new Date().toISOString() }).eq('id', sessionId);
+    if (error) throw error;
+  }
+  async function carryPlayersToNewSession(newSessionId, playerRows) {
+    // playerRows: array of { name, skill_tier } from the finished session
+    const inserted = [];
+    for (const p of playerRows) {
+      const { data, error } = await supabaseClient
+        .from('players')
+        .insert({ session_id: newSessionId, name: p.name, skill_tier: p.skill_tier || 'open', status: 'waiting' })
+        .select().single();
+      if (error) throw error;
+      inserted.push(data);
+    }
+    return inserted;
   }
   async function addPlayer(sessionId, name, skillTier = 'open') {
     const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
@@ -404,7 +443,7 @@ const SessionAPI = (() => {
     if (error) throw error;
   }
   return {
-    createSession, getMySessions, getSession,
+    createSession, getMySessions, getSession, verifySessionPassword, finishSession, carryPlayersToNewSession,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
@@ -436,16 +475,31 @@ async function init() {
 async function renderSessionList() {
   const sessions = await SessionAPI.getMySessions();
   const activeOnes = sessions.filter(s => s.status === 'active');
+  const completedOnes = sessions.filter(s => s.status === 'completed').slice(0, 10);
+
   document.getElementById('appRoot').innerHTML = `
     <div class="card">
-      <h2>Your Sessions</h2>
+      <h2>Active Sessions</h2>
       ${activeOnes.length ? activeOnes.map(s => `
         <div class="session-row">
-          <div><div style="font-weight:700;">${escapeHtml(s.name)}</div><div class="meta">${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div></div>
-          <button onclick="openSession('${s.id}')">Open</button>
+          <div><div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div><div class="meta">${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div></div>
+          <button onclick="promptOpenSession('${s.id}')">Open</button>
         </div>
       `).join('') : '<p style="color:var(--resting-slate); font-size:13px;">No active sessions yet.</p>'}
     </div>
+
+    ${completedOnes.length ? `
+    <div class="card">
+      <h2>Recently Finished</h2>
+      ${completedOnes.map(s => `
+        <div class="session-row">
+          <div><div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div><div class="meta">${s.format} · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div></div>
+          <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--kitchen-gold); color:var(--ink);">Host Again</button>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+
     <div class="card">
       <h2>Start New Session</h2>
       <div class="form-grid">
@@ -455,10 +509,22 @@ async function renderSessionList() {
         <div class="field"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
         <div class="field"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
         <div class="field"><label>Skill Matching</label><select id="newSkillMode"><option value="open">Open (anyone vs anyone)</option><option value="adjacent">Adjacent tiers only (±1 level)</option><option value="strict">Strict (same tier only)</option></select></div>
+        <div class="field"><label>Session Password</label><input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password"></div>
+        <div class="field"><label>Confirm Password</label><input type="password" id="newPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password"></div>
       </div>
+      <p style="font-size:11px; color:var(--resting-slate); margin:-6px 0 10px;">This password protects the host console for this session — anyone with the link will need it to make changes.</p>
       <button class="btn-primary" onclick="handleCreateSession()">Create Session</button>
+      <div class="auth-error" id="createSessionError"></div>
     </div>
   `;
+}
+
+function sessionTypeBadge(s) {
+  if (s.session_type === 'tournament') {
+    const fmt = s.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin';
+    return `<span style="font-size:10px; background:var(--kitchen-gold); color:var(--ink); padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">${fmt}</span>`;
+  }
+  return `<span style="font-size:10px; background:var(--waiting-blue); color:white; padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">Open Play</span>`;
 }
 
 async function handleCreateSession() {
@@ -468,8 +534,69 @@ async function handleCreateSession() {
   const stackingMode = document.getElementById('newStackingMode').value;
   const pairingDefault = document.getElementById('newPairingDefault').value;
   const skillMatchMode = document.getElementById('newSkillMode').value;
-  const session = await SessionAPI.createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled: true });
-  await openSession(session.id);
+  const password = document.getElementById('newPassword').value;
+  const passwordConfirm = document.getElementById('newPasswordConfirm').value;
+  const errorEl = document.getElementById('createSessionError');
+  errorEl.textContent = '';
+
+  if (password !== passwordConfirm) {
+    errorEl.textContent = 'Passwords do not match.';
+    return;
+  }
+
+  try {
+    const session = await SessionAPI.createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled: true, password });
+    rememberSessionPassword(session.id, password);
+    await openSession(session.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+// ----------------------------
+// PASSWORD GATE
+// ----------------------------
+function sessionPasswordKey(sessionId) { return `istackyyy_pw_ok_${sessionId}`; }
+function rememberSessionPassword(sessionId, password) {
+  sessionStorage.setItem(sessionPasswordKey(sessionId), 'unlocked');
+}
+function isSessionUnlocked(sessionId) {
+  return sessionStorage.getItem(sessionPasswordKey(sessionId)) === 'unlocked';
+}
+
+async function promptOpenSession(sessionId) {
+  if (isSessionUnlocked(sessionId)) {
+    await openSession(sessionId);
+    return;
+  }
+  const session = await SessionAPI.getSession(sessionId);
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="pwModal">
+      <div class="modal-box">
+        <h2>Enter Password</h2>
+        <p class="modal-sub">"${escapeHtml(session.name)}" is password-protected.</p>
+        <div class="field"><input type="password" id="sessionPwInput" placeholder="Session password" autocomplete="off" onkeydown="if(event.key==='Enter') confirmSessionPassword('${sessionId}')"></div>
+        <div class="auth-error" id="pwModalError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('pwModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmSessionPassword('${sessionId}')">Unlock</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('sessionPwInput').focus();
+}
+
+async function confirmSessionPassword(sessionId) {
+  const input = document.getElementById('sessionPwInput').value;
+  const ok = await SessionAPI.verifySessionPassword(sessionId, input);
+  if (!ok) {
+    document.getElementById('pwModalError').textContent = 'Incorrect password.';
+    return;
+  }
+  rememberSessionPassword(sessionId, input);
+  document.getElementById('pwModal').remove();
+  await openSession(sessionId);
 }
 
 async function openSession(sessionId) {
@@ -491,9 +618,12 @@ async function renderConsole() {
     <div class="console-header">
       <div>
         <button class="btn-secondary" style="width:auto; padding:6px 12px; font-size:12px; margin-bottom:8px;" onclick="backToSessionList()">← All Sessions</button>
-        <h1>${escapeHtml(activeSession.name)}</h1>
+        <h1>${escapeHtml(activeSession.name)} ${sessionTypeBadge(activeSession)}</h1>
       </div>
-      <div class="share-link"><span id="shareUrlText">${shareUrl}</span><button onclick="copyShareLink('${shareUrl}')">Copy</button></div>
+      <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
+        <div class="share-link"><span id="shareUrlText">${shareUrl}</span><button onclick="copyShareLink('${shareUrl}')">Copy</button></div>
+        <button onclick="confirmFinishSession()" style="background:var(--loser-coral); color:white; border:none; padding:7px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:700;">Finish Session</button>
+      </div>
     </div>
     <div class="tabs">
       <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
@@ -503,6 +633,92 @@ async function renderConsole() {
     <div class="tab-panel active" id="tabPanel"></div>
   `;
   await renderActiveTab();
+}
+
+function confirmFinishSession() {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="finishModal">
+      <div class="modal-box">
+        <h2>Finish This Session?</h2>
+        <p class="modal-sub">This locks "${escapeHtml(activeSession.name)}" as completed. Players currently mid-match will stay recorded, but no new matches can start. You can still "Host Again" afterward to start a fresh session with the same players.</p>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('finishModal').remove()">Cancel</button>
+          <button class="btn-yes" style="background:var(--loser-coral);" onclick="handleFinishSession()">Yes, Finish It</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function handleFinishSession() {
+  await SessionAPI.finishSession(activeSession.id);
+  document.getElementById('finishModal').remove();
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  activeSession = null;
+  await renderSessionList();
+}
+
+async function startHostAgainFlow(oldSessionId) {
+  if (!isSessionUnlocked(oldSessionId)) {
+    // require the password of the old session before letting someone clone its roster
+    const password = prompt('Enter the password for this finished session to host it again:');
+    if (password === null) return;
+    const ok = await SessionAPI.verifySessionPassword(oldSessionId, password);
+    if (!ok) { alert('Incorrect password.'); return; }
+    rememberSessionPassword(oldSessionId, password);
+  }
+
+  const oldSession = await SessionAPI.getSession(oldSessionId);
+  const oldPlayers = await SessionAPI.getPlayers(oldSessionId);
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="hostAgainModal">
+      <div class="modal-box">
+        <h2>Host Again</h2>
+        <p class="modal-sub">Start a new session based on "${escapeHtml(oldSession.name)}". Select players to carry over.</p>
+        <div class="field"><label>New Session Name</label><input type="text" id="hostAgainName" value="${escapeHtml(oldSession.name)} (2)"></div>
+        <div class="field"><label>Number of Courts</label><input type="number" id="hostAgainCourts" value="${oldSession.court_count}" min="1" max="20"></div>
+        <div class="field"><label>New Session Password</label><input type="password" id="hostAgainPassword" placeholder="At least 4 characters"></div>
+        <p style="font-size:12px; font-weight:700; margin:14px 0 8px;">Players to carry over:</p>
+        <div class="player-checklist" id="hostAgainChecklist">
+          ${oldPlayers.map(p => `<div class="player-check selected" data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-tier="${p.skill_tier}" onclick="this.classList.toggle('selected')">${escapeHtml(p.name)}</div>`).join('') || '<p style="font-size:12px;color:var(--resting-slate);">No players in that session.</p>'}
+        </div>
+        <div class="auth-error" id="hostAgainError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('hostAgainModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmHostAgain('${oldSessionId}')">Create & Open</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmHostAgain(oldSessionId) {
+  const name = document.getElementById('hostAgainName').value.trim() || 'Open Play';
+  const courtCount = parseInt(document.getElementById('hostAgainCourts').value, 10) || 1;
+  const password = document.getElementById('hostAgainPassword').value;
+  const errorEl = document.getElementById('hostAgainError');
+  const oldSession = await SessionAPI.getSession(oldSessionId);
+
+  const selectedChips = [...document.querySelectorAll('#hostAgainChecklist .player-check.selected')];
+  const carryPlayers = selectedChips.map(el => ({ name: el.dataset.name, skill_tier: el.dataset.tier }));
+
+  try {
+    const newSession = await SessionAPI.createSession({
+      name, format: oldSession.format, courtCount,
+      stackingMode: oldSession.stacking_mode, pairingDefault: oldSession.pairing_default,
+      skillMatchMode: oldSession.skill_match_mode, restPriorityEnabled: oldSession.rest_priority_enabled,
+      password, parentSessionId: oldSessionId,
+    });
+    rememberSessionPassword(newSession.id, password);
+    if (carryPlayers.length > 0) {
+      await SessionAPI.carryPlayersToNewSession(newSession.id, carryPlayers);
+    }
+    document.getElementById('hostAgainModal').remove();
+    await openSession(newSession.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
 }
 
 function switchTab(tab) {
