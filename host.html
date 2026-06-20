@@ -704,9 +704,45 @@ const SessionAPI = (() => {
     }
     return inserted;
   }
+  /**
+   * Find players who are marked 'waiting' on their player row but are NOT
+   * yet inside any active team (i.e. truly unpaired, sitting idle). This
+   * is the actual signal for "needs a partner" — player.status alone is
+   * not enough, since it doesn't track team membership.
+   */
+  async function getUnpairedWaitingPlayers(sessionId) {
+    const [players, activeTeams] = await Promise.all([
+      getPlayers(sessionId),
+      getTeams(sessionId),
+    ]);
+    const pairedPlayerIds = new Set(activeTeams.flatMap(t => t.player_ids));
+    return players
+      .filter(p => p.status === 'waiting' && !pairedPlayerIds.has(p.id))
+      .sort((a, b) => new Date(a.joined_at) - new Date(b.joined_at));
+  }
+
   async function addPlayer(sessionId, name, skillTier = 'open') {
     const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
     if (error) throw error;
+
+    // Auto-pair into the waiting queue immediately so round-1 auto-fill
+    // actually has real team rows to pull from.
+    const session = await getSession(sessionId);
+    const teamSize = session.format === 'doubles' ? 2 : 1;
+
+    if (teamSize === 1) {
+      // singles: every player is their own team, queued immediately
+      await createTeam(sessionId, [data.id], session.pairing_default, 'waiting');
+    } else {
+      // doubles: pair with the longest-waiting OTHER unpaired player, FIFO
+      const unpaired = await getUnpairedWaitingPlayers(sessionId);
+      const partner = unpaired.find(p => p.id !== data.id);
+      if (partner) {
+        await createTeam(sessionId, [partner.id, data.id], session.pairing_default, 'waiting');
+      }
+      // if no partner yet, this player just sits unpaired until the next one joins
+    }
+
     return data;
   }
   async function getPlayers(sessionId) {
@@ -717,6 +753,19 @@ const SessionAPI = (() => {
   async function removePlayer(playerId) {
     const { error } = await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
     if (error) throw error;
+
+    // If this player was already paired into a waiting team, that team is
+    // no longer valid — deactivate it so the auto-fill engine doesn't try
+    // to send a now-departed player onto a court. Their now-unpaired
+    // partner (if any) goes back to waiting for a new partner.
+    const { data: sessionId } = await supabaseClient.from('players').select('session_id').eq('id', playerId).single();
+    if (sessionId) {
+      const activeTeams = await getTeams(sessionId.session_id);
+      const affectedTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane === 'waiting');
+      if (affectedTeam) {
+        await supabaseClient.from('teams').update({ is_active: false }).eq('id', affectedTeam.id);
+      }
+    }
   }
   async function createTeam(sessionId, playerIds, pairingMode = 'fixed', queueLane = 'waiting') {
     const { data: existing } = await supabaseClient.from('teams').select('queue_position').eq('session_id', sessionId).eq('queue_lane', queueLane);
@@ -729,6 +778,21 @@ const SessionAPI = (() => {
     const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('is_active', true);
     if (error) throw error;
     return data;
+  }
+  /**
+   * Deactivate any currently-active team that contains one or more of the
+   * given player IDs. Used before manually assigning players to a court,
+   * so an auto-paired "waiting" team row doesn't linger as a stale duplicate
+   * once those same players get placed by hand instead.
+   */
+  async function deactivateTeamsContainingPlayers(sessionId, playerIds) {
+    const activeTeams = await getTeams(sessionId);
+    const staleTeamIds = activeTeams
+      .filter(t => t.player_ids.some(pid => playerIds.includes(pid)))
+      .map(t => t.id);
+    if (staleTeamIds.length > 0) {
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', staleTeamIds);
+    }
   }
   async function getQueueLane(sessionId, lane) {
     const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('queue_lane', lane).eq('is_active', true).order('queue_position', { ascending: true });
@@ -839,7 +903,7 @@ const SessionAPI = (() => {
   return {
     createSession, getMySessions, getSession, getSessionByReferenceCode, verifySessionPassword, finishSession, carryPlayersToNewSession,
     startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
-    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
+    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, deactivateTeamsContainingPlayers,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
   };
@@ -851,7 +915,6 @@ window.SessionAPI = SessionAPI;
 // ============================================================
 let activeSession = null;
 let activeTab = 'roster';
-let selectedPlayerIds = [];
 let realtimeChannel = null;
 
 init();
@@ -1530,9 +1593,12 @@ async function handleAdvanceRound() {
 }
 
 async function courtsTabHtml() {
-  const [courts, players] = await Promise.all([SessionAPI.getCourts(activeSession.id), SessionAPI.getPlayers(activeSession.id)]);
-  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
-  const availablePlayers = players.filter(p => p.status === 'waiting');
+  const [courts, players, waitingTeams] = await Promise.all([
+    SessionAPI.getCourts(activeSession.id),
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getQueueLane(activeSession.id, 'waiting'),
+  ]);
+  const unpaired = await SessionAPI.getUnpairedWaitingPlayers(activeSession.id);
 
   const courtCards = courts.map(court => {
     if (court.status === 'in_progress') {
@@ -1557,21 +1623,24 @@ async function courtsTabHtml() {
           <div class="court-host-body">
             <div class="court-empty-msg">No match assigned</div>
             <button class="assign-btn" onclick="handleAutoRefill('${court.id}')">Try Auto-Fill from Queue</button>
-            <button class="assign-btn" style="background:#eee;color:var(--ink);margin-top:6px;" onclick="openManualAssign('${court.id}')">Manually Assign Players</button>
+            <button class="assign-btn" style="background:#eee;color:var(--ink);margin-top:6px;" onclick="openManualAssign('${court.id}')">Manually Assign Teams</button>
           </div>
         </div>
       `;
     }
   }).join('');
 
+  const sortedWaiting = [...waitingTeams].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+
   return `
     <div class="card" id="manualAssignCard" style="display:none;">
       <h2>Manual Assign — Court</h2>
-      <p style="font-size:12px;color:var(--resting-slate);">Select ${teamSize === 2 ? '4 players (2 vs 2)' : '2 players (1 vs 1)'} from waiting players.</p>
+      <p style="font-size:12px;color:var(--resting-slate);">Pick 2 waiting teams to play each other. Teams are already paired in join order — to change who's on a team, edit the Roster instead.</p>
       <div class="player-checklist" id="manualPlayerChecklist">
-        ${availablePlayers.length ? availablePlayers.map(p => `<div class="player-check" data-id="${p.id}" onclick="togglePlayerSelect('${p.id}')">${escapeHtml(p.name)}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No waiting players. Add players in the Roster tab.</p>'}
+        ${sortedWaiting.length ? sortedWaiting.map((t, i) => `<div class="player-check" data-id="${t.id}" onclick="toggleTeamSelect('${t.id}')">#${i + 1} · ${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No waiting teams yet.</p>'}
       </div>
-      <button class="btn-primary" style="width:auto;padding:10px 20px;" onclick="confirmManualAssign()">Confirm Match</button>
+      ${unpaired.length > 0 ? `<p style="font-size:11px;color:var(--resting-slate);margin-top:8px;">⏳ ${unpaired.map(p => escapeHtml(p.name)).join(', ')} still waiting for a partner.</p>` : ''}
+      <button class="btn-primary" style="width:auto;padding:10px 20px;margin-top:10px;" onclick="confirmManualAssign()">Confirm Match</button>
       <button class="btn-secondary" style="width:auto;padding:10px 20px;margin-left:8px;" onclick="closeManualAssign()">Cancel</button>
     </div>
     <div class="courts-host-grid">${courtCards}</div>
@@ -1579,48 +1648,49 @@ async function courtsTabHtml() {
 }
 
 let manualAssignCourtId = null;
+let selectedTeamIds = [];
 
 function openManualAssign(courtId) {
   manualAssignCourtId = courtId;
-  selectedPlayerIds = [];
+  selectedTeamIds = [];
   document.getElementById('manualAssignCard').style.display = 'block';
   document.getElementById('manualAssignCard').scrollIntoView({ behavior: 'smooth' });
 }
 
 function closeManualAssign() {
   manualAssignCourtId = null;
-  selectedPlayerIds = [];
+  selectedTeamIds = [];
   document.getElementById('manualAssignCard').style.display = 'none';
 }
 
-function togglePlayerSelect(playerId) {
-  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
-  const maxPlayers = teamSize * 2;
-  const idx = selectedPlayerIds.indexOf(playerId);
+function toggleTeamSelect(teamId) {
+  const idx = selectedTeamIds.indexOf(teamId);
   if (idx >= 0) {
-    selectedPlayerIds.splice(idx, 1);
+    selectedTeamIds.splice(idx, 1);
   } else {
-    if (selectedPlayerIds.length >= maxPlayers) return;
-    selectedPlayerIds.push(playerId);
+    if (selectedTeamIds.length >= 2) return;
+    selectedTeamIds.push(teamId);
   }
   document.querySelectorAll('.player-check').forEach(el => {
-    el.classList.toggle('selected', selectedPlayerIds.includes(el.dataset.id));
+    el.classList.toggle('selected', selectedTeamIds.includes(el.dataset.id));
   });
 }
 
 async function confirmManualAssign() {
-  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
-  const needed = teamSize * 2;
-  if (selectedPlayerIds.length !== needed) {
-    alert(`Select exactly ${needed} players first.`);
+  if (selectedTeamIds.length !== 2) {
+    alert('Select exactly 2 teams to face off.');
     return;
   }
-  const teamAPlayers = selectedPlayerIds.slice(0, teamSize);
-  const teamBPlayers = selectedPlayerIds.slice(teamSize);
-  const teamA = await SessionAPI.createTeam(activeSession.id, teamAPlayers, activeSession.pairing_default, 'playing');
-  const teamB = await SessionAPI.createTeam(activeSession.id, teamBPlayers, activeSession.pairing_default, 'playing');
-  await SessionAPI.assignCourt(manualAssignCourtId, teamA.id, teamB.id);
-  await supabaseClient.from('players').update({ status: 'playing' }).in('id', selectedPlayerIds);
+  const [teamAId, teamBId] = selectedTeamIds;
+  await SessionAPI.assignCourt(manualAssignCourtId, teamAId, teamBId);
+
+  const teamA = await SessionAPI.getTeams(activeSession.id).then(teams => teams.find(t => t.id === teamAId));
+  const teamB = await SessionAPI.getTeams(activeSession.id).then(teams => teams.find(t => t.id === teamBId));
+  const allPlayerIds = [...(teamA?.player_ids || []), ...(teamB?.player_ids || [])];
+  if (allPlayerIds.length > 0) {
+    await supabaseClient.from('players').update({ status: 'playing' }).in('id', allPlayerIds);
+  }
+
   closeManualAssign();
   document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
