@@ -483,7 +483,7 @@ function generateReferenceCode() {
 // (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin, allowCrossLaneFill }) {
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, division, roundsTotal, scoringMode, pointsToWin, allowCrossLaneFill }) {
     if (!password || password.length < 4) {
       throw new Error('Session password must be at least 4 characters.');
     }
@@ -505,6 +505,7 @@ const SessionAPI = (() => {
           parent_session_id: parentSessionId || null,
           session_type: sessionType || 'open_play',
           tournament_format: tournamentFormat || null,
+          division: sessionType === 'tournament' ? (division || 'open') : null,
           rounds_total: roundsTotal || null,
           scoring_mode: scoringMode || 'win_loss',
           points_to_win: pointsToWin || 11,
@@ -744,14 +745,20 @@ const SessionAPI = (() => {
     if (error) throw error;
     await supabaseClient.from('teams').update({ queue_lane: 'playing', queue_position: null }).in('id', [teamAId, teamBId]);
   }
-  async function logMatchResult(courtId, winnerTeamId) {
+  async function logMatchResult(courtId, winnerTeamId, scoreData = null) {
     const { data: court, error: courtErr } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (courtErr) throw courtErr;
-    await supabaseClient.from('matches').insert({
+    const insertRow = {
       session_id: court.session_id, court_id: courtId, team_a_id: court.team_a_id, team_b_id: court.team_b_id,
       winner_team_id: winnerTeamId, started_at: court.game_started_at, ended_at: new Date().toISOString(),
       duration_seconds: court.game_started_at ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
-    });
+      score_visible: scoreData ? true : false,
+    };
+    if (scoreData) {
+      insertRow.team_a_score = scoreData.teamAScore;
+      insertRow.team_b_score = scoreData.teamBScore;
+    }
+    await supabaseClient.from('matches').insert(insertRow);
     return court;
   }
 
@@ -912,15 +919,26 @@ async function renderSessionList() {
         <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
         <div class="field"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
         <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
-        <div class="field" id="stackingModeField"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
-        <div class="field" id="pairingDefaultField"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
-        <div class="field" id="crossLaneFillField"><label>Uneven Numbers Fallback</label><select id="newAllowCrossLaneFill"><option value="true">Winner vs Loser is OK if queues are uneven (recommended)</option><option value="false">Court waits until a full winner-vs-winner or loser-vs-loser match is ready</option></select></div>
+        <div class="field open-play-only" id="stackingModeField"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
+        <div class="field open-play-only" id="pairingDefaultField"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
+        <div class="field open-play-only" id="crossLaneFillField"><label>Uneven Numbers Fallback</label><select id="newAllowCrossLaneFill"><option value="true">Winner vs Loser is OK if queues are uneven (recommended)</option><option value="false">Court waits until a full winner-vs-winner or loser-vs-loser match is ready</option></select></div>
 
         <div class="field tournament-only" id="tournamentFormatField" style="display:none;">
           <label>Tournament Format</label>
           <select id="newTournamentFormat" onchange="toggleSwissRoundsField()">
             <option value="round_robin">Round Robin (everyone plays everyone)</option>
             <option value="swiss">Swiss (paired by similar record each round)</option>
+          </select>
+        </div>
+        <div class="field tournament-only" id="divisionField" style="display:none;">
+          <label>Division</label>
+          <select id="newDivision">
+            <option value="open">Open / Any</option>
+            <option value="mixed_doubles">Mixed Doubles</option>
+            <option value="mens_doubles">Men's Doubles</option>
+            <option value="womens_doubles">Women's Doubles</option>
+            <option value="mens_singles">Men's Singles</option>
+            <option value="womens_singles">Women's Singles</option>
           </select>
         </div>
         <div class="field tournament-only" id="swissRoundsField" style="display:none;">
@@ -930,6 +948,9 @@ async function renderSessionList() {
         <div class="field tournament-only" id="pointsToWinField" style="display:none;">
           <label>Points to Win (per game)</label>
           <input type="number" id="newPointsToWin" value="11" min="1" max="99">
+        </div>
+        <div class="field tournament-only" id="tournamentNoticeField" style="display:none; grid-column: 1 / -1;">
+          <p style="font-size:11px; color:var(--resting-slate); margin:0; padding:8px 12px; background:#f7f5ef; border-radius:6px;">Tournament partners are fixed for the whole event — you'll pair players once during Bracket setup, and that pairing stays the same every round.</p>
         </div>
 
         <div class="field"><label>Session Password</label><input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password"></div>
@@ -949,8 +970,7 @@ function selectSessionType(type) {
   document.getElementById('typeOpenPlay').classList.toggle('selected', type === 'open_play');
   document.getElementById('typeTournament').classList.toggle('selected', type === 'tournament');
 
-  document.getElementById('stackingModeField').style.display = type === 'open_play' ? '' : 'none';
-  document.getElementById('crossLaneFillField').style.display = type === 'open_play' ? '' : 'none';
+  document.querySelectorAll('.open-play-only').forEach(el => { el.style.display = type === 'open_play' ? '' : 'none'; });
   document.querySelectorAll('.tournament-only').forEach(el => { el.style.display = type === 'tournament' ? '' : 'none'; });
   if (type === 'tournament') toggleSwissRoundsField();
 }
@@ -960,10 +980,16 @@ function toggleSwissRoundsField() {
   document.getElementById('swissRoundsField').style.display = fmt === 'swiss' ? '' : 'none';
 }
 
+const DIVISION_LABELS = {
+  mixed_doubles: 'Mixed Doubles', mens_doubles: "Men's Doubles", womens_doubles: "Women's Doubles",
+  mens_singles: "Men's Singles", womens_singles: "Women's Singles", open: 'Open / Any',
+};
+
 function sessionTypeBadge(s) {
   if (s.session_type === 'tournament') {
     const fmt = s.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin';
-    return `<span style="font-size:10px; background:var(--kitchen-gold); color:var(--ink); padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">${fmt}</span>`;
+    const divisionLabel = s.division && DIVISION_LABELS[s.division] ? ` · ${DIVISION_LABELS[s.division]}` : '';
+    return `<span style="font-size:10px; background:var(--kitchen-gold); color:var(--ink); padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">${fmt}${divisionLabel}</span>`;
   }
   return `<span style="font-size:10px; background:var(--waiting-blue); color:white; padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">Open Play</span>`;
 }
@@ -987,14 +1013,17 @@ async function handleCreateSession() {
 
   const sessionType = selectedSessionType;
   const tournamentFormat = sessionType === 'tournament' ? document.getElementById('newTournamentFormat').value : null;
+  const division = sessionType === 'tournament' ? document.getElementById('newDivision').value : null;
   const roundsTotal = (sessionType === 'tournament' && tournamentFormat === 'swiss') ? parseInt(document.getElementById('newRoundsTotal').value, 10) : null;
   const pointsToWin = sessionType === 'tournament' ? parseInt(document.getElementById('newPointsToWin').value, 10) || 11 : 11;
   const scoringMode = sessionType === 'tournament' ? 'point_diff' : 'win_loss';
+  // Tournament partners are always fixed for the whole event — no re-pairing mode applies there.
+  const effectivePairingDefault = sessionType === 'tournament' ? 'fixed' : pairingDefault;
 
   try {
     const session = await SessionAPI.createSession({
-      name, format, courtCount, stackingMode, pairingDefault, allowCrossLaneFill, restPriorityEnabled: true, password,
-      sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin,
+      name, format, courtCount, stackingMode, pairingDefault: effectivePairingDefault, allowCrossLaneFill, restPriorityEnabled: true, password,
+      sessionType, tournamentFormat, division, roundsTotal, scoringMode, pointsToWin,
     });
     rememberSessionPassword(session.id, password);
     await openSession(session.id);
@@ -1633,9 +1662,70 @@ async function showPickWinnerModal() {
   `;
 }
 
+let resultFlowScoreData = null;
+
 async function selectWinner(winnerTeamId) {
   resultFlowWinnerTeamId = winnerTeamId;
-  await SessionAPI.logMatchResult(resultFlowCourt.id, winnerTeamId);
+  resultFlowScoreData = null;
+  await showScoreConsentModal();
+}
+
+async function showScoreConsentModal() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const teamA = resultFlowCourt.team_a;
+  const teamB = resultFlowCourt.team_b;
+  const namesA = playerNamesForTeam(teamA, players).join(' & ');
+  const namesB = playerNamesForTeam(teamB, players).join(' & ');
+
+  document.getElementById('resultModal').innerHTML = `
+    <div class="modal-box">
+      <h2>Record the Score?</h2>
+      <p class="modal-sub">Optional — only show it if all 4 players agree. Match duration is tracked either way.</p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; margin:14px 0; cursor:pointer;">
+        <input type="checkbox" id="scoreConsentCheckbox" style="width:18px; height:18px; min-height:0;" onchange="toggleScoreFields()">
+        All 4 players agreed to show this score
+      </label>
+      <div id="scoreFieldsArea" style="display:none;">
+        <div class="form-grid">
+          <div class="field"><label>${escapeHtml(namesA)}</label><input type="number" id="consentScoreA" min="0" max="99" value="0"></div>
+          <div class="field"><label>${escapeHtml(namesB)}</label><input type="number" id="consentScoreB" min="0" max="99" value="0"></div>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button class="btn-no" onclick="skipScoreAndContinue()">Skip Score</button>
+        <button class="btn-yes" onclick="confirmScoreAndContinue()">Continue</button>
+      </div>
+      <div class="auth-error" id="scoreConsentError"></div>
+    </div>
+  `;
+}
+
+function toggleScoreFields() {
+  const checked = document.getElementById('scoreConsentCheckbox').checked;
+  document.getElementById('scoreFieldsArea').style.display = checked ? '' : 'none';
+}
+
+async function skipScoreAndContinue() {
+  resultFlowScoreData = null;
+  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, null);
+  await showRegroupModal();
+}
+
+async function confirmScoreAndContinue() {
+  const consented = document.getElementById('scoreConsentCheckbox').checked;
+  if (!consented) {
+    await skipScoreAndContinue();
+    return;
+  }
+  const scoreA = parseInt(document.getElementById('consentScoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('consentScoreB').value, 10);
+  const errorEl = document.getElementById('scoreConsentError');
+  if (isNaN(scoreA) || isNaN(scoreB) || scoreA === scoreB) {
+    errorEl.textContent = 'Scores must be valid numbers and cannot be tied.';
+    return;
+  }
+  resultFlowScoreData = { teamAScore: scoreA, teamBScore: scoreB };
+  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, resultFlowScoreData);
   await showRegroupModal();
 }
 
@@ -1716,6 +1806,7 @@ function closeResultModal() {
   if (modal) modal.remove();
   resultFlowCourt = null;
   resultFlowWinnerTeamId = null;
+  resultFlowScoreData = null;
   regroupAssignment = {};
 }
 
