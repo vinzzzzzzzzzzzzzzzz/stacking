@@ -84,6 +84,10 @@
   .session-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #eee; }
   .session-row:last-child { border-bottom: none; }
   .session-row .meta { font-size: 12px; color: var(--resting-slate); }
+  .ref-code-pill { background: var(--court-green); color: white; font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 5px; letter-spacing: 0.03em; }
+  .ref-code-display { display: flex; align-items: center; gap: 8px; background: var(--kitchen-gold); padding: 8px 14px; border-radius: var(--radius-sm); }
+  .ref-code-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: var(--ink); opacity: 0.7; }
+  .ref-code-big { font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: 0.04em; }
   .session-row button { background: var(--court-green); color: white; border: none; padding: 7px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; }
 
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -297,40 +301,62 @@ function getTeamTier(team, playersById) {
   return Object.keys(TIER_RANK).find(k => TIER_RANK[k] === minRank);
 }
 
-function popEligibleTeam(queueTeams, opponentTier, skillMatchMode, playersById) {
-  for (let i = 0; i < queueTeams.length; i++) {
-    const candidate = queueTeams[i];
-    const candidateTier = getTeamTier(candidate, playersById);
-    if (tiersCompatible(candidateTier, opponentTier, skillMatchMode)) {
-      return { team: candidate, index: i };
-    }
-  }
-  return null;
+/**
+ * Strict FIFO pop: always takes the front of the queue, no skipping for
+ * skill matching or any other reason. Skill-tier filtering, if the host
+ * wants it, should narrow WHICH queue gets used upstream, not reorder
+ * within a queue.
+ */
+function popFront(queueTeams) {
+  if (!queueTeams || queueTeams.length === 0) return null;
+  return queueTeams[0];
 }
 
-function decideNextMatch({ stackingMode, skillMatchMode, winnersQueue, losersQueue, waitingQueue, playersById, preferredLane = null }) {
+/**
+ * Decide the next match for a freed court.
+ *
+ * Default behavior (win_loss_queue mode): strict FIFO within each lane.
+ * - Try to fill the court with 2 teams from the SAME lane (winner vs
+ *   winner, or loser vs loser), always taking the longest-waiting team(s)
+ *   in that lane — never skipping ahead for any reason.
+ * - If a lane alone doesn't have 2 teams waiting, and `allowCrossLaneFill`
+ *   is true (host-customizable, default true), fall back to pairing the
+ *   front of winners queue against the front of losers queue so the court
+ *   doesn't sit empty. If `allowCrossLaneFill` is false, the court just
+ *   waits until a lane fills naturally.
+ */
+function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue, allowCrossLaneFill = true, preferredLane = null }) {
   if (stackingMode === 'fifo') {
     if (waitingQueue.length < 2) return null;
     return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
   }
+
   const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
+
+  // 1. Same-lane FIFO match (winner vs winner, or loser vs loser)
   for (const lane of lanesToTry) {
     const queue = lane === 'winners' ? winnersQueue : losersQueue;
     if (queue.length >= 2) {
-      const teamA = queue[0];
-      const teamATier = getTeamTier(teamA, playersById);
-      const rest = queue.slice(1);
-      const found = popEligibleTeam(rest, teamATier, skillMatchMode, playersById);
-      if (found) return { teamA, teamB: found.team, lane };
+      return { teamA: queue[0], teamB: queue[1], lane };
     }
   }
-  const combined = [...winnersQueue, ...losersQueue, ...waitingQueue];
-  if (combined.length >= 2) {
-    const teamA = combined[0];
-    const teamATier = getTeamTier(teamA, playersById);
-    const found = popEligibleTeam(combined.slice(1), teamATier, skillMatchMode, playersById);
-    if (found) return { teamA, teamB: found.team, lane: 'mixed' };
+
+  if (!allowCrossLaneFill) return null;
+
+  // 2. Cross-lane fallback: front of winners vs front of losers, so an
+  // uneven head count (not divisible by 4 for doubles) doesn't stall a court.
+  const winnerFront = popFront(winnersQueue);
+  const loserFront = popFront(losersQueue);
+  if (winnerFront && loserFront) {
+    return { teamA: winnerFront, teamB: loserFront, lane: 'mixed' };
   }
+
+  // 3. Last resort: pull from the general waiting queue if nothing in
+  // winners/losers can fill the court (e.g. very start of session).
+  if (waitingQueue.length >= 2) {
+    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
+  }
+
   return null;
 }
 
@@ -350,7 +376,7 @@ function calculateBackOfQueuePosition(queueTeams) {
   return maxPos + 1;
 }
 
-window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
+window.StackingEngine = { tiersCompatible, getTeamTier, popFront, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
 
 // ============================================================
 // TOURNAMENT ENGINE
@@ -443,38 +469,64 @@ async function hashPassword(plainText) {
 }
 
 // ============================================================
+// REFERENCE CODE — short human-readable session ID, e.g. STACK-A3F9
+// ============================================================
+function generateReferenceCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid ambiguity when read aloud
+  let code = '';
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return `STACK-${code}`;
+}
+
+// ============================================================
 // SESSION API
 // (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin }) {
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin, allowCrossLaneFill }) {
     if (!password || password.length < 4) {
       throw new Error('Session password must be at least 4 characters.');
     }
     const passwordHash = await hashPassword(password);
 
-    const { data: session, error } = await supabaseClient
-      .from('sessions')
-      .insert({
-        name, format, court_count: courtCount,
-        stacking_mode: stackingMode || 'win_loss_queue',
-        pairing_default: pairingDefault || 'fixed',
-        skill_match_mode: skillMatchMode || 'open',
-        rest_priority_enabled: restPriorityEnabled !== false,
-        password_hash: passwordHash,
-        parent_session_id: parentSessionId || null,
-        session_type: sessionType || 'open_play',
-        tournament_format: tournamentFormat || null,
-        rounds_total: roundsTotal || null,
-        scoring_mode: scoringMode || 'win_loss',
-        points_to_win: pointsToWin || 11,
-      })
-      .select().single();
+    let session, error;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const referenceCode = generateReferenceCode();
+      const result = await supabaseClient
+        .from('sessions')
+        .insert({
+          name, format, court_count: courtCount,
+          stacking_mode: stackingMode || 'win_loss_queue',
+          pairing_default: pairingDefault || 'fixed',
+          skill_match_mode: skillMatchMode || 'open',
+          rest_priority_enabled: restPriorityEnabled !== false,
+          allow_cross_lane_fill: allowCrossLaneFill !== false,
+          password_hash: passwordHash,
+          parent_session_id: parentSessionId || null,
+          session_type: sessionType || 'open_play',
+          tournament_format: tournamentFormat || null,
+          rounds_total: roundsTotal || null,
+          scoring_mode: scoringMode || 'win_loss',
+          points_to_win: pointsToWin || 11,
+          reference_code: referenceCode,
+        })
+        .select().single();
+      session = result.data;
+      error = result.error;
+      if (!error) break;
+      if (error.code !== '23505') break; // not a uniqueness collision, stop retrying
+    }
     if (error) throw error;
     const courtRows = Array.from({ length: courtCount }, (_, i) => ({ session_id: session.id, court_number: i + 1, status: 'open' }));
     const { error: courtError } = await supabaseClient.from('courts').insert(courtRows);
     if (courtError) throw courtError;
     return session;
+  }
+  async function getSessionByReferenceCode(code) {
+    const normalized = code.trim().toUpperCase();
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('reference_code', normalized).single();
+    if (error) throw error;
+    return data;
   }
   async function getMySessions() {
     const { data, error } = await supabaseClient.from('sessions').select('*').order('created_at', { ascending: false });
@@ -749,12 +801,14 @@ const SessionAPI = (() => {
     const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (!court || court.status === 'in_progress') return null;
     const session = await getSession(court.session_id);
-    const [winnersQueue, losersQueue, waitingQueue, players] = await Promise.all([
+    const [winnersQueue, losersQueue, waitingQueue] = await Promise.all([
       getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue'),
-      getQueueLane(court.session_id, 'waiting'), getPlayers(court.session_id),
+      getQueueLane(court.session_id, 'waiting'),
     ]);
-    const playersById = Object.fromEntries(players.map(p => [p.id, p]));
-    const decision = window.StackingEngine.decideNextMatch({ stackingMode: session.stacking_mode, skillMatchMode: session.skill_match_mode, winnersQueue, losersQueue, waitingQueue, playersById });
+    const decision = window.StackingEngine.decideNextMatch({
+      stackingMode: session.stacking_mode, winnersQueue, losersQueue, waitingQueue,
+      allowCrossLaneFill: session.allow_cross_lane_fill !== false,
+    });
     if (!decision) return null;
     await assignCourt(courtId, decision.teamA.id, decision.teamB.id);
     return decision;
@@ -776,7 +830,7 @@ const SessionAPI = (() => {
     if (error) throw error;
   }
   return {
-    createSession, getMySessions, getSession, verifySessionPassword, finishSession, carryPlayersToNewSession,
+    createSession, getMySessions, getSession, getSessionByReferenceCode, verifySessionPassword, finishSession, carryPlayersToNewSession,
     startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
@@ -816,7 +870,10 @@ async function renderSessionList() {
       <h2>Active Sessions</h2>
       ${activeOnes.length ? activeOnes.map(s => `
         <div class="session-row">
-          <div><div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div><div class="meta">${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div></div>
+          <div>
+            <div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div>
+            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div>
+          </div>
           <button onclick="promptOpenSession('${s.id}')">Open</button>
         </div>
       `).join('') : '<p style="color:var(--resting-slate); font-size:13px;">No active sessions yet.</p>'}
@@ -827,7 +884,10 @@ async function renderSessionList() {
       <h2>Recently Finished</h2>
       ${completedOnes.map(s => `
         <div class="session-row">
-          <div><div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div><div class="meta">${s.format} · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div></div>
+          <div>
+            <div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div>
+            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div>
+          </div>
           <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--kitchen-gold); color:var(--ink);">Host Again</button>
         </div>
       `).join('')}
@@ -854,7 +914,7 @@ async function renderSessionList() {
         <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
         <div class="field" id="stackingModeField"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
         <div class="field" id="pairingDefaultField"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
-        <div class="field"><label>Skill Matching</label><select id="newSkillMode"><option value="open">Open (anyone vs anyone)</option><option value="adjacent">Adjacent tiers only (±1 level)</option><option value="strict">Strict (same tier only)</option></select></div>
+        <div class="field" id="crossLaneFillField"><label>Uneven Numbers Fallback</label><select id="newAllowCrossLaneFill"><option value="true">Winner vs Loser is OK if queues are uneven (recommended)</option><option value="false">Court waits until a full winner-vs-winner or loser-vs-loser match is ready</option></select></div>
 
         <div class="field tournament-only" id="tournamentFormatField" style="display:none;">
           <label>Tournament Format</label>
@@ -890,6 +950,7 @@ function selectSessionType(type) {
   document.getElementById('typeTournament').classList.toggle('selected', type === 'tournament');
 
   document.getElementById('stackingModeField').style.display = type === 'open_play' ? '' : 'none';
+  document.getElementById('crossLaneFillField').style.display = type === 'open_play' ? '' : 'none';
   document.querySelectorAll('.tournament-only').forEach(el => { el.style.display = type === 'tournament' ? '' : 'none'; });
   if (type === 'tournament') toggleSwissRoundsField();
 }
@@ -913,7 +974,7 @@ async function handleCreateSession() {
   const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
   const stackingMode = document.getElementById('newStackingMode').value;
   const pairingDefault = document.getElementById('newPairingDefault').value;
-  const skillMatchMode = document.getElementById('newSkillMode').value;
+  const allowCrossLaneFill = document.getElementById('newAllowCrossLaneFill').value === 'true';
   const password = document.getElementById('newPassword').value;
   const passwordConfirm = document.getElementById('newPasswordConfirm').value;
   const errorEl = document.getElementById('createSessionError');
@@ -932,7 +993,7 @@ async function handleCreateSession() {
 
   try {
     const session = await SessionAPI.createSession({
-      name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled: true, password,
+      name, format, courtCount, stackingMode, pairingDefault, allowCrossLaneFill, restPriorityEnabled: true, password,
       sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin,
     });
     rememberSessionPassword(session.id, password);
@@ -1010,7 +1071,11 @@ async function renderConsole() {
         <h1>${escapeHtml(activeSession.name)} ${sessionTypeBadge(activeSession)}</h1>
       </div>
       <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
-        <div class="share-link"><span id="shareUrlText">${shareUrl}</span><button onclick="copyShareLink('${shareUrl}')">Copy</button></div>
+        <div class="ref-code-display">
+          <span class="ref-code-label">Session Code</span>
+          <span class="ref-code-big mono">${activeSession.reference_code || '—'}</span>
+        </div>
+        <div class="share-link"><span id="shareUrlText">${shareUrl}</span><button onclick="copyShareLink('${shareUrl}')">Copy Link</button></div>
         <button onclick="confirmFinishSession()" style="background:var(--loser-coral); color:white; border:none; padding:7px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:700;">Finish Session</button>
       </div>
     </div>
