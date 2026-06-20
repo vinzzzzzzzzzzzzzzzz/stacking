@@ -807,7 +807,12 @@ const SessionAPI = (() => {
   async function assignCourt(courtId, teamAId, teamBId) {
     const { error } = await supabaseClient.from('courts').update({ status: 'in_progress', team_a_id: teamAId, team_b_id: teamBId, game_started_at: new Date().toISOString() }).eq('id', courtId);
     if (error) throw error;
+    const { data: teamRows } = await supabaseClient.from('teams').select('player_ids').in('id', [teamAId, teamBId]);
     await supabaseClient.from('teams').update({ queue_lane: 'playing', queue_position: null }).in('id', [teamAId, teamBId]);
+    if (teamRows && teamRows.length > 0) {
+      const allPlayerIds = teamRows.flatMap(t => t.player_ids);
+      await supabaseClient.from('players').update({ status: 'playing' }).in('id', allPlayerIds);
+    }
   }
   async function logMatchResult(courtId, winnerTeamId, scoreData = null) {
     const { data: court, error: courtErr } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
@@ -841,9 +846,11 @@ const SessionAPI = (() => {
 
     if (winnersGroup && winnersGroup.length > 0) {
       await createTeam(sessionId, winnersGroup, pairingMode, 'winners_queue');
+      await supabaseClient.from('players').update({ status: 'winners_queue' }).in('id', winnersGroup);
     }
     if (losersGroup && losersGroup.length > 0) {
       await createTeam(sessionId, losersGroup, pairingMode, 'losers_queue');
+      await supabaseClient.from('players').update({ status: 'losers_queue' }).in('id', losersGroup);
     }
 
     // deactivate the two original teams that just finished playing — they've
@@ -865,6 +872,13 @@ const SessionAPI = (() => {
     const [winnersQ, losersQ] = await Promise.all([getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue')]);
     await supabaseClient.from('teams').update({ queue_lane: 'winners_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(winnersQ) }).eq('id', winnerTeamId);
     await supabaseClient.from('teams').update({ queue_lane: 'losers_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(losersQ) }).eq('id', loserTeamId);
+    const { data: teamRows } = await supabaseClient.from('teams').select('id, player_ids').in('id', [winnerTeamId, loserTeamId]);
+    if (teamRows) {
+      const winnerRow = teamRows.find(t => t.id === winnerTeamId);
+      const loserRow = teamRows.find(t => t.id === loserTeamId);
+      if (winnerRow) await supabaseClient.from('players').update({ status: 'winners_queue' }).in('id', winnerRow.player_ids);
+      if (loserRow) await supabaseClient.from('players').update({ status: 'losers_queue' }).in('id', loserRow.player_ids);
+    }
     await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
     await tryRefillCourt(courtId);
   }
@@ -1355,6 +1369,23 @@ async function handleRemovePlayer(playerId) {
 
 async function handleReturnFromRest(playerId) {
   await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', playerId);
+
+  // Re-pair into the waiting queue, same logic as a brand-new player joining —
+  // otherwise they'd show "waiting" in the roster but have no team, so the
+  // auto-fill engine could never actually queue them back up.
+  const session = activeSession;
+  const teamSize = session.format === 'doubles' ? 2 : 1;
+  if (teamSize === 1) {
+    await SessionAPI.createTeam(activeSession.id, [playerId], session.pairing_default, 'waiting');
+  } else {
+    const unpaired = await SessionAPI.getUnpairedWaitingPlayers(activeSession.id);
+    const partner = unpaired.find(p => p.id !== playerId);
+    if (partner) {
+      await SessionAPI.createTeam(activeSession.id, [partner.id, playerId], session.pairing_default, 'waiting');
+    }
+    // if no partner is available yet, they sit unpaired until the next one returns/joins
+  }
+
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
 }
 
