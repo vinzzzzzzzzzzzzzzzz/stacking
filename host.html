@@ -1272,16 +1272,22 @@ async function bracketSetupHtml() {
   const players = await SessionAPI.getPlayers(activeSession.id);
   const teamSize = activeSession.format === 'doubles' ? 2 : 1;
 
+  // Players already locked into a formed team can't be picked again —
+  // this is the core double-stacking prevention.
+  const assignedPlayerIds = new Set(bracketSetupTeams.flatMap(t => t.playerIds));
+  const availablePlayers = players.filter(p => !assignedPlayerIds.has(p.id));
+
   return `
     <div class="card">
       <h2>Set Up ${activeSession.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin'} Tournament</h2>
       <p style="font-size:13px; color:var(--resting-slate);">
         ${teamSize === 2 ? 'Pick 2 players at a time to form each team.' : 'Each player competes individually.'}
         Once all teams are formed, generate the schedule.
+        <strong style="color:var(--court-green);">${availablePlayers.length} unassigned</strong> of ${players.length} total.
       </p>
 
       <div class="player-checklist" id="bracketPlayerChecklist">
-        ${players.map(p => `<div class="player-check" data-id="${p.id}" data-name="${escapeHtml(p.name)}" onclick="toggleBracketPlayerSelect('${p.id}')">${escapeHtml(p.name)}</div>`).join('') || '<p style="font-size:12px;color:var(--resting-slate);">No players yet — add some in the Roster tab.</p>'}
+        ${availablePlayers.length ? availablePlayers.map(p => `<div class="player-check" data-id="${p.id}" data-name="${escapeHtml(p.name)}" onclick="toggleBracketPlayerSelect('${p.id}')">${escapeHtml(p.name)}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No more unassigned players.</p>'}
       </div>
       ${teamSize === 2 ? `<button class="assign-btn" style="width:auto; padding:8px 16px;" onclick="formBracketTeam()">Form Team from Selected</button>` : `<button class="assign-btn" style="width:auto; padding:8px 16px;" onclick="formAllSinglesTeams()">Add All as Individual Entries</button>`}
 
@@ -1327,9 +1333,11 @@ async function formBracketTeam() {
 
 async function formAllSinglesTeams() {
   const players = await SessionAPI.getPlayers(activeSession.id);
-  bracketSetupTeams = players
-    .filter(p => !bracketSetupTeams.some(t => t.playerIds.includes(p.id)))
+  const assignedPlayerIds = new Set(bracketSetupTeams.flatMap(t => t.playerIds));
+  const newEntries = players
+    .filter(p => !assignedPlayerIds.has(p.id))
     .map(p => ({ playerIds: [p.id], names: [p.name] }));
+  bracketSetupTeams = [...bracketSetupTeams, ...newEntries];
   document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
 }
 
