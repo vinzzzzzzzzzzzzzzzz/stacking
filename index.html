@@ -86,26 +86,30 @@
   .centerline-top { top: 14px; height: calc(32% - 14px); }
   .centerline-bottom { bottom: 14px; height: calc(32% - 14px); }
 
-  .court-side { flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; z-index: 2; flex-wrap: wrap; padding: 8px; }
+  .court-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 2; padding: 8px 16px; }
   .empty-court-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--line-paint); opacity: 0.6; font-size: 13px; font-weight: 600; z-index: 2; }
 
   /* Paddle-shaped player markers — replaces the plain pill chip. Each
-     player gets a small paddle silhouette with their name printed across
-     the face, oriented upright so it reads naturally in the grid. */
+     player gets a paddle silhouette with their name printed across the
+     face, sized to read clearly at a glance and centered in its own
+     service box (not clustered toward the middle of the court). */
   .paddle-chip {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
-    width: 56px;
+    width: 84px;
+    flex: 1 1 0;
+    max-width: 110px;
   }
   .paddle-chip-shape {
     width: 100%; aspect-ratio: 48 / 64; position: relative;
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+    filter: drop-shadow(0 3px 6px rgba(0,0,0,0.3));
   }
   .paddle-chip-shape svg { width: 100%; height: 100%; display: block; color: var(--line-paint); }
   .paddle-chip-name {
-    position: absolute; top: 28%; left: 50%; transform: translate(-50%, -50%);
-    width: 70%; font-size: 9px; font-weight: 800; color: var(--ink); text-align: center;
-    line-height: 1.1; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+    position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
+    width: 72%; font-size: 14px; font-weight: 800; color: var(--ink); text-align: center;
+    line-height: 1.15; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
     -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word;
+    font-family: var(--font-body);
   }
 
   .queues { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 36px; }
@@ -185,8 +189,8 @@
        turn each court into a huge nearly-square block requiring lots of
        scrolling to see all courts at a glance */
     .court-diagram { aspect-ratio: 3 / 4; }
-    .paddle-chip { width: 44px; }
-    .paddle-chip-name { font-size: 8px; }
+    .paddle-chip { width: 64px; }
+    .paddle-chip-name { font-size: 11px; }
 
     .find-me { flex-direction: column; align-items: stretch; padding: 14px; }
     .find-me input { width: 100%; }
