@@ -68,6 +68,13 @@
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
 
+  .session-type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .type-option { border: 2px solid #ddd; border-radius: var(--radius-sm); padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+  .type-option strong { font-size: 14px; }
+  .type-option span { font-size: 11px; color: var(--resting-slate); }
+  .type-option.selected { border-color: var(--court-green); background: rgba(27,77,62,0.05); }
+  .type-option.selected strong { color: var(--court-green); }
+
   .console-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
   .console-header h1 { font-size: 22px; margin: 0; }
   .share-link { background: white; border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card); }
@@ -104,6 +111,13 @@
   .court-host-label { background: var(--court-green); color: white; padding: 10px 14px; font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; }
   .court-host-body { padding: 14px; }
   .matchup-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 600; }
+
+  .matchup-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .matchup-card { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; flex-wrap: wrap; gap: 8px; }
+  .matchup-card.pending { background: #f7f5ef; border: 1px solid #e5e0d5; }
+  .matchup-card.in-progress { background: rgba(232,184,75,0.12); border: 1px solid var(--kitchen-gold); }
+  .matchup-card.completed { background: rgba(63,166,107,0.08); border: 1px solid var(--winner-green); opacity: 0.8; }
+  .matchup-card select { padding: 6px 8px; border-radius: 6px; border: 1px solid #ddd; font-size: 12px; }
   .matchup-vs { color: var(--resting-slate); font-size: 11px; }
   .win-select-btn { background: var(--winner-green); color: white; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
   .ongoing-pill { display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 700; color: var(--kitchen-gold); background: rgba(232,184,75,0.15); padding: 3px 10px; border-radius: 999px; }
@@ -248,6 +262,87 @@ function calculateBackOfQueuePosition(queueTeams) {
 window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
 
 // ============================================================
+// TOURNAMENT ENGINE
+// Round Robin (circle method) + Swiss pairing, pure functions.
+// ============================================================
+function generateRoundRobinSchedule(teamIds) {
+  const teams = [...teamIds];
+  const hasBye = teams.length % 2 !== 0;
+  if (hasBye) teams.push(null);
+
+  const n = teams.length;
+  const rounds = [];
+  const fixed = teams[0];
+  let rotating = teams.slice(1);
+
+  for (let r = 0; r < n - 1; r++) {
+    const roundTeams = [fixed, ...rotating];
+    const pairs = [];
+    let bye = null;
+
+    for (let i = 0; i < n / 2; i++) {
+      const a = roundTeams[i];
+      const b = roundTeams[n - 1 - i];
+      if (a === null || b === null) {
+        bye = a === null ? b : a;
+      } else {
+        pairs.push([a, b]);
+      }
+    }
+
+    rounds.push({ round: r + 1, pairs, bye });
+    rotating = [rotating[rotating.length - 1], ...rotating.slice(0, rotating.length - 1)];
+  }
+
+  return rounds;
+}
+
+function totalRoundRobinRounds(teamCount) {
+  return teamCount % 2 === 0 ? teamCount - 1 : teamCount;
+}
+
+function generateSwissRound(teams) {
+  const sorted = [...teams].sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    const diffA = a.points_for - a.points_against;
+    const diffB = b.points_for - b.points_against;
+    return diffB - diffA;
+  });
+
+  const pool = [...sorted];
+  const pairs = [];
+  let bye = null;
+
+  if (pool.length % 2 !== 0) {
+    const byeTeam = pool.pop();
+    bye = byeTeam.id;
+  }
+
+  while (pool.length > 0) {
+    const teamA = pool.shift();
+    const alreadyFaced = new Set(teamA.opponent_history || []);
+    let opponentIndex = pool.findIndex(t => !alreadyFaced.has(t.id));
+    if (opponentIndex === -1) opponentIndex = 0;
+    const teamB = pool.splice(opponentIndex, 1)[0];
+    pairs.push([teamA.id, teamB.id]);
+  }
+
+  return { pairs, bye };
+}
+
+function computeStandings(teams) {
+  return [...teams].sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    const diffA = a.points_for - a.points_against;
+    const diffB = b.points_for - b.points_against;
+    if (diffB !== diffA) return diffB - diffA;
+    return b.points_for - a.points_for;
+  });
+}
+
+window.TournamentEngine = { generateRoundRobinSchedule, totalRoundRobinRounds, generateSwissRound, computeStandings };
+
+// ============================================================
 // PASSWORD UTILITY (SHA-256 via Web Crypto API — no library needed)
 // ============================================================
 async function hashPassword(plainText) {
@@ -261,7 +356,7 @@ async function hashPassword(plainText) {
 // (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId }) {
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin }) {
     if (!password || password.length < 4) {
       throw new Error('Session password must be at least 4 characters.');
     }
@@ -277,6 +372,11 @@ const SessionAPI = (() => {
         rest_priority_enabled: restPriorityEnabled !== false,
         password_hash: passwordHash,
         parent_session_id: parentSessionId || null,
+        session_type: sessionType || 'open_play',
+        tournament_format: tournamentFormat || null,
+        rounds_total: roundsTotal || null,
+        scoring_mode: scoringMode || 'win_loss',
+        points_to_win: pointsToWin || 11,
       })
       .select().single();
     if (error) throw error;
@@ -305,6 +405,148 @@ const SessionAPI = (() => {
     const { error } = await supabaseClient.from('sessions').update({ status: 'completed', ended_at: new Date().toISOString() }).eq('id', sessionId);
     if (error) throw error;
   }
+  // ============================================================
+  // TOURNAMENT FUNCTIONS
+  // ============================================================
+
+  /**
+   * Create tournament teams from a list of player-id groups (already paired
+   * by the host) and kick off the schedule (round robin generates fully,
+   * swiss generates round 1 only).
+   */
+  async function startTournament(sessionId, teamPlayerGroups, format) {
+    const createdTeams = [];
+    for (const group of teamPlayerGroups) {
+      const { data, error } = await supabaseClient
+        .from('teams')
+        .insert({ session_id: sessionId, player_ids: group, pairing_mode: 'fixed', queue_lane: 'waiting' })
+        .select().single();
+      if (error) throw error;
+      createdTeams.push(data);
+    }
+
+    const teamIds = createdTeams.map(t => t.id);
+
+    if (format === 'round_robin') {
+      const schedule = window.TournamentEngine.generateRoundRobinSchedule(teamIds);
+      const rows = [];
+      schedule.forEach(round => {
+        round.pairs.forEach(([a, b]) => {
+          rows.push({ session_id: sessionId, round_number: round.round, team_a_id: a, team_b_id: b, status: 'pending' });
+        });
+      });
+      const { error } = await supabaseClient.from('tournament_matchups').insert(rows);
+      if (error) throw error;
+      await supabaseClient.from('sessions').update({ rounds_total: window.TournamentEngine.totalRoundRobinRounds(teamIds.length), current_round: 1 }).eq('id', sessionId);
+    } else if (format === 'swiss') {
+      const teamsForPairing = createdTeams.map(t => ({ id: t.id, wins: 0, losses: 0, points_for: 0, points_against: 0, opponent_history: [] }));
+      const { pairs } = window.TournamentEngine.generateSwissRound(teamsForPairing);
+      const rows = pairs.map(([a, b]) => ({ session_id: sessionId, round_number: 1, team_a_id: a, team_b_id: b, status: 'pending' }));
+      const { error } = await supabaseClient.from('tournament_matchups').insert(rows);
+      if (error) throw error;
+      await supabaseClient.from('sessions').update({ current_round: 1 }).eq('id', sessionId);
+    }
+
+    return createdTeams;
+  }
+
+  async function getMatchups(sessionId, roundNumber = null) {
+    let query = supabaseClient.from('tournament_matchups').select('*, team_a:team_a_id(*), team_b:team_b_id(*)').eq('session_id', sessionId);
+    if (roundNumber !== null) query = query.eq('round_number', roundNumber);
+    const { data, error } = await query.order('created_at', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+
+  async function getTournamentTeams(sessionId) {
+    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('is_active', true);
+    if (error) throw error;
+    return data;
+  }
+
+  async function assignMatchupToCourt(matchupId, courtId) {
+    const { data: matchup, error: mErr } = await supabaseClient.from('tournament_matchups').select('*').eq('id', matchupId).single();
+    if (mErr) throw mErr;
+    await assignCourt(courtId, matchup.team_a_id, matchup.team_b_id);
+    await supabaseClient.from('tournament_matchups').update({ court_id: courtId, status: 'in_progress' }).eq('id', matchupId);
+  }
+
+  /**
+   * Record a scored result for a tournament matchup: updates the matchup,
+   * logs the match with scores, updates both teams' win/loss/points stats
+   * and opponent history (for swiss rematch avoidance), then frees the court.
+   */
+  async function recordTournamentResult(matchupId, courtId, teamAScore, teamBScore) {
+    const { data: matchup, error: mErr } = await supabaseClient.from('tournament_matchups').select('*').eq('id', matchupId).single();
+    if (mErr) throw mErr;
+    const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+
+    const winnerTeamId = teamAScore > teamBScore ? matchup.team_a_id : matchup.team_b_id;
+
+    const { data: matchRow, error: matchErr } = await supabaseClient.from('matches').insert({
+      session_id: matchup.session_id, court_id: courtId, team_a_id: matchup.team_a_id, team_b_id: matchup.team_b_id,
+      winner_team_id: winnerTeamId, team_a_score: teamAScore, team_b_score: teamBScore, round_number: matchup.round_number,
+      started_at: court?.game_started_at || null, ended_at: new Date().toISOString(),
+      duration_seconds: court?.game_started_at ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
+    }).select().single();
+    if (matchErr) throw matchErr;
+
+    await supabaseClient.from('tournament_matchups').update({ status: 'completed', match_id: matchRow.id }).eq('id', matchupId);
+
+    // update team stats
+    const { data: teamA } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_a_id).single();
+    const { data: teamB } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_b_id).single();
+
+    await supabaseClient.from('teams').update({
+      wins: teamA.wins + (winnerTeamId === teamA.id ? 1 : 0),
+      losses: teamA.losses + (winnerTeamId === teamA.id ? 0 : 1),
+      points_for: teamA.points_for + teamAScore,
+      points_against: teamA.points_against + teamBScore,
+      opponent_history: [...(teamA.opponent_history || []), matchup.team_b_id],
+    }).eq('id', teamA.id);
+
+    await supabaseClient.from('teams').update({
+      wins: teamB.wins + (winnerTeamId === teamB.id ? 1 : 0),
+      losses: teamB.losses + (winnerTeamId === teamB.id ? 0 : 1),
+      points_for: teamB.points_for + teamBScore,
+      points_against: teamB.points_against + teamAScore,
+      opponent_history: [...(teamB.opponent_history || []), matchup.team_a_id],
+    }).eq('id', teamB.id);
+
+    if (courtId) {
+      await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
+    }
+  }
+
+  async function isRoundComplete(sessionId, roundNumber) {
+    const matchups = await getMatchups(sessionId, roundNumber);
+    return matchups.length > 0 && matchups.every(m => m.status === 'completed');
+  }
+
+  /**
+   * Advance to the next round. Round robin: just reveals the next
+   * pre-generated round. Swiss: generates a fresh pairing based on
+   * updated standings + opponent history.
+   */
+  async function advanceToNextRound(sessionId) {
+    const session = await getSession(sessionId);
+    const nextRound = session.current_round + 1;
+
+    if (session.tournament_format === 'swiss') {
+      const teams = await getTournamentTeams(sessionId);
+      const { pairs, bye } = window.TournamentEngine.generateSwissRound(teams);
+      const rows = pairs.map(([a, b]) => ({ session_id: sessionId, round_number: nextRound, team_a_id: a, team_b_id: b, status: 'pending' }));
+      if (rows.length > 0) {
+        const { error } = await supabaseClient.from('tournament_matchups').insert(rows);
+        if (error) throw error;
+      }
+    }
+    // round_robin: matchups for nextRound already exist from startTournament
+
+    await supabaseClient.from('sessions').update({ current_round: nextRound }).eq('id', sessionId);
+    return nextRound;
+  }
+
   async function carryPlayersToNewSession(newSessionId, playerRows) {
     // playerRows: array of { name, skill_tier } from the finished session
     const inserted = [];
@@ -444,6 +686,7 @@ const SessionAPI = (() => {
   }
   return {
     createSession, getMySessions, getSession, verifySessionPassword, finishSession, carryPlayersToNewSession,
+    startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
@@ -502,13 +745,42 @@ async function renderSessionList() {
 
     <div class="card">
       <h2>Start New Session</h2>
+
+      <div class="session-type-toggle">
+        <div class="type-option selected" id="typeOpenPlay" onclick="selectSessionType('open_play')">
+          <strong>Open Play</strong>
+          <span>Continuous winners/losers queue — no fixed end</span>
+        </div>
+        <div class="type-option" id="typeTournament" onclick="selectSessionType('tournament')">
+          <strong>Tournament</strong>
+          <span>Round Robin or Swiss — fixed rounds, real standings</span>
+        </div>
+      </div>
+
       <div class="form-grid">
         <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
         <div class="field"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
         <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
-        <div class="field"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
-        <div class="field"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
+        <div class="field" id="stackingModeField"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
+        <div class="field" id="pairingDefaultField"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
         <div class="field"><label>Skill Matching</label><select id="newSkillMode"><option value="open">Open (anyone vs anyone)</option><option value="adjacent">Adjacent tiers only (±1 level)</option><option value="strict">Strict (same tier only)</option></select></div>
+
+        <div class="field tournament-only" id="tournamentFormatField" style="display:none;">
+          <label>Tournament Format</label>
+          <select id="newTournamentFormat" onchange="toggleSwissRoundsField()">
+            <option value="round_robin">Round Robin (everyone plays everyone)</option>
+            <option value="swiss">Swiss (paired by similar record each round)</option>
+          </select>
+        </div>
+        <div class="field tournament-only" id="swissRoundsField" style="display:none;">
+          <label>Number of Rounds</label>
+          <input type="number" id="newRoundsTotal" value="4" min="1" max="20">
+        </div>
+        <div class="field tournament-only" id="pointsToWinField" style="display:none;">
+          <label>Points to Win (per game)</label>
+          <input type="number" id="newPointsToWin" value="11" min="1" max="99">
+        </div>
+
         <div class="field"><label>Session Password</label><input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password"></div>
         <div class="field"><label>Confirm Password</label><input type="password" id="newPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password"></div>
       </div>
@@ -517,6 +789,23 @@ async function renderSessionList() {
       <div class="auth-error" id="createSessionError"></div>
     </div>
   `;
+}
+
+let selectedSessionType = 'open_play';
+
+function selectSessionType(type) {
+  selectedSessionType = type;
+  document.getElementById('typeOpenPlay').classList.toggle('selected', type === 'open_play');
+  document.getElementById('typeTournament').classList.toggle('selected', type === 'tournament');
+
+  document.getElementById('stackingModeField').style.display = type === 'open_play' ? '' : 'none';
+  document.querySelectorAll('.tournament-only').forEach(el => { el.style.display = type === 'tournament' ? '' : 'none'; });
+  if (type === 'tournament') toggleSwissRoundsField();
+}
+
+function toggleSwissRoundsField() {
+  const fmt = document.getElementById('newTournamentFormat').value;
+  document.getElementById('swissRoundsField').style.display = fmt === 'swiss' ? '' : 'none';
 }
 
 function sessionTypeBadge(s) {
@@ -544,8 +833,17 @@ async function handleCreateSession() {
     return;
   }
 
+  const sessionType = selectedSessionType;
+  const tournamentFormat = sessionType === 'tournament' ? document.getElementById('newTournamentFormat').value : null;
+  const roundsTotal = (sessionType === 'tournament' && tournamentFormat === 'swiss') ? parseInt(document.getElementById('newRoundsTotal').value, 10) : null;
+  const pointsToWin = sessionType === 'tournament' ? parseInt(document.getElementById('newPointsToWin').value, 10) || 11 : 11;
+  const scoringMode = sessionType === 'tournament' ? 'point_diff' : 'win_loss';
+
   try {
-    const session = await SessionAPI.createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled: true, password });
+    const session = await SessionAPI.createSession({
+      name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled: true, password,
+      sessionType, tournamentFormat, roundsTotal, scoringMode, pointsToWin,
+    });
     rememberSessionPassword(session.id, password);
     await openSession(session.id);
   } catch (err) {
@@ -627,6 +925,7 @@ async function renderConsole() {
     </div>
     <div class="tabs">
       <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
+      ${activeSession.session_type === 'tournament' ? `<button class="tab-btn ${activeTab === 'bracket' ? 'active' : ''}" onclick="switchTab('bracket')">Bracket</button>` : ''}
       <button class="tab-btn ${activeTab === 'courts' ? 'active' : ''}" onclick="switchTab('courts')">Courts</button>
       <button class="tab-btn ${activeTab === 'inbox' ? 'active' : ''}" onclick="switchTab('inbox')">Inbox</button>
     </div>
@@ -731,6 +1030,7 @@ function switchTab(tab) {
 async function renderActiveTab() {
   const panel = document.getElementById('tabPanel');
   if (activeTab === 'roster') panel.innerHTML = await rosterTabHtml();
+  if (activeTab === 'bracket') panel.innerHTML = await bracketTabHtml();
   if (activeTab === 'courts') panel.innerHTML = await courtsTabHtml();
   if (activeTab === 'inbox') panel.innerHTML = await inboxTabHtml();
 }
@@ -793,6 +1093,230 @@ async function handleRemovePlayer(playerId) {
 async function handleReturnFromRest(playerId) {
   await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', playerId);
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+// ----------------------------
+// BRACKET TAB (Tournament Mode)
+// ----------------------------
+let bracketSetupSelectedPlayers = [];
+let bracketSetupTeams = [];
+
+async function bracketTabHtml() {
+  const teams = await SessionAPI.getTournamentTeams(activeSession.id);
+
+  if (teams.length === 0) {
+    return await bracketSetupHtml();
+  }
+  return await bracketLiveHtml(teams);
+}
+
+async function bracketSetupHtml() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+
+  return `
+    <div class="card">
+      <h2>Set Up ${activeSession.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin'} Tournament</h2>
+      <p style="font-size:13px; color:var(--resting-slate);">
+        ${teamSize === 2 ? 'Pick 2 players at a time to form each team.' : 'Each player competes individually.'}
+        Once all teams are formed, generate the schedule.
+      </p>
+
+      <div class="player-checklist" id="bracketPlayerChecklist">
+        ${players.map(p => `<div class="player-check" data-id="${p.id}" data-name="${escapeHtml(p.name)}" onclick="toggleBracketPlayerSelect('${p.id}')">${escapeHtml(p.name)}</div>`).join('') || '<p style="font-size:12px;color:var(--resting-slate);">No players yet — add some in the Roster tab.</p>'}
+      </div>
+      ${teamSize === 2 ? `<button class="assign-btn" style="width:auto; padding:8px 16px;" onclick="formBracketTeam()">Form Team from Selected</button>` : `<button class="assign-btn" style="width:auto; padding:8px 16px;" onclick="formAllSinglesTeams()">Add All as Individual Entries</button>`}
+
+      <div style="margin-top:18px;">
+        <h3 style="font-size:13px; margin-bottom:8px;">Teams Formed (${bracketSetupTeams.length})</h3>
+        ${bracketSetupTeams.length ? bracketSetupTeams.map((t, i) => `
+          <div class="session-row"><span>${t.names.join(' & ')}</span><button class="remove-btn" onclick="removeBracketTeam(${i})">Remove</button></div>
+        `).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No teams formed yet.</p>'}
+      </div>
+
+      <button class="btn-primary" style="width:auto; padding:10px 24px; margin-top:16px;" onclick="handleGenerateSchedule()">Generate Schedule & Start Tournament</button>
+      <div class="auth-error" id="bracketSetupError"></div>
+    </div>
+  `;
+}
+
+function toggleBracketPlayerSelect(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const idx = bracketSetupSelectedPlayers.indexOf(playerId);
+  if (idx >= 0) {
+    bracketSetupSelectedPlayers.splice(idx, 1);
+  } else {
+    if (bracketSetupSelectedPlayers.length >= teamSize) return;
+    bracketSetupSelectedPlayers.push(playerId);
+  }
+  document.querySelectorAll('#bracketPlayerChecklist .player-check').forEach(el => {
+    el.classList.toggle('selected', bracketSetupSelectedPlayers.includes(el.dataset.id));
+  });
+}
+
+async function formBracketTeam() {
+  const teamSize = 2;
+  if (bracketSetupSelectedPlayers.length !== teamSize) {
+    alert(`Select exactly ${teamSize} players to form a team.`);
+    return;
+  }
+  const checklistEls = [...document.querySelectorAll('#bracketPlayerChecklist .player-check.selected')];
+  const names = checklistEls.map(el => el.dataset.name);
+  bracketSetupTeams.push({ playerIds: [...bracketSetupSelectedPlayers], names });
+  bracketSetupSelectedPlayers = [];
+  document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
+}
+
+async function formAllSinglesTeams() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  bracketSetupTeams = players
+    .filter(p => !bracketSetupTeams.some(t => t.playerIds.includes(p.id)))
+    .map(p => ({ playerIds: [p.id], names: [p.name] }));
+  document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
+}
+
+async function removeBracketTeam(index) {
+  bracketSetupTeams.splice(index, 1);
+  document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
+}
+
+async function handleGenerateSchedule() {
+  const errorEl = document.getElementById('bracketSetupError');
+  const minTeams = activeSession.tournament_format === 'swiss' ? 4 : 3;
+  if (bracketSetupTeams.length < minTeams) {
+    errorEl.textContent = `Need at least ${minTeams} teams for ${activeSession.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin'} format.`;
+    return;
+  }
+  try {
+    const teamPlayerGroups = bracketSetupTeams.map(t => t.playerIds);
+    await SessionAPI.startTournament(activeSession.id, teamPlayerGroups, activeSession.tournament_format);
+    bracketSetupTeams = [];
+    bracketSetupSelectedPlayers = [];
+    document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function bracketLiveHtml(teams) {
+  const session = await SessionAPI.getSession(activeSession.id); // refresh for current_round
+  activeSession = session;
+  const currentRound = session.current_round;
+  const matchups = await SessionAPI.getMatchups(activeSession.id, currentRound);
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const standings = window.TournamentEngine.computeStandings(teams);
+
+  const roundLabel = session.tournament_format === 'round_robin'
+    ? `Round ${currentRound} of ${session.rounds_total || '?'}`
+    : `Round ${currentRound} of ${session.rounds_total || '?'} (Swiss)`;
+
+  const roundComplete = await SessionAPI.isRoundComplete(activeSession.id, currentRound);
+  const isFinalRound = session.rounds_total && currentRound >= session.rounds_total;
+
+  return `
+    <div class="card">
+      <h2>${roundLabel}</h2>
+      <div class="matchup-list">
+        ${matchups.map(m => bracketMatchupRow(m, players, courts)).join('')}
+      </div>
+      ${roundComplete && !isFinalRound ? `<button class="btn-primary" style="width:auto; padding:10px 20px; margin-top:14px;" onclick="handleAdvanceRound()">Advance to Round ${currentRound + 1}</button>` : ''}
+      ${roundComplete && isFinalRound ? `<p style="margin-top:14px; font-weight:700; color:var(--winner-green);">🏆 Final round complete! Check standings below for the winner.</p>` : ''}
+    </div>
+
+    <div class="card">
+      <h2>Standings</h2>
+      <table class="roster-table">
+        <thead><tr><th>#</th><th>Team</th><th>W-L</th><th>Pts For</th><th>Pts Against</th><th>Diff</th></tr></thead>
+        <tbody>
+          ${standings.map((t, i) => `
+            <tr>
+              <td>${i + 1}</td>
+              <td>${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</td>
+              <td>${t.wins}-${t.losses}</td>
+              <td>${t.points_for}</td>
+              <td>${t.points_against}</td>
+              <td>${t.points_for - t.points_against >= 0 ? '+' : ''}${t.points_for - t.points_against}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function bracketMatchupRow(m, players, courts) {
+  const namesA = playerNamesForTeam(m.team_a, players).join(' & ');
+  const namesB = playerNamesForTeam(m.team_b, players).join(' & ');
+  const openCourts = courts.filter(c => c.status === 'open');
+
+  if (m.status === 'completed') {
+    return `<div class="matchup-card completed"><span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span><span class="status-pill status-playing">Done</span></div>`;
+  }
+  if (m.status === 'in_progress') {
+    return `
+      <div class="matchup-card in-progress">
+        <span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span>
+        <button class="win-select-btn" onclick="openScoreEntry('${m.id}', '${m.court_id}', '${escapeHtml(namesA)}', '${escapeHtml(namesB)}')">Enter Score</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="matchup-card pending">
+      <span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span>
+      ${openCourts.length ? `
+        <select onchange="if(this.value) handleAssignMatchup('${m.id}', this.value)">
+          <option value="">Assign court...</option>
+          ${openCourts.map(c => `<option value="${c.id}">Court ${c.court_number}</option>`).join('')}
+        </select>
+      ` : '<span style="font-size:11px;color:var(--resting-slate);">No open courts</span>'}
+    </div>
+  `;
+}
+
+async function handleAssignMatchup(matchupId, courtId) {
+  await SessionAPI.assignMatchupToCourt(matchupId, courtId);
+  document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+}
+
+function openScoreEntry(matchupId, courtId, namesA, namesB) {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="scoreModal">
+      <div class="modal-box">
+        <h2>Enter Final Score</h2>
+        <p class="modal-sub">${namesA} vs ${namesB}</p>
+        <div class="form-grid">
+          <div class="field"><label>${namesA}</label><input type="number" id="scoreA" min="0" max="99" value="0"></div>
+          <div class="field"><label>${namesB}</label><input type="number" id="scoreB" min="0" max="99" value="0"></div>
+        </div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('scoreModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmScoreEntry('${matchupId}', '${courtId}')">Submit Score</button>
+        </div>
+        <div class="auth-error" id="scoreModalError"></div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmScoreEntry(matchupId, courtId) {
+  const scoreA = parseInt(document.getElementById('scoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('scoreB').value, 10);
+  const errorEl = document.getElementById('scoreModalError');
+
+  if (isNaN(scoreA) || isNaN(scoreB) || scoreA === scoreB) {
+    errorEl.textContent = 'Scores must be valid numbers and cannot be tied.';
+    return;
+  }
+
+  await SessionAPI.recordTournamentResult(matchupId, courtId, scoreA, scoreB);
+  document.getElementById('scoreModal').remove();
+  document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+}
+
+async function handleAdvanceRound() {
+  await SessionAPI.advanceToNextRound(activeSession.id);
+  document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
 }
 
 async function courtsTabHtml() {
@@ -1064,6 +1588,7 @@ function subscribeRealtime() {
     .channel(`host-${activeSession.id}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matchups', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'bracket') renderActiveTab(); })
     .subscribe();
 }
 
