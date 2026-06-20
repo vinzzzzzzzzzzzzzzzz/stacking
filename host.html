@@ -100,6 +100,22 @@
   .type-option.selected { border-color: var(--court-green); background: rgba(27,77,62,0.05); }
   .type-option.selected strong { color: var(--court-green); }
 
+  .stacking-mode-toggle { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .mode-option { border: 2px solid #ddd; border-radius: var(--radius-sm); padding: 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+  .mode-option strong { font-size: 13px; }
+  .mode-option span { font-size: 10px; color: var(--resting-slate); line-height: 1.3; }
+  .mode-option.selected { border-color: var(--kitchen-gold); background: rgba(232,184,75,0.1); }
+  .mode-option.selected strong { color: var(--ink); }
+  .mode-explainer { font-size: 11px; color: var(--resting-slate); margin: 4px 0 0; line-height: 1.4; }
+
+  .password-field-wrap { position: relative; }
+  .password-field-wrap input { width: 100%; padding-right: 42px; }
+  .password-toggle-btn {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; font-size: 16px; padding: 6px 8px; min-height: 0; cursor: pointer; opacity: 0.6;
+  }
+  .password-toggle-btn:hover { opacity: 1; }
+
   .console-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
   .console-header h1 { font-size: 22px; margin: 0; }
   .share-link { background: white; border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card); flex-wrap: wrap; justify-content: flex-end; }
@@ -132,6 +148,13 @@
   .player-check.selected { background: var(--court-green); color: white; border-color: var(--court-green); }
 
   .courts-host-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+
+  .planned-courts-list { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .planned-court-row { background: #fafaf7; border-radius: var(--radius-sm); padding: 12px; }
+  .planned-court-row h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; color: var(--resting-slate); }
+  .planned-matchup { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 6px 0; border-bottom: 1px solid #eee; }
+  .planned-matchup:last-child { border-bottom: none; }
+  #planCourtSelect { padding: 9px 12px; border-radius: var(--radius-sm); border: 1.5px solid #ddd; font-size: 14px; }
   .court-host-card { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
   .court-host-label { background: var(--court-green); color: white; padding: 10px 14px; font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; }
   .court-host-body { padding: 14px; }
@@ -190,6 +213,7 @@
     .container { padding: 16px 14px; }
     .topbar { padding: 12px 16px; }
     .session-type-toggle { grid-template-columns: 1fr; }
+    .stacking-mode-toggle { grid-template-columns: 1fr; }
     .regroup-lanes { grid-template-columns: 1fr; }
     .form-grid { grid-template-columns: 1fr; }
 
@@ -633,7 +657,7 @@ function generateReferenceCode() {
 // (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, division, roundsTotal, scoringMode, pointsToWin, allowCrossLaneFill }) {
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, division, category, openPlayMode, roundsTotal, scoringMode, pointsToWin, allowCrossLaneFill }) {
     if (!password || password.length < 4) {
       throw new Error('Session password must be at least 4 characters.');
     }
@@ -656,6 +680,8 @@ const SessionAPI = (() => {
           session_type: sessionType || 'open_play',
           tournament_format: tournamentFormat || null,
           division: sessionType === 'tournament' ? (division || 'open') : null,
+          category: sessionType === 'tournament' ? (category || null) : null,
+          open_play_mode: sessionType === 'open_play' ? (openPlayMode || 'automated') : null,
           rounds_total: roundsTotal || null,
           scoring_mode: scoringMode || 'win_loss',
           points_to_win: pointsToWin || 11,
@@ -992,15 +1018,34 @@ const SessionAPI = (() => {
    * (skip that lane) or length matching the session's team size.
    */
   async function applyQueuePlacement(courtId, sessionId, pairingMode, winnersGroup, losersGroup) {
-    const [winnersQ, losersQ] = await Promise.all([getQueueLane(sessionId, 'winners_queue'), getQueueLane(sessionId, 'losers_queue')]);
+    const session = await getSession(sessionId);
+    const isManualMode = session.open_play_mode === 'manual';
 
-    if (winnersGroup && winnersGroup.length > 0) {
-      await createTeam(sessionId, winnersGroup, pairingMode, 'winners_queue');
-      await supabaseClient.from('players').update({ status: 'winners_queue' }).in('id', winnersGroup);
-    }
-    if (losersGroup && losersGroup.length > 0) {
-      await createTeam(sessionId, losersGroup, pairingMode, 'losers_queue');
-      await supabaseClient.from('players').update({ status: 'losers_queue' }).in('id', losersGroup);
+    // mark this court's active manual_queue entry (if any) as completed
+    await markManualQueueEntryCompleted(courtId);
+
+    if (isManualMode) {
+      // Pure Manual: finished players go to the back of the GENERAL waiting
+      // line (queue_lane 'waiting', court_id null in manual_queue terms) —
+      // the host decides their next matchup explicitly, nothing automatic.
+      if (winnersGroup && winnersGroup.length > 0) {
+        await createTeam(sessionId, winnersGroup, pairingMode, 'waiting');
+        await supabaseClient.from('players').update({ status: 'waiting' }).in('id', winnersGroup);
+      }
+      if (losersGroup && losersGroup.length > 0) {
+        await createTeam(sessionId, losersGroup, pairingMode, 'waiting');
+        await supabaseClient.from('players').update({ status: 'waiting' }).in('id', losersGroup);
+      }
+    } else {
+      // Automated / Hybrid: normal win/loss lane placement
+      if (winnersGroup && winnersGroup.length > 0) {
+        await createTeam(sessionId, winnersGroup, pairingMode, 'winners_queue');
+        await supabaseClient.from('players').update({ status: 'winners_queue' }).in('id', winnersGroup);
+      }
+      if (losersGroup && losersGroup.length > 0) {
+        await createTeam(sessionId, losersGroup, pairingMode, 'losers_queue');
+        await supabaseClient.from('players').update({ status: 'losers_queue' }).in('id', losersGroup);
+      }
     }
 
     // deactivate the two original teams that just finished playing — they've
@@ -1036,6 +1081,20 @@ const SessionAPI = (() => {
     const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (!court || court.status === 'in_progress') return null;
     const session = await getSession(court.session_id);
+
+    // Manual mode: pull from the host's pre-built schedule instead of the
+    // automated engine. Hybrid mode also has a manual_queue available, but
+    // falls back to the automated engine if nothing's been pre-planned.
+    if (session.open_play_mode === 'manual' || session.open_play_mode === 'hybrid') {
+      const nextPlanned = await getNextManualQueueEntry(court.session_id, courtId);
+      if (nextPlanned) {
+        await assignCourt(courtId, nextPlanned.team_a_id, nextPlanned.team_b_id);
+        await supabaseClient.from('manual_queue').update({ status: 'active' }).eq('id', nextPlanned.id);
+        return { teamA: { id: nextPlanned.team_a_id }, teamB: { id: nextPlanned.team_b_id }, lane: 'manual' };
+      }
+      if (session.open_play_mode === 'manual') return null; // strictly manual — no automated fallback
+    }
+
     const [winnersQueue, losersQueue, waitingQueue] = await Promise.all([
       getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue'),
       getQueueLane(court.session_id, 'waiting'),
@@ -1048,6 +1107,60 @@ const SessionAPI = (() => {
     await assignCourt(courtId, decision.teamA.id, decision.teamB.id);
     return decision;
   }
+
+  // ============================================================
+  // MANUAL QUEUE — host pre-builds the schedule, Manual/Hybrid modes
+  // ============================================================
+
+  /**
+   * Add a planned matchup to the back of a specific court's manual queue
+   * (or the general unassigned-court queue if courtId is null).
+   */
+  async function addManualQueueEntry(sessionId, courtId, teamAId, teamBId) {
+    const { data: existing } = await supabaseClient
+      .from('manual_queue').select('queue_position')
+      .eq('session_id', sessionId).eq('status', 'planned')
+      .eq('court_id', courtId);
+    const maxPos = existing && existing.length > 0 ? Math.max(...existing.map(r => r.queue_position ?? 0)) : 0;
+    const { data, error } = await supabaseClient.from('manual_queue').insert({
+      session_id: sessionId, court_id: courtId, team_a_id: teamAId, team_b_id: teamBId, queue_position: maxPos + 1,
+    }).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function getManualQueue(sessionId) {
+    const { data, error } = await supabaseClient
+      .from('manual_queue')
+      .select('*, team_a:team_a_id(*), team_b:team_b_id(*), court:court_id(*)')
+      .eq('session_id', sessionId)
+      .in('status', ['planned', 'active'])
+      .order('queue_position', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+
+  async function getNextManualQueueEntry(sessionId, courtId) {
+    const { data, error } = await supabaseClient
+      .from('manual_queue')
+      .select('*')
+      .eq('session_id', sessionId)
+      .eq('court_id', courtId)
+      .eq('status', 'planned')
+      .order('queue_position', { ascending: true })
+      .limit(1);
+    if (error) throw error;
+    return data && data.length > 0 ? data[0] : null;
+  }
+
+  async function removeManualQueueEntry(entryId) {
+    await supabaseClient.from('manual_queue').update({ status: 'cancelled' }).eq('id', entryId);
+  }
+
+  async function markManualQueueEntryCompleted(courtId) {
+    await supabaseClient.from('manual_queue').update({ status: 'completed' }).eq('court_id', courtId).eq('status', 'active');
+  }
+
   async function getPendingRestRequests(sessionId) {
     const { data, error } = await supabaseClient.from('rest_requests').select('*, player:player_id(*)').eq('session_id', sessionId).eq('status', 'pending');
     if (error) throw error;
@@ -1069,6 +1182,7 @@ const SessionAPI = (() => {
     startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, deactivateTeamsContainingPlayers,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
+    addManualQueueEntry, getManualQueue, getNextManualQueueEntry, removeManualQueueEntry,
     getPendingRestRequests, getMessages, markMessageStatus,
   };
 })();
@@ -1134,38 +1248,67 @@ async function renderSessionList() {
       <div class="session-type-toggle">
         <div class="type-option selected" id="typeOpenPlay" onclick="selectSessionType('open_play')">
           <strong>Open Play</strong>
-          <span>Continuous winners/losers queue — no fixed end</span>
+          <span>Continuous queue — no fixed end</span>
         </div>
         <div class="type-option" id="typeTournament" onclick="selectSessionType('tournament')">
           <strong>Tournament</strong>
-          <span>Round Robin or Swiss — fixed rounds, real standings</span>
+          <span>Fixed format, real standings</span>
         </div>
       </div>
 
       <div class="form-grid">
-        <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
-        <div class="field"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
-        <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
-        <div class="field open-play-only" id="stackingModeField"><label>Stacking Mode</label><select id="newStackingMode"><option value="win_loss_queue">Winners/Losers Queue (recommended)</option><option value="fifo">Straight Queue (FIFO)</option></select></div>
-        <div class="field open-play-only" id="pairingDefaultField"><label>Doubles Pairing</label><select id="newPairingDefault"><option value="fixed">Fixed Teams (stay paired)</option><option value="mixed">Mixed (re-pair each round)</option></select></div>
-        <div class="field open-play-only" id="crossLaneFillField"><label>Uneven Numbers Fallback</label><select id="newAllowCrossLaneFill"><option value="true">Winner vs Loser is OK if queues are uneven (recommended)</option><option value="false">Court waits until a full winner-vs-winner or loser-vs-loser match is ready</option></select></div>
-
-        <div class="field tournament-only" id="tournamentFormatField" style="display:none;">
-          <label>Tournament Format</label>
-          <select id="newTournamentFormat" onchange="toggleSwissRoundsField()">
-            <option value="round_robin">Round Robin (everyone plays everyone)</option>
-            <option value="swiss">Swiss (paired by similar record each round)</option>
-          </select>
-        </div>
-        <div class="field tournament-only" id="divisionField" style="display:none;">
-          <label>Division</label>
+        <div class="field"><label id="nameFieldLabel">Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
+        <div class="field tournament-only" id="tournamentDivisionField" style="display:none;">
+          <label>Format</label>
           <select id="newDivision">
-            <option value="open">Open / Any</option>
-            <option value="mixed_doubles">Mixed Doubles</option>
             <option value="mens_doubles">Men's Doubles</option>
+            <option value="mixed_doubles">Mixed Doubles</option>
             <option value="womens_doubles">Women's Doubles</option>
             <option value="mens_singles">Men's Singles</option>
             <option value="womens_singles">Women's Singles</option>
+            <option value="mixed_singles">Mixed Singles</option>
+          </select>
+        </div>
+        <div class="field open-play-only" id="formatField"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
+        <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
+
+        <!-- OPEN PLAY: stacking mode selector -->
+        <div class="field open-play-only" id="stackingModeField" style="grid-column: 1 / -1;">
+          <label>Stacking Mode</label>
+          <div class="stacking-mode-toggle">
+            <div class="mode-option selected" id="modeAutomated" onclick="selectOpenPlayMode('automated')">
+              <strong>Automated</strong>
+              <span>Random pairings, system handles everything</span>
+            </div>
+            <div class="mode-option" id="modeManual" onclick="selectOpenPlayMode('manual')">
+              <strong>Manual</strong>
+              <span>You set every matchup yourself, in advance</span>
+            </div>
+            <div class="mode-option" id="modeHybrid" onclick="selectOpenPlayMode('hybrid')">
+              <strong>Automated + Manual</strong>
+              <span>Random start, you can edit anytime</span>
+            </div>
+          </div>
+          <p class="mode-explainer" id="modeExplainer">Players are randomly paired, trying to give everyone a chance to play with and against as many different people as possible. Once everyone's played once, winner-vs-winner and loser-vs-loser matching takes over.</p>
+        </div>
+
+        <div class="field open-play-only" id="crossLaneFillField"><label>Uneven Numbers Fallback</label><select id="newAllowCrossLaneFill"><option value="true">Winner vs Loser is OK if queues are uneven (recommended)</option><option value="false">Court waits until a full winner-vs-winner or loser-vs-loser match is ready</option></select></div>
+
+        <div class="field tournament-only" id="tournamentFormatField" style="display:none;">
+          <label>Tournament Mode</label>
+          <select id="newTournamentFormat" onchange="toggleSwissRoundsField()">
+            <option value="round_robin">Round Robin (everyone plays everyone)</option>
+            <option value="swiss">Swiss (paired by similar record each round)</option>
+            <option value="single_elim" disabled>Single Elimination (coming soon)</option>
+            <option value="manual" disabled>Fully Custom / Manual Bracket (coming soon)</option>
+          </select>
+        </div>
+        <div class="field tournament-only" id="categoryField" style="display:none;">
+          <label>Category</label>
+          <select id="newCategory">
+            <option value="novice">Novice / Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
           </select>
         </div>
         <div class="field tournament-only" id="swissRoundsField" style="display:none;">
@@ -1180,14 +1323,49 @@ async function renderSessionList() {
           <p style="font-size:11px; color:var(--resting-slate); margin:0; padding:8px 12px; background:#f7f5ef; border-radius:6px;">Tournament partners are fixed for the whole event — you'll pair players once during Bracket setup, and that pairing stays the same every round.</p>
         </div>
 
-        <div class="field"><label>Session Password</label><input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password"></div>
-        <div class="field"><label>Confirm Password</label><input type="password" id="newPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password"></div>
+        <div class="field">
+          <label>Session Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('newPassword', this)">👁</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Confirm Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="newPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('newPasswordConfirm', this)">👁</button>
+          </div>
+        </div>
       </div>
       <p style="font-size:11px; color:var(--resting-slate); margin:-6px 0 10px;">This password protects the host console for this session — anyone with the link will need it to make changes.</p>
       <button class="btn-primary" onclick="handleCreateSession()">Create Session</button>
       <div class="auth-error" id="createSessionError"></div>
     </div>
   `;
+}
+
+function togglePasswordVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  btn.textContent = showing ? '👁' : '🙈';
+}
+
+let selectedOpenPlayMode = 'automated';
+
+const MODE_EXPLAINERS = {
+  automated: 'Players are randomly paired, trying to give everyone a chance to play with and against as many different people as possible. Once everyone has played once, winner-vs-winner and loser-vs-loser matching takes over.',
+  manual: 'You set every matchup yourself — Round 1 for every court, plus the next matchups queued in advance. Players who finish a match are automatically added to the back of the line for whatever you have already queued.',
+  hybrid: 'Starts the same as Automated (random pairings), but you can edit any upcoming matchup at any time — useful for last-minute requests like pairing two friends together.',
+};
+
+function selectOpenPlayMode(mode) {
+  selectedOpenPlayMode = mode;
+  document.getElementById('modeAutomated').classList.toggle('selected', mode === 'automated');
+  document.getElementById('modeManual').classList.toggle('selected', mode === 'manual');
+  document.getElementById('modeHybrid').classList.toggle('selected', mode === 'hybrid');
+  document.getElementById('modeExplainer').textContent = MODE_EXPLAINERS[mode];
 }
 
 let selectedSessionType = 'open_play';
@@ -1199,6 +1377,7 @@ function selectSessionType(type) {
 
   document.querySelectorAll('.open-play-only').forEach(el => { el.style.display = type === 'open_play' ? '' : 'none'; });
   document.querySelectorAll('.tournament-only').forEach(el => { el.style.display = type === 'tournament' ? '' : 'none'; });
+  document.getElementById('nameFieldLabel').textContent = type === 'tournament' ? 'Tournament Name' : 'Session Name';
   if (type === 'tournament') toggleSwissRoundsField();
 }
 
@@ -1209,25 +1388,30 @@ function toggleSwissRoundsField() {
 
 const DIVISION_LABELS = {
   mixed_doubles: 'Mixed Doubles', mens_doubles: "Men's Doubles", womens_doubles: "Women's Doubles",
-  mens_singles: "Men's Singles", womens_singles: "Women's Singles", open: 'Open / Any',
+  mens_singles: "Men's Singles", womens_singles: "Women's Singles", mixed_singles: 'Mixed Singles', open: 'Open / Any',
 };
+const CATEGORY_LABELS = { novice: 'Novice', intermediate: 'Intermediate', advanced: 'Advanced' };
+const OPEN_PLAY_MODE_LABELS = { automated: 'Automated', manual: 'Manual', hybrid: 'Auto + Manual' };
+
+// Divisions ending in "_singles" are 1v1; everything else is 2v2 doubles.
+function formatFromDivision(division) {
+  return division && division.endsWith('_singles') ? 'singles' : 'doubles';
+}
 
 function sessionTypeBadge(s) {
   if (s.session_type === 'tournament') {
     const fmt = s.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin';
     const divisionLabel = s.division && DIVISION_LABELS[s.division] ? ` · ${DIVISION_LABELS[s.division]}` : '';
-    return `<span style="font-size:10px; background:var(--kitchen-gold); color:var(--ink); padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">${fmt}${divisionLabel}</span>`;
+    const categoryLabel = s.category && CATEGORY_LABELS[s.category] ? ` · ${CATEGORY_LABELS[s.category]}` : '';
+    return `<span style="font-size:10px; background:var(--kitchen-gold); color:var(--ink); padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">${fmt}${divisionLabel}${categoryLabel}</span>`;
   }
-  return `<span style="font-size:10px; background:var(--waiting-blue); color:white; padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">Open Play</span>`;
+  const modeLabel = s.open_play_mode && OPEN_PLAY_MODE_LABELS[s.open_play_mode] ? ` · ${OPEN_PLAY_MODE_LABELS[s.open_play_mode]}` : '';
+  return `<span style="font-size:10px; background:var(--waiting-blue); color:white; padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">Open Play${modeLabel}</span>`;
 }
 
 async function handleCreateSession() {
   const name = document.getElementById('newName').value.trim() || 'Open Play';
-  const format = document.getElementById('newFormat').value;
   const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
-  const stackingMode = document.getElementById('newStackingMode').value;
-  const pairingDefault = document.getElementById('newPairingDefault').value;
-  const allowCrossLaneFill = document.getElementById('newAllowCrossLaneFill').value === 'true';
   const password = document.getElementById('newPassword').value;
   const passwordConfirm = document.getElementById('newPasswordConfirm').value;
   const errorEl = document.getElementById('createSessionError');
@@ -1237,20 +1421,43 @@ async function handleCreateSession() {
     errorEl.textContent = 'Passwords do not match.';
     return;
   }
+  if (!password || password.length < 4) {
+    errorEl.textContent = 'Password must be at least 4 characters.';
+    return;
+  }
 
   const sessionType = selectedSessionType;
-  const tournamentFormat = sessionType === 'tournament' ? document.getElementById('newTournamentFormat').value : null;
-  const division = sessionType === 'tournament' ? document.getElementById('newDivision').value : null;
-  const roundsTotal = (sessionType === 'tournament' && tournamentFormat === 'swiss') ? parseInt(document.getElementById('newRoundsTotal').value, 10) : null;
-  const pointsToWin = sessionType === 'tournament' ? parseInt(document.getElementById('newPointsToWin').value, 10) || 11 : 11;
-  const scoringMode = sessionType === 'tournament' ? 'point_diff' : 'win_loss';
+
+  let format, openPlayMode, allowCrossLaneFill, tournamentFormat, division, category, roundsTotal, pointsToWin, scoringMode;
+
+  if (sessionType === 'tournament') {
+    division = document.getElementById('newDivision').value;
+    format = formatFromDivision(division);
+    tournamentFormat = document.getElementById('newTournamentFormat').value;
+    category = document.getElementById('newCategory').value;
+    roundsTotal = tournamentFormat === 'swiss' ? parseInt(document.getElementById('newRoundsTotal').value, 10) : null;
+    pointsToWin = parseInt(document.getElementById('newPointsToWin').value, 10) || 11;
+    scoringMode = 'point_diff';
+  } else {
+    format = document.getElementById('newFormat').value;
+    openPlayMode = selectedOpenPlayMode;
+    allowCrossLaneFill = document.getElementById('newAllowCrossLaneFill').value === 'true';
+    pointsToWin = 11;
+    scoringMode = 'win_loss';
+  }
+
   // Tournament partners are always fixed for the whole event — no re-pairing mode applies there.
-  const effectivePairingDefault = sessionType === 'tournament' ? 'fixed' : pairingDefault;
+  const pairingDefault = 'fixed';
+  // Stacking engine mode: Open Play's automated win/loss matching always
+  // uses 'win_loss_queue' under the hood, regardless of which of the 3
+  // open_play_mode options the host picked — manual/hybrid layer their
+  // own pre-queue on TOP of this, they don't replace it.
+  const stackingMode = 'win_loss_queue';
 
   try {
     const session = await SessionAPI.createSession({
-      name, format, courtCount, stackingMode, pairingDefault: effectivePairingDefault, allowCrossLaneFill, restPriorityEnabled: true, password,
-      sessionType, tournamentFormat, division, roundsTotal, scoringMode, pointsToWin,
+      name, format, courtCount, stackingMode, pairingDefault, allowCrossLaneFill, restPriorityEnabled: true, password,
+      sessionType, tournamentFormat, division, category, openPlayMode, roundsTotal, scoringMode, pointsToWin,
     });
     rememberSessionPassword(session.id, password);
     await openSession(session.id);
@@ -1774,14 +1981,30 @@ async function handleAdvanceRound() {
 }
 
 async function courtsTabHtml() {
-  const [courts, players, waitingTeams] = await Promise.all([
+  if (activeSession.open_play_mode === 'manual') {
+    return await manualModeCourtsHtml();
+  }
+  return await automatedModeCourtsHtml();
+}
+
+async function automatedModeCourtsHtml() {
+  const [courts, players, unpaired] = await Promise.all([
     SessionAPI.getCourts(activeSession.id),
     SessionAPI.getPlayers(activeSession.id),
-    SessionAPI.getQueueLane(activeSession.id, 'waiting'),
+    SessionAPI.getUnpairedWaitingPlayers(activeSession.id),
   ]);
-  const unpaired = await SessionAPI.getUnpairedWaitingPlayers(activeSession.id);
 
-  const courtCards = courts.map(court => {
+  // Automated / Hybrid: the moment a court is open, immediately try to
+  // auto-fill it from the queue (Hybrid checks the manual_queue first,
+  // then falls back to the automated engine — see tryRefillCourt).
+  for (const court of courts) {
+    if (court.status === 'open') {
+      await SessionAPI.tryRefillCourt(court.id);
+    }
+  }
+  const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
+
+  const courtCards = freshCourts.map(court => {
     if (court.status === 'in_progress') {
       const namesA = playerNamesForTeam(court.team_a, players).join(' & ');
       const namesB = playerNamesForTeam(court.team_b, players).join(' & ');
@@ -1802,86 +2025,162 @@ async function courtsTabHtml() {
         <div class="court-host-card">
           <div class="court-host-label"><span>Court ${court.court_number}</span><span>OPEN</span></div>
           <div class="court-host-body">
-            <div class="court-empty-msg">No match assigned</div>
-            <button class="assign-btn" onclick="handleAutoRefill('${court.id}')">Try Auto-Fill from Queue</button>
-            <button class="assign-btn" style="background:#eee;color:var(--ink);margin-top:6px;" onclick="openManualAssign('${court.id}')">Manually Assign Teams</button>
+            <div class="court-empty-msg">Waiting for enough players in queue</div>
           </div>
         </div>
       `;
     }
   }).join('');
 
-  const sortedWaiting = [...waitingTeams].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+  const hybridNotice = activeSession.open_play_mode === 'hybrid'
+    ? `<div class="card" style="background:#f0f6fb;"><p style="font-size:12px;margin:0;">💡 Hybrid mode — matches are auto-paired, but you can plan ahead in the <strong>Plan Queue</strong> section below to override any upcoming matchup.</p></div>
+       <div class="card" id="hybridPlanCard">${await renderManualPlanningPanel()}</div>`
+    : '';
 
   return `
-    <div class="card" id="manualAssignCard" style="display:none;">
-      <h2>Manual Assign — Court</h2>
-      <p style="font-size:12px;color:var(--resting-slate);">Pick 2 waiting teams to play each other. Teams are already paired in join order — to change who's on a team, edit the Roster instead.</p>
-      <div class="player-checklist" id="manualPlayerChecklist">
-        ${sortedWaiting.length ? sortedWaiting.map((t, i) => `<div class="player-check" data-id="${t.id}" onclick="toggleTeamSelect('${t.id}')">#${i + 1} · ${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No waiting teams yet.</p>'}
-      </div>
-      ${unpaired.length > 0 ? `<p style="font-size:11px;color:var(--resting-slate);margin-top:8px;">⏳ ${unpaired.map(p => escapeHtml(p.name)).join(', ')} still waiting for a partner.</p>` : ''}
-      <button class="btn-primary" style="width:auto;padding:10px 20px;margin-top:10px;" onclick="confirmManualAssign()">Confirm Match</button>
-      <button class="btn-secondary" style="width:auto;padding:10px 20px;margin-left:8px;" onclick="closeManualAssign()">Cancel</button>
-    </div>
+    ${unpaired.length > 0 ? `<div class="card" style="background:#fff8e8;"><p style="font-size:12px;margin:0;">⏳ <strong>${unpaired.map(p => escapeHtml(p.name)).join(', ')}</strong> still waiting for a partner to be added.</p></div>` : ''}
     <div class="courts-host-grid">${courtCards}</div>
+    ${hybridNotice}
   `;
 }
 
-let manualAssignCourtId = null;
-let selectedTeamIds = [];
+async function manualModeCourtsHtml() {
+  const [courts, players, unpaired] = await Promise.all([
+    SessionAPI.getCourts(activeSession.id),
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getUnpairedWaitingPlayers(activeSession.id),
+  ]);
 
-function openManualAssign(courtId) {
-  manualAssignCourtId = courtId;
-  selectedTeamIds = [];
-  document.getElementById('manualAssignCard').style.display = 'block';
-  document.getElementById('manualAssignCard').scrollIntoView({ behavior: 'smooth' });
-}
-
-function closeManualAssign() {
-  manualAssignCourtId = null;
-  selectedTeamIds = [];
-  document.getElementById('manualAssignCard').style.display = 'none';
-}
-
-function toggleTeamSelect(teamId) {
-  const idx = selectedTeamIds.indexOf(teamId);
-  if (idx >= 0) {
-    selectedTeamIds.splice(idx, 1);
-  } else {
-    if (selectedTeamIds.length >= 2) return;
-    selectedTeamIds.push(teamId);
+  // Manual mode still auto-PULLS from the host's pre-built schedule the
+  // instant a court frees up (no extra click needed for that part) — what's
+  // manual is the SCHEDULE ITSELF, which the host builds in advance below.
+  for (const court of courts) {
+    if (court.status === 'open') {
+      await SessionAPI.tryRefillCourt(court.id);
+    }
   }
-  document.querySelectorAll('.player-check').forEach(el => {
-    el.classList.toggle('selected', selectedTeamIds.includes(el.dataset.id));
+  const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
+
+  const courtCards = freshCourts.map(court => {
+    if (court.status === 'in_progress') {
+      const namesA = playerNamesForTeam(court.team_a, players).join(' & ');
+      const namesB = playerNamesForTeam(court.team_b, players).join(' & ');
+      return `
+        <div class="court-host-card">
+          <div class="court-host-label"><span>Court ${court.court_number}</span><span class="mono" id="hostTimer-${court.id}">00:00</span></div>
+          <div class="court-host-body">
+            <div class="matchup-row"><span>${escapeHtml(namesA)}</span></div>
+            <div class="matchup-vs">vs</div>
+            <div class="matchup-row"><span>${escapeHtml(namesB)}</span></div>
+            <div class="ongoing-pill">● Ongoing</div>
+            <button class="assign-btn" style="margin-top:10px;" onclick="handleMarkFinished('${court.id}')">Mark Match Finished</button>
+          </div>
+        </div>
+      `;
+    } else {
+      return `
+        <div class="court-host-card">
+          <div class="court-host-label"><span>Court ${court.court_number}</span><span>OPEN — nothing planned yet</span></div>
+          <div class="court-host-body">
+            <div class="court-empty-msg">Plan a matchup for this court below</div>
+          </div>
+        </div>
+      `;
+    }
+  }).join('');
+
+  return `
+    ${unpaired.length > 0 ? `<div class="card" style="background:#fff8e8;"><p style="font-size:12px;margin:0;">⏳ <strong>${unpaired.map(p => escapeHtml(p.name)).join(', ')}</strong> still waiting for a partner to be added.</p></div>` : ''}
+    <div class="courts-host-grid">${courtCards}</div>
+    <div class="card" id="manualPlanCard">${await renderManualPlanningPanel()}</div>
+  `;
+}
+
+/**
+ * The planning panel — lets the host build the queue in advance: pick
+ * which court, pick 2 waiting teams, add to that court's plan. Shows the
+ * already-planned queue per court so the host can see/reorder/cancel.
+ */
+async function renderManualPlanningPanel() {
+  const [courts, waitingTeams, players, manualQueue] = await Promise.all([
+    SessionAPI.getCourts(activeSession.id),
+    SessionAPI.getQueueLane(activeSession.id, 'waiting'),
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getManualQueue(activeSession.id),
+  ]);
+
+  const sortedWaiting = [...waitingTeams].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+
+  const plannedByCourtRows = courts.map(court => {
+    const planned = manualQueue.filter(m => m.court_id === court.id && m.status === 'planned');
+    return `
+      <div class="planned-court-row">
+        <h4>Court ${court.court_number} Queue</h4>
+        ${planned.length ? planned.map((m, i) => `
+          <div class="planned-matchup">
+            <span>#${i + 1}: ${escapeHtml(playerNamesForTeam(m.team_a, players).join(' & '))} vs ${escapeHtml(playerNamesForTeam(m.team_b, players).join(' & '))}</span>
+            <button class="remove-btn" onclick="handleRemovePlannedMatch('${m.id}')">Remove</button>
+          </div>
+        `).join('') : '<p style="font-size:11px;color:var(--resting-slate);margin:4px 0;">Nothing planned yet.</p>'}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <h2>Plan Queue</h2>
+    <p style="font-size:12px;color:var(--resting-slate);">Pick 2 waiting teams, choose which court they'll play on, and add to that court's planned queue. Teams play in the order you add them.</p>
+
+    <div class="player-checklist" id="manualPlanChecklist">
+      ${sortedWaiting.length ? sortedWaiting.map((t, i) => `<div class="player-check" data-id="${t.id}" onclick="togglePlanTeamSelect('${t.id}')">#${i + 1} · ${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No waiting teams yet.</p>'}
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+      <select id="planCourtSelect">${courts.map(c => `<option value="${c.id}">Court ${c.court_number}</option>`).join('')}</select>
+      <button class="btn-primary" style="width:auto;padding:9px 18px;" onclick="confirmAddToManualQueue()">Add to Court's Queue</button>
+    </div>
+    <div class="auth-error" id="manualPlanError"></div>
+
+    <div class="planned-courts-list">${plannedByCourtRows}</div>
+  `;
+}
+
+let planSelectedTeamIds = [];
+
+function togglePlanTeamSelect(teamId) {
+  const idx = planSelectedTeamIds.indexOf(teamId);
+  if (idx >= 0) {
+    planSelectedTeamIds.splice(idx, 1);
+  } else {
+    if (planSelectedTeamIds.length >= 2) return;
+    planSelectedTeamIds.push(teamId);
+  }
+  document.querySelectorAll('#manualPlanChecklist .player-check').forEach(el => {
+    el.classList.toggle('selected', planSelectedTeamIds.includes(el.dataset.id));
   });
 }
 
-async function confirmManualAssign() {
-  if (selectedTeamIds.length !== 2) {
-    alert('Select exactly 2 teams to face off.');
+async function confirmAddToManualQueue() {
+  const errorEl = document.getElementById('manualPlanError');
+  if (planSelectedTeamIds.length !== 2) {
+    errorEl.textContent = 'Select exactly 2 teams.';
     return;
   }
-  const [teamAId, teamBId] = selectedTeamIds;
-  await SessionAPI.assignCourt(manualAssignCourtId, teamAId, teamBId);
+  const courtId = document.getElementById('planCourtSelect').value;
+  const [teamAId, teamBId] = planSelectedTeamIds;
+  await SessionAPI.addManualQueueEntry(activeSession.id, courtId, teamAId, teamBId);
+  planSelectedTeamIds = [];
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
 
-  const teamA = await SessionAPI.getTeams(activeSession.id).then(teams => teams.find(t => t.id === teamAId));
-  const teamB = await SessionAPI.getTeams(activeSession.id).then(teams => teams.find(t => t.id === teamBId));
-  const allPlayerIds = [...(teamA?.player_ids || []), ...(teamB?.player_ids || [])];
-  if (allPlayerIds.length > 0) {
-    await supabaseClient.from('players').update({ status: 'playing' }).in('id', allPlayerIds);
-  }
-
-  closeManualAssign();
+async function handleRemovePlannedMatch(entryId) {
+  await SessionAPI.removeManualQueueEntry(entryId);
   document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
 
 // ============================================================
-// MATCH RESULT FLOW: Mark Finished -> Confirm -> Pick Winner -> Regroup
+// MATCH RESULT FLOW: Mark Finished -> Confirm -> Pick Winner -> Done (automatic)
 // ============================================================
 let resultFlowCourt = null; // holds court object mid-flow
 let resultFlowWinnerTeamId = null;
-let regroupAssignment = {}; // playerId -> 'winners' | 'losers'
 
 async function handleMarkFinished(courtId) {
   const courts = await SessionAPI.getCourts(activeSession.id);
@@ -1972,7 +2271,7 @@ function toggleScoreFields() {
 async function skipScoreAndContinue() {
   resultFlowScoreData = null;
   await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, null);
-  await showRegroupModal();
+  await finalizeAutomaticPlacement();
 }
 
 async function confirmScoreAndContinue() {
@@ -1990,77 +2289,23 @@ async function confirmScoreAndContinue() {
   }
   resultFlowScoreData = { teamAScore: scoreA, teamBScore: scoreB };
   await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, resultFlowScoreData);
-  await showRegroupModal();
+  await finalizeAutomaticPlacement();
 }
 
-async function showRegroupModal() {
-  const players = await SessionAPI.getPlayers(activeSession.id);
+/**
+ * Open Play is fully automatic — no host editing of who goes where.
+ * Winning pair goes straight to the back of the winners queue, losing
+ * pair to the back of the losers queue, exactly as recorded. This is
+ * what keeps the FIFO/win-loss sequence provably correct: there's no
+ * manual step where a host click could break the queue order.
+ */
+async function finalizeAutomaticPlacement() {
   const teamA = resultFlowCourt.team_a;
   const teamB = resultFlowCourt.team_b;
   const winningTeam = teamA.id === resultFlowWinnerTeamId ? teamA : teamB;
   const losingTeam = teamA.id === resultFlowWinnerTeamId ? teamB : teamA;
 
-  // default: winning pair -> winners lane, losing pair -> losers lane
-  regroupAssignment = {};
-  winningTeam.player_ids.forEach(pid => { regroupAssignment[pid] = 'winners'; });
-  losingTeam.player_ids.forEach(pid => { regroupAssignment[pid] = 'losers'; });
-
-  renderRegroupModal(players);
-}
-
-function renderRegroupModal(players) {
-  const allPlayerIds = Object.keys(regroupAssignment);
-  const playerName = (pid) => players.find(p => p.id === pid)?.name || '—';
-
-  const winnersIds = allPlayerIds.filter(pid => regroupAssignment[pid] === 'winners');
-  const losersIds = allPlayerIds.filter(pid => regroupAssignment[pid] === 'losers');
-
-  document.getElementById('resultModal').innerHTML = `
-    <div class="modal-box">
-      <h2>Arrange Next Queues</h2>
-      <p class="modal-sub">Default: winning pair → Winners Queue, losing pair → Losers Queue. Tap any name to move it.</p>
-
-      <div class="regroup-lanes">
-        <div class="regroup-lane winners-lane">
-          <h4>Winners Queue</h4>
-          <div id="winnersLaneChips">
-            ${winnersIds.map(pid => `<span class="regroup-chip" onclick="toggleRegroup('${pid}')">${escapeHtml(playerName(pid))}</span>`).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— none —</span>'}
-          </div>
-        </div>
-        <div class="regroup-lane losers-lane">
-          <h4>Losers Queue</h4>
-          <div id="losersLaneChips">
-            ${losersIds.map(pid => `<span class="regroup-chip" onclick="toggleRegroup('${pid}')">${escapeHtml(playerName(pid))}</span>`).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— none —</span>'}
-          </div>
-        </div>
-      </div>
-      <p class="regroup-hint">Tip: tap a name to move it between lanes — you can mix players from either original pair, e.g. keep two friends together even if one lost.</p>
-
-      <div class="confirm-actions">
-        <button class="btn-no" onclick="closeResultModal()">Cancel</button>
-        <button class="btn-yes" onclick="confirmRegroup()">Confirm & Send to Queues</button>
-      </div>
-    </div>
-  `;
-}
-
-async function toggleRegroup(playerId) {
-  regroupAssignment[playerId] = regroupAssignment[playerId] === 'winners' ? 'losers' : 'winners';
-  const players = await SessionAPI.getPlayers(activeSession.id);
-  renderRegroupModal(players);
-}
-
-async function confirmRegroup() {
-  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
-  const winnersGroup = Object.keys(regroupAssignment).filter(pid => regroupAssignment[pid] === 'winners');
-  const losersGroup = Object.keys(regroupAssignment).filter(pid => regroupAssignment[pid] === 'losers');
-
-  if (winnersGroup.length !== teamSize || losersGroup.length !== teamSize) {
-    alert(`Each lane needs exactly ${teamSize} player${teamSize > 1 ? 's' : ''} to form a team. Adjust before confirming.`);
-    return;
-  }
-
-  await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, activeSession.pairing_default, winnersGroup, losersGroup);
+  await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, activeSession.pairing_default, winningTeam.player_ids, losingTeam.player_ids);
   closeResultModal();
   document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
@@ -2071,13 +2316,6 @@ function closeResultModal() {
   resultFlowCourt = null;
   resultFlowWinnerTeamId = null;
   resultFlowScoreData = null;
-  regroupAssignment = {};
-}
-
-async function handleAutoRefill(courtId) {
-  const result = await SessionAPI.tryRefillCourt(courtId);
-  if (!result) alert('Not enough eligible players in queue yet to fill this court.');
-  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
 
 function playerNamesForTeam(team, players) {
