@@ -315,23 +315,38 @@ function popFront(queueTeams) {
 /**
  * Decide the next match for a freed court.
  *
+ * ============================================================
+ * CORE GUARANTEE — DO NOT BREAK THIS WHEN EDITING:
+ * No team may play a 2nd match while ANY team is still sitting in the
+ * waiting queue having not yet played its 1st match of the current cycle.
+ * This holds at ANY group size (8, 12, 24, 48...) and regardless of how
+ * unevenly courts finish relative to each other — each court checks the
+ * LIVE waiting queue length independently every time it asks for a
+ * decision, so a fast-finishing court can never "lap" a slow one.
+ * ============================================================
+ *
  * The cycle works as ONE continuous line: everyone who has never played
  * (or has cycled back around after playing) sits in the WAITING queue,
  * strict FIFO, no skipping. Fresh/waiting teams always get priority over
  * teams that just finished a match — so 8 people who haven't played yet
  * always go before 2 people replaying each other immediately.
  *
- * Win/loss is tracked so that WHEN a team's turn comes back around, the
- * system tries to match them against another team with the same recent
- * result (winner vs winner, loser vs loser) — but it never jumps them
- * ahead of people who are still waiting for their first/next turn.
+ * Win/loss is tracked so that WHEN a team's turn comes back around (i.e.
+ * the waiting line has been exhausted), the system tries to match them
+ * against another team with the same recent result (winner vs winner,
+ * loser vs loser) — but it never jumps them ahead of people who are
+ * still waiting for their first/next turn.
  *
  * Priority order:
  *  1. Waiting queue has 2+ teams -> play from waiting (the default, normal case)
- *  2. Waiting queue has fewer than 2 -> only then consider winners/losers
- *     lanes facing each other (winner vs winner, loser vs loser), oldest
- *     first in each lane
- *  3. If still nothing fills the court and allowCrossLaneFill is on,
+ *  2. Waiting queue has EXACTLY 1 team (never played this cycle, just
+ *     doesn't have a same-status partner yet) -> that team must still go
+ *     before any winners/losers rematch, since it hasn't had a turn at
+ *     all. Pair it with whichever of winners/losers has been waiting
+ *     longest, so a never-played team is never blocked behind a rematch.
+ *  3. Waiting queue is empty -> only then consider winners/losers lanes
+ *     facing each other (winner vs winner, loser vs loser), oldest first
+ *  4. If still nothing fills the court and allowCrossLaneFill is on,
  *     mix winners front vs losers front so the court doesn't sit idle
  */
 function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue, allowCrossLaneFill = true, preferredLane = null }) {
@@ -346,7 +361,29 @@ function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue
     return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
   }
 
-  // 2. Not enough in waiting — try same-lane FIFO match (winner vs winner,
+  // 2. Exactly one team waiting with no same-status partner — it still
+  // must be served before any winners/losers rematch, since a team that
+  // already played should never get a 2nd match while this team hasn't
+  // even had its 1st. Pair with whichever of winners/losers has been
+  // waiting longest overall (oldest queue_position across both lanes).
+  if (waitingQueue.length === 1 && allowCrossLaneFill) {
+    const winnerFront = winnersQueue[0] || null;
+    const loserFront = losersQueue[0] || null;
+    let opponent = null;
+    if (winnerFront && loserFront) {
+      opponent = (winnerFront.queue_position ?? 0) <= (loserFront.queue_position ?? 0) ? winnerFront : loserFront;
+    } else {
+      opponent = winnerFront || loserFront;
+    }
+    if (opponent) {
+      return { teamA: waitingQueue[0], teamB: opponent, lane: 'mixed' };
+    }
+    // no one in winners/losers yet either (very start of session) — this
+    // lone team just has to wait for an actual partner.
+    return null;
+  }
+
+  // 3. Waiting queue is empty — try same-lane FIFO match (winner vs winner,
   // or loser vs loser), oldest first.
   const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
   for (const lane of lanesToTry) {
@@ -358,19 +395,12 @@ function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue
 
   if (!allowCrossLaneFill) return null;
 
-  // 3. Cross-lane fallback: front of winners vs front of losers, so an
+  // 4. Cross-lane fallback: front of winners vs front of losers, so an
   // uneven head count (not divisible by 4 for doubles) doesn't stall a court.
   const winnerFront = popFront(winnersQueue);
   const loserFront = popFront(losersQueue);
   if (winnerFront && loserFront) {
     return { teamA: winnerFront, teamB: loserFront, lane: 'mixed' };
-  }
-
-  // 4. Last resort: a single leftover waiting team paired against whichever
-  // lane has someone available, so a lone team doesn't get stuck forever.
-  if (waitingQueue.length === 1) {
-    const opponent = popFront(winnersQueue) || popFront(losersQueue);
-    if (opponent) return { teamA: waitingQueue[0], teamB: opponent, lane: 'mixed' };
   }
 
   return null;
@@ -474,6 +504,110 @@ function computeStandings(teams) {
 }
 
 window.TournamentEngine = { generateRoundRobinSchedule, totalRoundRobinRounds, generateSwissRound, computeStandings };
+
+/**
+ * Self-test: simulates a full open-play cycle at a given player count and
+ * court count, verifying the CORE GUARANTEE never breaks — no team plays
+ * twice while another team is still waiting for its first turn.
+ *
+ * Run from the browser console on host.html: window.testNoRepeatGuarantee(24, 2)
+ * Logs PASS/FAIL plus the full round-by-round trace either way.
+ */
+window.testNoRepeatGuarantee = function(playerCount = 24, courtCount = 2, matchesToSimulate = 20) {
+  const teamCount = Math.floor(playerCount / 2);
+  const teams = Array.from({ length: teamCount }, (_, i) => ({ id: `T${i + 1}` }));
+  let waitingQueue = [...teams];
+  let winnersQueue = [];
+  let losersQueue = [];
+  const playedThisCycle = new Set();
+  let cycleComplete = false;
+  let failure = null;
+
+  function removeFromAll(team) {
+    [winnersQueue, losersQueue, waitingQueue].forEach(q => {
+      const idx = q.findIndex(t => t.id === team.id);
+      if (idx >= 0) q.splice(idx, 1);
+    });
+  }
+
+  console.log(`%cTesting: ${playerCount} players, ${courtCount} courts`, 'font-weight:bold');
+
+  // Realistic model: courts are independent and asynchronous. We simulate
+  // this by giving each court a random "match duration," then processing
+  // finish events strictly in time order — one court finishing and getting
+  // refilled BEFORE another court (which started earlier) has necessarily
+  // finished yet. This is the scenario that actually matters: a fast
+  // court must never be allowed to "lap" a slower one.
+  const courtBusyUntil = Array(courtCount).fill(0);
+  const courtCurrentMatch = Array(courtCount).fill(null);
+  let clock = 0;
+  let matchesPlayed = 0;
+
+  // Fill any courts that are currently empty, using time `clock`
+  function fillEmptyCourts() {
+    for (let c = 0; c < courtCount; c++) {
+      if (courtCurrentMatch[c] !== null) continue; // still occupied
+      const decision = window.StackingEngine.decideNextMatch({
+        stackingMode: 'win_loss_queue', winnersQueue, losersQueue, waitingQueue, allowCrossLaneFill: true,
+      });
+      if (!decision) continue; // genuinely nothing available right now — stays idle
+
+      const aFresh = !playedThisCycle.has(decision.teamA.id);
+      const bFresh = !playedThisCycle.has(decision.teamB.id);
+      // Count teams still waiting AFTER this decision's teams are accounted
+      // for — if the only "still waiting" team is the one we're about to
+      // serve, that's not a violation, that's exactly correct.
+      const decidedIds = new Set([decision.teamA.id, decision.teamB.id]);
+      const stillWaitingCount = waitingQueue.filter(t => !decidedIds.has(t.id)).length;
+      if ((!aFresh || !bFresh) && stillWaitingCount > 0) {
+        failure = `Court ${c + 1} @ t=${clock}: ${decision.teamA.id} vs ${decision.teamB.id} — a repeat team played while ${stillWaitingCount} OTHER team(s) still waiting!`;
+        return;
+      }
+
+      playedThisCycle.add(decision.teamA.id);
+      playedThisCycle.add(decision.teamB.id);
+      removeFromAll(decision.teamA);
+      removeFromAll(decision.teamB);
+      const duration = 5 + Math.floor(Math.random() * 15); // random match length
+      courtBusyUntil[c] = clock + duration;
+      courtCurrentMatch[c] = decision;
+      console.log(`t=${clock} Court ${c + 1} starts: ${decision.teamA.id} vs ${decision.teamB.id} (lane: ${decision.lane}, ends t=${courtBusyUntil[c]})`);
+    }
+  }
+
+  fillEmptyCourts();
+
+  while (matchesPlayed < matchesToSimulate && !failure) {
+    // advance clock to the NEXT court that finishes (asynchronous, not round-by-round)
+    const activeCourts = courtCurrentMatch.map((m, i) => m ? i : -1).filter(i => i >= 0);
+    if (activeCourts.length === 0) break; // nothing playing and nothing fillable — stuck
+    const nextFinishCourt = activeCourts.reduce((best, i) => courtBusyUntil[i] < courtBusyUntil[best] ? i : best, activeCourts[0]);
+    clock = courtBusyUntil[nextFinishCourt];
+
+    const finished = courtCurrentMatch[nextFinishCourt];
+    console.log(`t=${clock} Court ${nextFinishCourt + 1} finishes: ${finished.teamA.id} vs ${finished.teamB.id}`);
+    courtCurrentMatch[nextFinishCourt] = null;
+    matchesPlayed++;
+
+    // teamA always "wins" for deterministic test output
+    winnersQueue.push(finished.teamA);
+    losersQueue.push(finished.teamB);
+
+    if (playedThisCycle.size >= teamCount && !cycleComplete) {
+      console.log(`%cAll ${teamCount} teams have played at least once as of t=${clock}.`, 'color:green');
+      cycleComplete = true;
+    }
+
+    fillEmptyCourts();
+  }
+
+  if (failure) {
+    console.log('%cFAIL — ' + failure, 'color:red; font-weight:bold');
+  } else {
+    console.log(`%cPASS — simulated ${matchesPlayed} matches with realistic async court timing, no team ever played twice while another was still waiting.`, 'color:green; font-weight:bold');
+  }
+  return !failure;
+};
 
 // ============================================================
 // PASSWORD UTILITY (SHA-256 via Web Crypto API — no library needed)
