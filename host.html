@@ -84,10 +84,24 @@
   .session-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #eee; }
   .session-row:last-child { border-bottom: none; }
   .session-row .meta { font-size: 12px; color: var(--resting-slate); }
+  .finish-session-btn { background: var(--loser-coral); color: white; border: none; padding: 9px 16px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; }
   .ref-code-pill { background: var(--court-green); color: white; font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 5px; letter-spacing: 0.03em; }
-  .ref-code-display { display: flex; align-items: center; gap: 8px; background: var(--kitchen-gold); padding: 8px 14px; border-radius: var(--radius-sm); }
-  .ref-code-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: var(--ink); opacity: 0.7; }
-  .ref-code-big { font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: 0.04em; }
+
+  .share-card {
+    background: linear-gradient(135deg, var(--court-green) 0%, var(--court-green-dark) 100%);
+    border-radius: var(--radius); padding: 18px 20px; margin-bottom: 18px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 16px; box-shadow: var(--shadow-card);
+  }
+  .share-card-code { display: flex; flex-direction: column; gap: 2px; }
+  .ref-code-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: rgba(255,255,255,0.65); letter-spacing: 0.04em; }
+  .ref-code-big { font-size: 22px; font-weight: 800; color: var(--kitchen-gold); letter-spacing: 0.05em; }
+  .share-card-link { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 180px; }
+  .share-card-link-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: rgba(255,255,255,0.65); letter-spacing: 0.04em; }
+  .share-card-url { font-size: 12px; color: rgba(255,255,255,0.9); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .share-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .share-btn { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 9px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .share-btn-primary { background: var(--kitchen-gold); color: var(--ink); border-color: var(--kitchen-gold); }
+
   .session-row button { background: var(--court-green); color: white; border: none; padding: 7px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; }
 
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -118,8 +132,6 @@
 
   .console-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
   .console-header h1 { font-size: 22px; margin: 0; }
-  .share-link { background: white; border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card); flex-wrap: wrap; justify-content: flex-end; }
-  .share-link button { background: var(--kitchen-gold); border: none; padding: 5px 10px; border-radius: 4px; font-weight: 700; font-size: 11px; }
 
   .tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 2px solid #e5e0d5; }
   .tab-btn { background: none; border: none; padding: 10px 16px; font-weight: 700; font-size: 13px; color: var(--resting-slate); border-bottom: 3px solid transparent; margin-bottom: -2px; }
@@ -162,14 +174,26 @@
   .court-host-timer { font-family: var(--font-mono); font-weight: 700; color: var(--kitchen-gold); }
   .court-host-timer.idle { color: rgba(255,255,255,0.5); }
 
-  /* Visual court diagram, same geometry/style as index.html's public board */
-  .court-host-diagram { background: var(--court-green); aspect-ratio: 4 / 3; position: relative; display: flex; padding: 10px; }
-  .court-host-diagram::before { content: ''; position: absolute; inset: 10px; border: 2px solid var(--line-paint); opacity: 0.85; }
-  .court-host-net { position: absolute; top: 10px; bottom: 10px; left: 50%; width: 3px; background: var(--line-paint); transform: translateX(-50%); opacity: 0.9; z-index: 1; }
-  .court-host-net::after { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; background: repeating-linear-gradient(180deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
-  .court-host-kitchen-l, .court-host-kitchen-r { position: absolute; top: 10px; bottom: 10px; width: 2px; background: var(--line-paint); opacity: 0.55; }
-  .court-host-kitchen-l { left: 32%; }
-  .court-host-kitchen-r { right: 32%; }
+  /* Visual court diagram — same geometry as index.html's public board.
+     flex-direction: column stacks the two sides top/bottom with a
+     HORIZONTAL net between them (this is the correct orientation — a
+     pickleball court viewed from above has players at each baseline,
+     not side by side). */
+  .court-host-diagram {
+    background: linear-gradient(160deg, var(--court-green) 0%, var(--court-green-dark) 100%);
+    aspect-ratio: 4 / 5; position: relative; display: flex; flex-direction: column; padding: 12px;
+  }
+  .court-host-diagram::before { content: ''; position: absolute; inset: 12px; border: 2px solid var(--line-paint); opacity: 0.85; }
+  .court-host-net { position: absolute; left: 12px; right: 12px; top: 50%; height: 3px; background: var(--line-paint); transform: translateY(-50%); opacity: 0.9; z-index: 1; }
+  .court-host-net::after { content: ''; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
+  .court-host-kitchen-top, .court-host-kitchen-bottom { position: absolute; left: 12px; right: 12px; height: 2px; background: var(--line-paint); opacity: 0.55; z-index: 1; }
+  .court-host-kitchen-top { top: 32%; }
+  .court-host-kitchen-bottom { bottom: 32%; }
+  .court-host-centerline-top, .court-host-centerline-bottom {
+    position: absolute; left: 50%; width: 2px; background: var(--line-paint); opacity: 0.55; transform: translateX(-50%); z-index: 1;
+  }
+  .court-host-centerline-top { top: 12px; height: calc(32% - 12px); }
+  .court-host-centerline-bottom { bottom: 12px; height: calc(32% - 12px); }
   .court-host-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 2; }
   .court-host-empty-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--line-paint); opacity: 0.7; font-size: 13px; font-weight: 700; z-index: 2; }
   .court-host-paddle { display: flex; flex-direction: column; align-items: center; width: 64px; }
@@ -250,8 +274,10 @@
 
     .console-header { flex-direction: column; align-items: stretch; }
     .console-header > div:last-child { align-items: stretch; }
-    .share-link { font-size: 11px; }
-    .share-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+    .share-card { flex-direction: column; align-items: stretch; }
+    .share-card-actions { justify-content: stretch; }
+    .share-card-actions .share-btn { flex: 1; }
+    .share-card-url { white-space: normal; word-break: break-all; }
 
     .courts-host-grid { grid-template-columns: 1fr; }
 
@@ -923,41 +949,38 @@ const SessionAPI = (() => {
   }
 
   /**
-   * WAVE ELIGIBILITY — the core no-double-stacking rule, generalized.
-   * A team is eligible to play THIS wave only if every one of its players
-   * has played no MORE times than the lowest play-count player still
-   * active in the session. This applies uniformly whether matches are
-   * being assigned by the automated engine, by a host in Manual mode, or
-   * by Hybrid — nobody can get a 2nd/3rd/Nth match while anyone else is
-   * still sitting on fewer games played.
-   *
-   * Returns: { eligibleTeamIds: Set<string>, minPlayCount: number }
+   * Player-level version of the same wave rule, for Manual mode's
+   * pick-individuals-then-form-teams flow. A player is eligible if their
+   * play count is no more than the session-wide minimum.
+   * Returns: { eligiblePlayerIds: Set<string>, minPlayCount: number, playCountById: object }
    */
-  async function getWaveEligibility(sessionId) {
-    const [players, activeTeams] = await Promise.all([getPlayers(sessionId), getTeams(sessionId)]);
+  async function getPlayerWaveEligibility(sessionId) {
+    const players = await getPlayers(sessionId);
     const activePlayers = players.filter(p => p.status !== 'left');
-    if (activePlayers.length === 0) return { eligibleTeamIds: new Set(), minPlayCount: 0 };
+    if (activePlayers.length === 0) return { eligiblePlayerIds: new Set(), minPlayCount: 0, playCountById: {} };
 
     const minPlayCount = Math.min(...activePlayers.map(p => p.total_games_played || 0));
     const playCountById = Object.fromEntries(activePlayers.map(p => [p.id, p.total_games_played || 0]));
+    const eligiblePlayerIds = new Set(activePlayers.filter(p => (p.total_games_played || 0) <= minPlayCount).map(p => p.id));
 
-    const eligibleTeamIds = new Set();
-    for (const team of activeTeams) {
-      const teamMaxPlayCount = Math.max(...team.player_ids.map(pid => playCountById[pid] ?? 0));
-      if (teamMaxPlayCount <= minPlayCount) {
-        eligibleTeamIds.add(team.id);
-      }
-    }
-    return { eligibleTeamIds, minPlayCount };
+    return { eligiblePlayerIds, minPlayCount, playCountById };
   }
 
   async function addPlayer(sessionId, name, skillTier = 'open') {
     const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
     if (error) throw error;
 
-    // Auto-pair into the waiting queue immediately so round-1 auto-fill
-    // actually has real team rows to pull from.
     const session = await getSession(sessionId);
+
+    // Manual mode: the host picks individual players and forms teams
+    // themselves via the court picker — no auto-pairing here at all,
+    // since that would lock players into pairs before the host gets a say.
+    if (session.open_play_mode === 'manual') {
+      return data;
+    }
+
+    // Automated / Hybrid: auto-pair into the waiting queue immediately so
+    // round-1 auto-fill actually has real team rows to pull from.
     const teamSize = session.format === 'doubles' ? 2 : 1;
 
     if (teamSize === 1) {
@@ -1092,16 +1115,13 @@ const SessionAPI = (() => {
     await markManualQueueEntryCompleted(courtId);
 
     if (isManualMode) {
-      // Pure Manual: finished players go to the back of the GENERAL waiting
-      // line (queue_lane 'waiting', court_id null in manual_queue terms) —
-      // the host decides their next matchup explicitly, nothing automatic.
-      if (winnersGroup && winnersGroup.length > 0) {
-        await createTeam(sessionId, winnersGroup, pairingMode, 'waiting');
-        await supabaseClient.from('players').update({ status: 'waiting' }).in('id', winnersGroup);
-      }
-      if (losersGroup && losersGroup.length > 0) {
-        await createTeam(sessionId, losersGroup, pairingMode, 'waiting');
-        await supabaseClient.from('players').update({ status: 'waiting' }).in('id', losersGroup);
+      // Pure Manual: finished players go back to being free INDIVIDUALS,
+      // not re-paired into a team — the host explicitly re-forms teams
+      // via the court picker next time, which is the whole point of
+      // Manual mode (no pairing decision should happen without the host).
+      const allFinishedIds = [...(winnersGroup || []), ...(losersGroup || [])];
+      if (allFinishedIds.length > 0) {
+        await supabaseClient.from('players').update({ status: 'waiting' }).in('id', allFinishedIds);
       }
     } else {
       // Automated / Hybrid: normal win/loss lane placement
@@ -1247,7 +1267,7 @@ const SessionAPI = (() => {
   return {
     createSession, getMySessions, getSession, getSessionByReferenceCode, verifySessionPassword, finishSession, carryPlayersToNewSession,
     startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
-    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getWaveEligibility, deactivateTeamsContainingPlayers,
+    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getPlayerWaveEligibility, deactivateTeamsContainingPlayers,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     addManualQueueEntry, getManualQueue, getNextManualQueueEntry, removeManualQueueEntry,
     getPendingRestRequests, getMessages, markMessageStatus,
@@ -1602,19 +1622,24 @@ async function renderConsole() {
         <button class="btn-secondary" style="width:auto; padding:6px 12px; font-size:12px; margin-bottom:8px;" onclick="backToSessionList()">← All Sessions</button>
         <h1>${escapeHtml(activeSession.name)} ${sessionTypeBadge(activeSession)}</h1>
       </div>
-      <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
-        <div class="ref-code-display">
-          <span class="ref-code-label">Session Code</span>
-          <span class="ref-code-big mono">${activeSession.reference_code || '—'}</span>
-        </div>
-        <div class="share-link">
-          <span id="shareUrlText">${shareUrl}</span>
-          <button onclick="copyShareLink('${shareUrl}')">Copy Link</button>
-          <button onclick="copyShareMessage('${shareUrl}', '${activeSession.reference_code || ''}')" style="background:var(--court-green); color:white;">Copy for Chat</button>
-        </div>
-        <button onclick="confirmFinishSession()" style="background:var(--loser-coral); color:white; border:none; padding:7px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:700;">Finish Session</button>
+      <button onclick="confirmFinishSession()" class="finish-session-btn">Finish Session</button>
+    </div>
+
+    <div class="share-card">
+      <div class="share-card-code">
+        <span class="ref-code-label">Session Code</span>
+        <span class="ref-code-big mono">${activeSession.reference_code || '—'}</span>
+      </div>
+      <div class="share-card-link">
+        <span class="share-card-link-label">Player Link</span>
+        <span class="share-card-url mono">${shareUrl}</span>
+      </div>
+      <div class="share-card-actions">
+        <button class="share-btn" onclick="copyShareLink('${shareUrl}')">📋 Copy Link</button>
+        <button class="share-btn share-btn-primary" onclick="copyShareMessage('${shareUrl}', '${activeSession.reference_code || ''}')">💬 Copy for Chat</button>
       </div>
     </div>
+
     <div class="tabs">
       <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
       ${activeSession.session_type === 'tournament' ? `<button class="tab-btn ${activeTab === 'bracket' ? 'active' : ''}" onclick="switchTab('bracket')">Bracket</button>` : ''}
@@ -2093,9 +2118,11 @@ function renderCourtDiagramCard(court, players, queuedNote) {
       </div>
       <div class="court-host-diagram">
         <div class="court-host-side">${sideA}</div>
-        <div class="court-host-kitchen-l"></div>
+        <div class="court-host-kitchen-top"></div>
+        <div class="court-host-centerline-top"></div>
         <div class="court-host-net"></div>
-        <div class="court-host-kitchen-r"></div>
+        <div class="court-host-kitchen-bottom"></div>
+        <div class="court-host-centerline-bottom"></div>
         <div class="court-host-side">${sideB}</div>
         ${!isActive ? '<div class="court-host-empty-msg">OPEN</div>' : ''}
       </div>
@@ -2124,12 +2151,18 @@ async function handleCourtCardClick(courtId) {
 
 let courtPickerCourtId = null;
 let courtPickerIsQueueNext = false;
-let courtPickerSelectedTeamIds = [];
+let courtPickerSelectedPlayerIds = []; // step 1: 4 individuals
+let courtPickerTeamAPlayerIds = [];     // step 2: split assignment
+let courtPickerTeamBPlayerIds = [];
+let courtPickerStep = 1;
 
 async function openCourtPicker(courtId, isQueueNext) {
   courtPickerCourtId = courtId;
   courtPickerIsQueueNext = isQueueNext;
-  courtPickerSelectedTeamIds = [];
+  courtPickerSelectedPlayerIds = [];
+  courtPickerTeamAPlayerIds = [];
+  courtPickerTeamBPlayerIds = [];
+  courtPickerStep = 1;
 
   const courts = await SessionAPI.getCourts(activeSession.id);
   const court = courts.find(c => c.id === courtId);
@@ -2138,44 +2171,51 @@ async function openCourtPicker(courtId, isQueueNext) {
 }
 
 async function renderCourtPickerModal(court) {
-  const [players, waitingTeams, { eligibleTeamIds, minPlayCount }] = await Promise.all([
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const playersNeeded = teamSize * 2;
+
+  const [allPlayers, { eligiblePlayerIds, minPlayCount }] = await Promise.all([
     SessionAPI.getPlayers(activeSession.id),
-    SessionAPI.getQueueLane(activeSession.id, 'waiting'),
-    SessionAPI.getWaveEligibility(activeSession.id),
+    SessionAPI.getPlayerWaveEligibility(activeSession.id),
   ]);
 
-  const sortedWaiting = [...waitingTeams].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
-  // Wave rule applies in EVERY mode — eligible teams are shown clearly,
-  // already-played-this-wave teams are visibly disabled, not just hidden,
-  // so the host understands WHY they can't pick someone.
-  const eligible = sortedWaiting.filter(t => eligibleTeamIds.has(t.id));
-  const ineligible = sortedWaiting.filter(t => !eligibleTeamIds.has(t.id));
+  // Only players who are actually free to play (not mid-match, not resting)
+  // and not already in some other team right now show up here at all.
+  const activeTeams = await SessionAPI.getTeams(activeSession.id);
+  const alreadyOnATeam = new Set(activeTeams.flatMap(t => t.player_ids));
+  const freePlayers = allPlayers.filter(p => p.status === 'waiting' && !alreadyOnATeam.has(p.id));
+
+  const eligible = freePlayers.filter(p => eligiblePlayerIds.has(p.id));
+  const ineligible = freePlayers.filter(p => !eligiblePlayerIds.has(p.id));
+
+  const headerNote = courtPickerIsQueueNext
+    ? `<p class="modal-sub">This court is currently playing. Set up what plays here next, or end the current match now.</p>
+       <button class="assign-btn" style="background:var(--loser-coral); color:white; margin-bottom:14px;" onclick="closeCourtPickerModal(); handleMarkFinished('${court.id}');">Current Match Is Finished Now</button>`
+    : `<p class="modal-sub">Step 1: select ${playersNeeded} players who will play this match.</p>`;
 
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="courtPickerModal">
       <div class="modal-box">
         <h2>Court ${court.court_number}${courtPickerIsQueueNext ? ' — Queue Next Match' : ''}</h2>
-        <p class="modal-sub">${courtPickerIsQueueNext ? 'This court is currently playing. Set up what plays here next, or end the current match now.' : 'Select 2 waiting teams to face off.'}</p>
+        ${headerNote}
 
-        ${courtPickerIsQueueNext ? `
-          <button class="assign-btn" style="background:var(--loser-coral); color:white; margin-bottom:14px;" onclick="closeCourtPickerModal(); handleMarkFinished('${court.id}');">Current Match Is Finished Now</button>
-        ` : ''}
-
-        <p style="font-size:11px; font-weight:700; color:var(--court-green); margin:10px 0 6px;">Eligible this wave (everyone here has played ${minPlayCount}x or fewer)</p>
+        <p style="font-size:11px; font-weight:700; color:var(--court-green); margin:10px 0 6px;">Eligible this wave (played ${minPlayCount}x or fewer)</p>
         <div class="player-checklist" id="courtPickerChecklist">
-          ${eligible.length ? eligible.map((t) => `<div class="player-check" data-id="${t.id}" onclick="toggleCourtPickerTeam('${t.id}')">${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No eligible teams waiting right now.</p>'}
+          ${eligible.length ? eligible.map((p) => `<div class="player-check" data-id="${p.id}" data-name="${escapeHtml(p.name)}" onclick="toggleCourtPickerPlayer('${p.id}')">${escapeHtml(p.name)}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No eligible players free right now.</p>'}
         </div>
 
         ${ineligible.length ? `
           <p style="font-size:11px; font-weight:700; color:var(--resting-slate); margin:14px 0 6px;">Already played this wave — must wait</p>
           <div class="player-checklist">
-            ${ineligible.map(t => `<div class="player-check" style="opacity:0.35; cursor:not-allowed; text-decoration:line-through;" title="Already played this wave">${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('')}
+            ${ineligible.map(p => `<div class="player-check" style="opacity:0.35; cursor:not-allowed; text-decoration:line-through;" title="Already played this wave">${escapeHtml(p.name)}</div>`).join('')}
           </div>
         ` : ''}
 
+        <p style="font-size:12px; font-weight:700; margin:14px 0 0;" id="courtPickerSelectedCount">Selected: ${courtPickerSelectedPlayerIds.length} / ${playersNeeded}</p>
+
         <div class="confirm-actions" style="margin-top:16px;">
           <button class="btn-no" onclick="closeCourtPickerModal()">Cancel</button>
-          <button class="btn-yes" onclick="confirmCourtPickerMatch()">${courtPickerIsQueueNext ? 'Queue This Matchup' : 'Start Match'}</button>
+          <button class="btn-yes" onclick="proceedToTeamSplit()">Next: Form Teams</button>
         </div>
         <div class="auth-error" id="courtPickerError"></div>
       </div>
@@ -2183,31 +2223,123 @@ async function renderCourtPickerModal(court) {
   `);
 }
 
-function toggleCourtPickerTeam(teamId) {
-  const idx = courtPickerSelectedTeamIds.indexOf(teamId);
+function toggleCourtPickerPlayer(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const playersNeeded = teamSize * 2;
+  const idx = courtPickerSelectedPlayerIds.indexOf(playerId);
   if (idx >= 0) {
-    courtPickerSelectedTeamIds.splice(idx, 1);
+    courtPickerSelectedPlayerIds.splice(idx, 1);
   } else {
-    if (courtPickerSelectedTeamIds.length >= 2) return;
-    courtPickerSelectedTeamIds.push(teamId);
+    if (courtPickerSelectedPlayerIds.length >= playersNeeded) return;
+    courtPickerSelectedPlayerIds.push(playerId);
   }
   document.querySelectorAll('#courtPickerChecklist .player-check').forEach(el => {
-    el.classList.toggle('selected', courtPickerSelectedTeamIds.includes(el.dataset.id));
+    el.classList.toggle('selected', courtPickerSelectedPlayerIds.includes(el.dataset.id));
   });
+  document.getElementById('courtPickerSelectedCount').textContent = `Selected: ${courtPickerSelectedPlayerIds.length} / ${playersNeeded}`;
 }
 
-async function confirmCourtPickerMatch() {
+async function proceedToTeamSplit() {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const playersNeeded = teamSize * 2;
   const errorEl = document.getElementById('courtPickerError');
-  if (courtPickerSelectedTeamIds.length !== 2) {
-    errorEl.textContent = 'Select exactly 2 teams.';
+
+  if (courtPickerSelectedPlayerIds.length !== playersNeeded) {
+    errorEl.textContent = `Select exactly ${playersNeeded} players first.`;
     return;
   }
-  const [teamAId, teamBId] = courtPickerSelectedTeamIds;
+
+  if (teamSize === 1) {
+    // Singles: no split step needed, the 2 selected players ARE the 2 teams.
+    courtPickerTeamAPlayerIds = [courtPickerSelectedPlayerIds[0]];
+    courtPickerTeamBPlayerIds = [courtPickerSelectedPlayerIds[1]];
+    await finalizeCourtPickerTeams();
+    return;
+  }
+
+  courtPickerStep = 2;
+  courtPickerTeamAPlayerIds = [];
+  courtPickerTeamBPlayerIds = [];
+  renderTeamSplitModal();
+}
+
+function renderTeamSplitModal() {
+  const checklistEls = [...document.querySelectorAll('#courtPickerChecklist .player-check.selected')];
+  const selectedNames = courtPickerSelectedPlayerIds.map(id => {
+    const el = checklistEls.find(e => e.dataset.id === id);
+    return { id, name: el ? el.dataset.name : '—' };
+  });
+
+  document.getElementById('courtPickerModal').querySelector('.modal-box').innerHTML = `
+    <h2>Form the Teams</h2>
+    <p class="modal-sub">Step 2: tap names to assign each player to Team A or Team B.</p>
+
+    <div class="regroup-lanes">
+      <div class="regroup-lane winners-lane">
+        <h4>Team A</h4>
+        <div id="teamAChips">
+          ${courtPickerTeamAPlayerIds.map(pid => {
+            const p = selectedNames.find(n => n.id === pid);
+            return `<span class="regroup-chip" onclick="moveToUnassigned('${pid}')">${escapeHtml(p.name)}</span>`;
+          }).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— tap a name below —</span>'}
+        </div>
+      </div>
+      <div class="regroup-lane losers-lane">
+        <h4>Team B</h4>
+        <div id="teamBChips">
+          ${courtPickerTeamBPlayerIds.map(pid => {
+            const p = selectedNames.find(n => n.id === pid);
+            return `<span class="regroup-chip" onclick="moveToUnassigned('${pid}')">${escapeHtml(p.name)}</span>`;
+          }).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— tap a name below —</span>'}
+        </div>
+      </div>
+    </div>
+
+    <p style="font-size:11px; font-weight:700; margin:14px 0 6px;">Unassigned — tap to add to a team</p>
+    <div class="player-checklist" id="unassignedChecklist">
+      ${selectedNames.filter(p => !courtPickerTeamAPlayerIds.includes(p.id) && !courtPickerTeamBPlayerIds.includes(p.id))
+        .map(p => `<div class="player-check" onclick="assignToTeam('${p.id}')">${escapeHtml(p.name)}</div>`).join('') || '<p style="font-size:12px;color:var(--resting-slate);">All assigned.</p>'}
+    </div>
+
+    <div class="confirm-actions" style="margin-top:16px;">
+      <button class="btn-no" onclick="closeCourtPickerModal()">Cancel</button>
+      <button class="btn-yes" onclick="finalizeCourtPickerTeams()">${courtPickerIsQueueNext ? 'Queue This Matchup' : 'Start Match'}</button>
+    </div>
+    <div class="auth-error" id="courtPickerError"></div>
+  `;
+}
+
+function assignToTeam(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  if (courtPickerTeamAPlayerIds.length < teamSize) {
+    courtPickerTeamAPlayerIds.push(playerId);
+  } else if (courtPickerTeamBPlayerIds.length < teamSize) {
+    courtPickerTeamBPlayerIds.push(playerId);
+  }
+  renderTeamSplitModal();
+}
+
+function moveToUnassigned(playerId) {
+  courtPickerTeamAPlayerIds = courtPickerTeamAPlayerIds.filter(id => id !== playerId);
+  courtPickerTeamBPlayerIds = courtPickerTeamBPlayerIds.filter(id => id !== playerId);
+  renderTeamSplitModal();
+}
+
+async function finalizeCourtPickerTeams() {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const errorEl = document.getElementById('courtPickerError');
+  if (courtPickerTeamAPlayerIds.length !== teamSize || courtPickerTeamBPlayerIds.length !== teamSize) {
+    if (errorEl) errorEl.textContent = `Each team needs exactly ${teamSize} player${teamSize > 1 ? 's' : ''}.`;
+    return;
+  }
+
+  const teamA = await SessionAPI.createTeam(activeSession.id, courtPickerTeamAPlayerIds, activeSession.pairing_default, 'waiting');
+  const teamB = await SessionAPI.createTeam(activeSession.id, courtPickerTeamBPlayerIds, activeSession.pairing_default, 'waiting');
 
   if (courtPickerIsQueueNext) {
-    await SessionAPI.addManualQueueEntry(activeSession.id, courtPickerCourtId, teamAId, teamBId);
+    await SessionAPI.addManualQueueEntry(activeSession.id, courtPickerCourtId, teamA.id, teamB.id);
   } else {
-    await SessionAPI.assignCourt(courtPickerCourtId, teamAId, teamBId);
+    await SessionAPI.assignCourt(courtPickerCourtId, teamA.id, teamB.id);
   }
 
   closeCourtPickerModal();
@@ -2219,7 +2351,10 @@ function closeCourtPickerModal() {
   if (modal) modal.remove();
   courtPickerCourtId = null;
   courtPickerIsQueueNext = false;
-  courtPickerSelectedTeamIds = [];
+  courtPickerSelectedPlayerIds = [];
+  courtPickerTeamAPlayerIds = [];
+  courtPickerTeamBPlayerIds = [];
+  courtPickerStep = 1;
 }
 
 async function automatedModeCourtsHtml() {
