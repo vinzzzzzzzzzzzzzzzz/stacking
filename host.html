@@ -25,11 +25,11 @@
     --radius-sm: 6px;
     --shadow-card: 0 2px 14px rgba(21, 32, 28, 0.12);
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--line-paint); color: var(--ink); font-family: var(--font-body); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--line-paint); color: var(--ink); font-family: var(--font-body); overflow-x: hidden; }
   h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; }
   a { color: inherit; }
-  button { font-family: var(--font-body); cursor: pointer; }
+  button { font-family: var(--font-body); cursor: pointer; touch-action: manipulation; }
   ::selection { background: var(--kitchen-gold); color: var(--ink); }
   :focus-visible { outline: 3px solid var(--kitchen-gold); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
@@ -37,10 +37,31 @@
   }
   .mono { font-family: var(--font-mono); }
 
+  /* MOBILE-SAFE INPUT DEFAULTS — 16px minimum prevents iOS Safari
+     auto-zoom on focus; 44px minimum height meets Apple/Google touch
+     target guidelines. Every input/select/textarea/button inherits this
+     unless explicitly overridden below. */
+  input, select, textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  button, .player-check, .type-option, .win-select-btn, .assign-btn, .remove-btn {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+  @media (max-width: 600px) {
+    /* on small screens, compact UI chrome (badges, pills) can stay smaller
+       than 44px since they aren't primary tap targets, but anything that
+       triggers an action must not shrink below this */
+    .status-pill, .lane-pos, .round-pill, .format-pill { min-height: 0; }
+  }
+
   /* ============ PAGE STYLES ============ */
   body { padding-bottom: 60px; }
 
   .topbar { background: var(--ink); color: var(--line-paint); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .brand { display: flex; align-items: center; gap: 8px; }
+  .brand-paddle { width: 18px; height: 24px; color: var(--kitchen-gold); flex-shrink: 0; }
   .brand .display { font-size: 20px; }
   .brand .dot { color: var(--kitchen-gold); }
   .topbar-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
@@ -53,7 +74,7 @@
   .auth-box p.sub { color: var(--resting-slate); font-size: 13px; margin: 0 0 20px; }
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .field input, .field select { width: 100%; padding: 10px 12px; border: 1.5px solid #ddd; border-radius: var(--radius-sm); font-size: 14px; }
+  .field input, .field select { width: 100%; padding: 12px; border: 1.5px solid #ddd; border-radius: var(--radius-sm); font-size: 16px; }
   .btn-primary { width: 100%; background: var(--court-green); color: white; border: none; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; margin-top: 6px; }
   .btn-secondary { width: 100%; background: transparent; color: var(--court-green); border: 1.5px solid var(--court-green); padding: 10px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; margin-top: 8px; }
   .auth-error { color: var(--loser-coral); font-size: 12px; margin-top: 8px; }
@@ -157,12 +178,82 @@
   .inbox-actions button { font-size: 11px; font-weight: 700; border: none; padding: 6px 10px; border-radius: 6px; margin-left: 6px; }
   .btn-dismiss { background: #eee; color: var(--ink); }
   .empty-inbox { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 20px; }
+
+  /* ============================================================
+     MOBILE BREAKPOINT — tablet and below
+     ============================================================ */
+  @media (max-width: 768px) {
+    .container { padding: 16px 14px; }
+    .topbar { padding: 12px 16px; }
+    .session-type-toggle { grid-template-columns: 1fr; }
+    .regroup-lanes { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+
+    /* tab bar: horizontal scroll instead of squeeze/wrap, since 3-4 tabs
+       at full tap-target width don't fit 375px without scrolling */
+    .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn { flex-shrink: 0; padding: 10px 14px; }
+
+    .console-header { flex-direction: column; align-items: stretch; }
+    .console-header > div:last-child { align-items: stretch; }
+    .share-link { font-size: 11px; }
+    .share-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+
+    .courts-host-grid { grid-template-columns: 1fr; }
+
+    /* tables: wrap in horizontal scroll rather than crush columns —
+       see .table-scroll wrapper added in markup */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -2px; }
+    .roster-table { min-width: 480px; }
+
+    /* modals: edge-to-edge with safe margin, no awkward floating box */
+    .modal-backdrop { padding: 12px; align-items: flex-end; }
+    .modal-box { max-width: 100%; max-height: 85vh; padding: 18px; border-radius: var(--radius) var(--radius) 0 0; }
+    .confirm-actions { flex-direction: column-reverse; }
+    .confirm-actions button { width: 100%; }
+
+    /* player checklists: bigger tap targets, more breathing room between chips */
+    .player-checklist { gap: 10px; }
+    .player-check { padding: 10px 14px; font-size: 13px; }
+
+    .add-player-row { flex-direction: column; }
+    .add-player-row input, .add-player-row select, .add-player-row button { width: 100%; }
+
+    .matchup-card { flex-direction: column; align-items: stretch; text-align: left; }
+    .matchup-card .win-select-btn { width: 100%; }
+    .matchup-card select { width: 100%; }
+
+    h1 { font-size: 18px; }
+    .card h2 { font-size: 14px; }
+  }
+
+  @media (max-width: 420px) {
+    .auth-box { margin: 40px auto; padding: 24px 20px; }
+    .winner-pick-option { font-size: 12px; padding: 14px 10px; }
+  }
 </style>
 </head>
 <body>
 
 <div class="topbar">
-  <div class="brand"><span class="display">iStackyyy<span class="dot">.</span></span></div>
+  <div class="brand">
+    <svg class="brand-paddle" viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/>
+      <ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/>
+      <circle cx="16" cy="18" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="14" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="32" cy="18" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="14" cy="26" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="22" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="34" cy="26" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="16" cy="34" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="30" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="32" cy="34" r="1.4" fill="white" opacity="0.4"/>
+      <circle cx="24" cy="38" r="1.4" fill="white" opacity="0.4"/>
+    </svg>
+    <span class="display">iStackyyy<span class="dot">.</span></span>
+  </div>
   <div class="topbar-right" id="topbarRight"></div>
 </div>
 
@@ -1055,6 +1146,7 @@ async function rosterTabHtml() {
     <div class="card">
       <h2>Roster (${players.length})</h2>
       ${players.length ? `
+        <div class="table-scroll">
         <table class="roster-table">
           <thead><tr><th>Name</th><th>Tier</th><th>Status</th><th></th></tr></thead>
           <tbody>
@@ -1071,6 +1163,7 @@ async function rosterTabHtml() {
             `).join('')}
           </tbody>
         </table>
+        </div>
       ` : '<p style="color:var(--resting-slate); font-size:13px;">No players yet — add some above.</p>'}
     </div>
   `;
@@ -1226,6 +1319,7 @@ async function bracketLiveHtml(teams) {
 
     <div class="card">
       <h2>Standings</h2>
+      <div class="table-scroll">
       <table class="roster-table">
         <thead><tr><th>#</th><th>Team</th><th>W-L</th><th>Pts For</th><th>Pts Against</th><th>Diff</th></tr></thead>
         <tbody>
@@ -1241,6 +1335,7 @@ async function bracketLiveHtml(teams) {
           `).join('')}
         </tbody>
       </table>
+      </div>
     </div>
   `;
 }
