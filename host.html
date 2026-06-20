@@ -155,9 +155,34 @@
   .planned-matchup { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 6px 0; border-bottom: 1px solid #eee; }
   .planned-matchup:last-child { border-bottom: none; }
   #planCourtSelect { padding: 9px 12px; border-radius: var(--radius-sm); border: 1.5px solid #ddd; font-size: 14px; }
-  .court-host-card { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
-  .court-host-label { background: var(--court-green); color: white; padding: 10px 14px; font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; }
-  .court-host-body { padding: 14px; }
+  .court-host-card { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; cursor: pointer; transition: transform 0.1s; }
+  .court-host-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.15); }
+  .court-host-label { background: var(--court-green-dark); color: white; padding: 10px 14px; font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+  .court-host-label .num { font-family: var(--font-display); font-size: 13px; letter-spacing: 0.04em; }
+  .court-host-timer { font-family: var(--font-mono); font-weight: 700; color: var(--kitchen-gold); }
+  .court-host-timer.idle { color: rgba(255,255,255,0.5); }
+
+  /* Visual court diagram, same geometry/style as index.html's public board */
+  .court-host-diagram { background: var(--court-green); aspect-ratio: 4 / 3; position: relative; display: flex; padding: 10px; }
+  .court-host-diagram::before { content: ''; position: absolute; inset: 10px; border: 2px solid var(--line-paint); opacity: 0.85; }
+  .court-host-net { position: absolute; top: 10px; bottom: 10px; left: 50%; width: 3px; background: var(--line-paint); transform: translateX(-50%); opacity: 0.9; z-index: 1; }
+  .court-host-net::after { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; background: repeating-linear-gradient(180deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
+  .court-host-kitchen-l, .court-host-kitchen-r { position: absolute; top: 10px; bottom: 10px; width: 2px; background: var(--line-paint); opacity: 0.55; }
+  .court-host-kitchen-l { left: 32%; }
+  .court-host-kitchen-r { right: 32%; }
+  .court-host-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 2; }
+  .court-host-empty-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--line-paint); opacity: 0.7; font-size: 13px; font-weight: 700; z-index: 2; }
+  .court-host-paddle { display: flex; flex-direction: column; align-items: center; width: 64px; }
+  .court-host-paddle-shape { width: 100%; aspect-ratio: 48/64; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); position: relative; }
+  .court-host-paddle-shape svg { width: 100%; height: 100%; color: var(--line-paint); }
+  .court-host-paddle-name { position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%); width: 72%; font-size: 11px; font-weight: 800; color: var(--ink); text-align: center; line-height: 1.1; }
+  .court-host-footer { padding: 10px 14px; text-align: center; font-size: 11px; font-weight: 700; color: var(--resting-slate); }
+  .court-host-footer.ongoing { color: var(--kitchen-gold); }
+  .court-host-footer.queued { color: var(--winner-green); }
+
+  .planned-matchup { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 6px 0; border-bottom: 1px solid #eee; }
+  .planned-matchup:last-child { border-bottom: none; }
+  #planCourtSelect { padding: 9px 12px; border-radius: var(--radius-sm); border: 1.5px solid #ddd; font-size: 14px; }
   .matchup-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 600; }
 
   .matchup-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -897,6 +922,35 @@ const SessionAPI = (() => {
       .sort((a, b) => new Date(a.joined_at) - new Date(b.joined_at));
   }
 
+  /**
+   * WAVE ELIGIBILITY — the core no-double-stacking rule, generalized.
+   * A team is eligible to play THIS wave only if every one of its players
+   * has played no MORE times than the lowest play-count player still
+   * active in the session. This applies uniformly whether matches are
+   * being assigned by the automated engine, by a host in Manual mode, or
+   * by Hybrid — nobody can get a 2nd/3rd/Nth match while anyone else is
+   * still sitting on fewer games played.
+   *
+   * Returns: { eligibleTeamIds: Set<string>, minPlayCount: number }
+   */
+  async function getWaveEligibility(sessionId) {
+    const [players, activeTeams] = await Promise.all([getPlayers(sessionId), getTeams(sessionId)]);
+    const activePlayers = players.filter(p => p.status !== 'left');
+    if (activePlayers.length === 0) return { eligibleTeamIds: new Set(), minPlayCount: 0 };
+
+    const minPlayCount = Math.min(...activePlayers.map(p => p.total_games_played || 0));
+    const playCountById = Object.fromEntries(activePlayers.map(p => [p.id, p.total_games_played || 0]));
+
+    const eligibleTeamIds = new Set();
+    for (const team of activeTeams) {
+      const teamMaxPlayCount = Math.max(...team.player_ids.map(pid => playCountById[pid] ?? 0));
+      if (teamMaxPlayCount <= minPlayCount) {
+        eligibleTeamIds.add(team.id);
+      }
+    }
+    return { eligibleTeamIds, minPlayCount };
+  }
+
   async function addPlayer(sessionId, name, skillTier = 'open') {
     const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
     if (error) throw error;
@@ -1020,6 +1074,19 @@ const SessionAPI = (() => {
   async function applyQueuePlacement(courtId, sessionId, pairingMode, winnersGroup, losersGroup) {
     const session = await getSession(sessionId);
     const isManualMode = session.open_play_mode === 'manual';
+
+    // Increment play count for every player who just finished this match —
+    // this is the source of truth for "wave" eligibility (no double-stacking
+    // until everyone's played the same number of times).
+    const allFinishedPlayerIds = [...(winnersGroup || []), ...(losersGroup || [])];
+    if (allFinishedPlayerIds.length > 0) {
+      const { data: finishedPlayers } = await supabaseClient.from('players').select('id, total_games_played').in('id', allFinishedPlayerIds);
+      if (finishedPlayers) {
+        for (const p of finishedPlayers) {
+          await supabaseClient.from('players').update({ total_games_played: (p.total_games_played || 0) + 1 }).eq('id', p.id);
+        }
+      }
+    }
 
     // mark this court's active manual_queue entry (if any) as completed
     await markManualQueueEntryCompleted(courtId);
@@ -1180,7 +1247,7 @@ const SessionAPI = (() => {
   return {
     createSession, getMySessions, getSession, getSessionByReferenceCode, verifySessionPassword, finishSession, carryPlayersToNewSession,
     startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
-    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, deactivateTeamsContainingPlayers,
+    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getWaveEligibility, deactivateTeamsContainingPlayers,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     addManualQueueEntry, getManualQueue, getNextManualQueueEntry, removeManualQueueEntry,
     getPendingRestRequests, getMessages, markMessageStatus,
@@ -1517,10 +1584,12 @@ async function openSession(sessionId) {
   activeTab = 'roster';
   renderConsole();
   subscribeRealtime();
+  startHostTimerLoop();
 }
 
 function backToSessionList() {
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
   activeSession = null;
   renderSessionList();
 }
@@ -1987,6 +2056,172 @@ async function courtsTabHtml() {
   return await automatedModeCourtsHtml();
 }
 
+function paddleSvg() {
+  return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/><ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/></svg>`;
+}
+
+function paddleChipHost(name) {
+  return `<div class="court-host-paddle"><div class="court-host-paddle-shape">${paddleSvg()}<span class="court-host-paddle-name">${escapeHtml(name)}</span></div></div>`;
+}
+
+/**
+ * Shared visual court card — used by both Automated and Manual mode.
+ * Clicking the card opens the matchup picker for that court (works the
+ * same whether the court is open or already playing: if it's playing,
+ * the picker sets up that court's NEXT matchup instead).
+ */
+function renderCourtDiagramCard(court, players, queuedNote) {
+  const isActive = court.status === 'in_progress';
+  const sideA = isActive ? playerNamesForTeam(court.team_a, players).map(paddleChipHost).join('') : '';
+  const sideB = isActive ? playerNamesForTeam(court.team_b, players).map(paddleChipHost).join('') : '';
+
+  let footer = '<span style="color:var(--resting-slate);">Tap to set matchup</span>';
+  let footerClass = '';
+  if (isActive) {
+    footer = 'Tap to mark finished or queue next';
+    footerClass = 'ongoing';
+  } else if (queuedNote) {
+    footer = queuedNote;
+    footerClass = 'queued';
+  }
+
+  return `
+    <div class="court-host-card" onclick="handleCourtCardClick('${court.id}')">
+      <div class="court-host-label">
+        <span class="num">Court ${court.court_number}</span>
+        <span class="court-host-timer ${isActive ? '' : 'idle'}" data-start="${court.game_started_at || ''}" id="hostTimer-${court.id}">${isActive ? '00:00' : 'OPEN'}</span>
+      </div>
+      <div class="court-host-diagram">
+        <div class="court-host-side">${sideA}</div>
+        <div class="court-host-kitchen-l"></div>
+        <div class="court-host-net"></div>
+        <div class="court-host-kitchen-r"></div>
+        <div class="court-host-side">${sideB}</div>
+        ${!isActive ? '<div class="court-host-empty-msg">OPEN</div>' : ''}
+      </div>
+      <div class="court-host-footer ${footerClass}">${footer}</div>
+    </div>
+  `;
+}
+
+/**
+ * Single entry point for clicking ANY court card, in any mode.
+ * - Court is OPEN -> pick a matchup to start immediately
+ * - Court is PLAYING -> pick (or view/edit) the NEXT matchup queued for
+ *   when this court frees up, rather than disturbing the live match
+ */
+async function handleCourtCardClick(courtId) {
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+  if (!court) return;
+
+  if (court.status === 'in_progress') {
+    await openCourtPicker(courtId, true); // true = queuing the NEXT match
+  } else {
+    await openCourtPicker(courtId, false); // false = starting NOW
+  }
+}
+
+let courtPickerCourtId = null;
+let courtPickerIsQueueNext = false;
+let courtPickerSelectedTeamIds = [];
+
+async function openCourtPicker(courtId, isQueueNext) {
+  courtPickerCourtId = courtId;
+  courtPickerIsQueueNext = isQueueNext;
+  courtPickerSelectedTeamIds = [];
+
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+
+  await renderCourtPickerModal(court);
+}
+
+async function renderCourtPickerModal(court) {
+  const [players, waitingTeams, { eligibleTeamIds, minPlayCount }] = await Promise.all([
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getQueueLane(activeSession.id, 'waiting'),
+    SessionAPI.getWaveEligibility(activeSession.id),
+  ]);
+
+  const sortedWaiting = [...waitingTeams].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
+  // Wave rule applies in EVERY mode — eligible teams are shown clearly,
+  // already-played-this-wave teams are visibly disabled, not just hidden,
+  // so the host understands WHY they can't pick someone.
+  const eligible = sortedWaiting.filter(t => eligibleTeamIds.has(t.id));
+  const ineligible = sortedWaiting.filter(t => !eligibleTeamIds.has(t.id));
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="courtPickerModal">
+      <div class="modal-box">
+        <h2>Court ${court.court_number}${courtPickerIsQueueNext ? ' — Queue Next Match' : ''}</h2>
+        <p class="modal-sub">${courtPickerIsQueueNext ? 'This court is currently playing. Set up what plays here next, or end the current match now.' : 'Select 2 waiting teams to face off.'}</p>
+
+        ${courtPickerIsQueueNext ? `
+          <button class="assign-btn" style="background:var(--loser-coral); color:white; margin-bottom:14px;" onclick="closeCourtPickerModal(); handleMarkFinished('${court.id}');">Current Match Is Finished Now</button>
+        ` : ''}
+
+        <p style="font-size:11px; font-weight:700; color:var(--court-green); margin:10px 0 6px;">Eligible this wave (everyone here has played ${minPlayCount}x or fewer)</p>
+        <div class="player-checklist" id="courtPickerChecklist">
+          ${eligible.length ? eligible.map((t) => `<div class="player-check" data-id="${t.id}" onclick="toggleCourtPickerTeam('${t.id}')">${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No eligible teams waiting right now.</p>'}
+        </div>
+
+        ${ineligible.length ? `
+          <p style="font-size:11px; font-weight:700; color:var(--resting-slate); margin:14px 0 6px;">Already played this wave — must wait</p>
+          <div class="player-checklist">
+            ${ineligible.map(t => `<div class="player-check" style="opacity:0.35; cursor:not-allowed; text-decoration:line-through;" title="Already played this wave">${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('')}
+          </div>
+        ` : ''}
+
+        <div class="confirm-actions" style="margin-top:16px;">
+          <button class="btn-no" onclick="closeCourtPickerModal()">Cancel</button>
+          <button class="btn-yes" onclick="confirmCourtPickerMatch()">${courtPickerIsQueueNext ? 'Queue This Matchup' : 'Start Match'}</button>
+        </div>
+        <div class="auth-error" id="courtPickerError"></div>
+      </div>
+    </div>
+  `);
+}
+
+function toggleCourtPickerTeam(teamId) {
+  const idx = courtPickerSelectedTeamIds.indexOf(teamId);
+  if (idx >= 0) {
+    courtPickerSelectedTeamIds.splice(idx, 1);
+  } else {
+    if (courtPickerSelectedTeamIds.length >= 2) return;
+    courtPickerSelectedTeamIds.push(teamId);
+  }
+  document.querySelectorAll('#courtPickerChecklist .player-check').forEach(el => {
+    el.classList.toggle('selected', courtPickerSelectedTeamIds.includes(el.dataset.id));
+  });
+}
+
+async function confirmCourtPickerMatch() {
+  const errorEl = document.getElementById('courtPickerError');
+  if (courtPickerSelectedTeamIds.length !== 2) {
+    errorEl.textContent = 'Select exactly 2 teams.';
+    return;
+  }
+  const [teamAId, teamBId] = courtPickerSelectedTeamIds;
+
+  if (courtPickerIsQueueNext) {
+    await SessionAPI.addManualQueueEntry(activeSession.id, courtPickerCourtId, teamAId, teamBId);
+  } else {
+    await SessionAPI.assignCourt(courtPickerCourtId, teamAId, teamBId);
+  }
+
+  closeCourtPickerModal();
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
+
+function closeCourtPickerModal() {
+  const modal = document.getElementById('courtPickerModal');
+  if (modal) modal.remove();
+  courtPickerCourtId = null;
+  courtPickerIsQueueNext = false;
+  courtPickerSelectedTeamIds = [];
+}
+
 async function automatedModeCourtsHtml() {
   const [courts, players, unpaired] = await Promise.all([
     SessionAPI.getCourts(activeSession.id),
@@ -2003,44 +2238,22 @@ async function automatedModeCourtsHtml() {
     }
   }
   const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
+  const manualQueue = activeSession.open_play_mode === 'hybrid' ? await SessionAPI.getManualQueue(activeSession.id) : [];
 
   const courtCards = freshCourts.map(court => {
-    if (court.status === 'in_progress') {
-      const namesA = playerNamesForTeam(court.team_a, players).join(' & ');
-      const namesB = playerNamesForTeam(court.team_b, players).join(' & ');
-      return `
-        <div class="court-host-card">
-          <div class="court-host-label"><span>Court ${court.court_number}</span><span class="mono" id="hostTimer-${court.id}">00:00</span></div>
-          <div class="court-host-body">
-            <div class="matchup-row"><span>${escapeHtml(namesA)}</span></div>
-            <div class="matchup-vs">vs</div>
-            <div class="matchup-row"><span>${escapeHtml(namesB)}</span></div>
-            <div class="ongoing-pill">● Ongoing</div>
-            <button class="assign-btn" style="margin-top:10px;" onclick="handleMarkFinished('${court.id}')">Mark Match Finished</button>
-          </div>
-        </div>
-      `;
-    } else {
-      return `
-        <div class="court-host-card">
-          <div class="court-host-label"><span>Court ${court.court_number}</span><span>OPEN</span></div>
-          <div class="court-host-body">
-            <div class="court-empty-msg">Waiting for enough players in queue</div>
-          </div>
-        </div>
-      `;
-    }
+    const queuedCount = manualQueue.filter(m => m.court_id === court.id && m.status === 'planned').length;
+    const queuedNote = queuedCount > 0 ? `${queuedCount} match${queuedCount > 1 ? 'es' : ''} queued next` : null;
+    return renderCourtDiagramCard(court, players, queuedNote);
   }).join('');
 
-  const hybridNotice = activeSession.open_play_mode === 'hybrid'
-    ? `<div class="card" style="background:#f0f6fb;"><p style="font-size:12px;margin:0;">💡 Hybrid mode — matches are auto-paired, but you can plan ahead in the <strong>Plan Queue</strong> section below to override any upcoming matchup.</p></div>
-       <div class="card" id="hybridPlanCard">${await renderManualPlanningPanel()}</div>`
+  const hybridHint = activeSession.open_play_mode === 'hybrid'
+    ? `<div class="card" style="background:#f0f6fb;"><p style="font-size:12px;margin:0;">💡 Hybrid mode — matches auto-pair by default. Tap any court (playing or open) to set or override its matchup.</p></div>`
     : '';
 
   return `
+    ${hybridHint}
     ${unpaired.length > 0 ? `<div class="card" style="background:#fff8e8;"><p style="font-size:12px;margin:0;">⏳ <strong>${unpaired.map(p => escapeHtml(p.name)).join(', ')}</strong> still waiting for a partner to be added.</p></div>` : ''}
     <div class="courts-host-grid">${courtCards}</div>
-    ${hybridNotice}
   `;
 }
 
@@ -2052,128 +2265,27 @@ async function manualModeCourtsHtml() {
   ]);
 
   // Manual mode still auto-PULLS from the host's pre-built schedule the
-  // instant a court frees up (no extra click needed for that part) — what's
-  // manual is the SCHEDULE ITSELF, which the host builds in advance below.
+  // instant a court frees up — what's manual is deciding the schedule
+  // itself, via tapping each court card.
   for (const court of courts) {
     if (court.status === 'open') {
       await SessionAPI.tryRefillCourt(court.id);
     }
   }
   const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
+  const manualQueue = await SessionAPI.getManualQueue(activeSession.id);
 
   const courtCards = freshCourts.map(court => {
-    if (court.status === 'in_progress') {
-      const namesA = playerNamesForTeam(court.team_a, players).join(' & ');
-      const namesB = playerNamesForTeam(court.team_b, players).join(' & ');
-      return `
-        <div class="court-host-card">
-          <div class="court-host-label"><span>Court ${court.court_number}</span><span class="mono" id="hostTimer-${court.id}">00:00</span></div>
-          <div class="court-host-body">
-            <div class="matchup-row"><span>${escapeHtml(namesA)}</span></div>
-            <div class="matchup-vs">vs</div>
-            <div class="matchup-row"><span>${escapeHtml(namesB)}</span></div>
-            <div class="ongoing-pill">● Ongoing</div>
-            <button class="assign-btn" style="margin-top:10px;" onclick="handleMarkFinished('${court.id}')">Mark Match Finished</button>
-          </div>
-        </div>
-      `;
-    } else {
-      return `
-        <div class="court-host-card">
-          <div class="court-host-label"><span>Court ${court.court_number}</span><span>OPEN — nothing planned yet</span></div>
-          <div class="court-host-body">
-            <div class="court-empty-msg">Plan a matchup for this court below</div>
-          </div>
-        </div>
-      `;
-    }
+    const queuedCount = manualQueue.filter(m => m.court_id === court.id && m.status === 'planned').length;
+    const queuedNote = queuedCount > 0 ? `${queuedCount} match${queuedCount > 1 ? 'es' : ''} queued next` : null;
+    return renderCourtDiagramCard(court, players, queuedNote);
   }).join('');
 
   return `
     ${unpaired.length > 0 ? `<div class="card" style="background:#fff8e8;"><p style="font-size:12px;margin:0;">⏳ <strong>${unpaired.map(p => escapeHtml(p.name)).join(', ')}</strong> still waiting for a partner to be added.</p></div>` : ''}
+    <p style="font-size:12px;color:var(--resting-slate);margin:0 0 10px;">Tap an open court to start a match, or tap a playing court to queue what plays there next.</p>
     <div class="courts-host-grid">${courtCards}</div>
-    <div class="card" id="manualPlanCard">${await renderManualPlanningPanel()}</div>
   `;
-}
-
-/**
- * The planning panel — lets the host build the queue in advance: pick
- * which court, pick 2 waiting teams, add to that court's plan. Shows the
- * already-planned queue per court so the host can see/reorder/cancel.
- */
-async function renderManualPlanningPanel() {
-  const [courts, waitingTeams, players, manualQueue] = await Promise.all([
-    SessionAPI.getCourts(activeSession.id),
-    SessionAPI.getQueueLane(activeSession.id, 'waiting'),
-    SessionAPI.getPlayers(activeSession.id),
-    SessionAPI.getManualQueue(activeSession.id),
-  ]);
-
-  const sortedWaiting = [...waitingTeams].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
-
-  const plannedByCourtRows = courts.map(court => {
-    const planned = manualQueue.filter(m => m.court_id === court.id && m.status === 'planned');
-    return `
-      <div class="planned-court-row">
-        <h4>Court ${court.court_number} Queue</h4>
-        ${planned.length ? planned.map((m, i) => `
-          <div class="planned-matchup">
-            <span>#${i + 1}: ${escapeHtml(playerNamesForTeam(m.team_a, players).join(' & '))} vs ${escapeHtml(playerNamesForTeam(m.team_b, players).join(' & '))}</span>
-            <button class="remove-btn" onclick="handleRemovePlannedMatch('${m.id}')">Remove</button>
-          </div>
-        `).join('') : '<p style="font-size:11px;color:var(--resting-slate);margin:4px 0;">Nothing planned yet.</p>'}
-      </div>
-    `;
-  }).join('');
-
-  return `
-    <h2>Plan Queue</h2>
-    <p style="font-size:12px;color:var(--resting-slate);">Pick 2 waiting teams, choose which court they'll play on, and add to that court's planned queue. Teams play in the order you add them.</p>
-
-    <div class="player-checklist" id="manualPlanChecklist">
-      ${sortedWaiting.length ? sortedWaiting.map((t, i) => `<div class="player-check" data-id="${t.id}" onclick="togglePlanTeamSelect('${t.id}')">#${i + 1} · ${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No waiting teams yet.</p>'}
-    </div>
-    <div style="display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap:wrap;">
-      <select id="planCourtSelect">${courts.map(c => `<option value="${c.id}">Court ${c.court_number}</option>`).join('')}</select>
-      <button class="btn-primary" style="width:auto;padding:9px 18px;" onclick="confirmAddToManualQueue()">Add to Court's Queue</button>
-    </div>
-    <div class="auth-error" id="manualPlanError"></div>
-
-    <div class="planned-courts-list">${plannedByCourtRows}</div>
-  `;
-}
-
-let planSelectedTeamIds = [];
-
-function togglePlanTeamSelect(teamId) {
-  const idx = planSelectedTeamIds.indexOf(teamId);
-  if (idx >= 0) {
-    planSelectedTeamIds.splice(idx, 1);
-  } else {
-    if (planSelectedTeamIds.length >= 2) return;
-    planSelectedTeamIds.push(teamId);
-  }
-  document.querySelectorAll('#manualPlanChecklist .player-check').forEach(el => {
-    el.classList.toggle('selected', planSelectedTeamIds.includes(el.dataset.id));
-  });
-}
-
-async function confirmAddToManualQueue() {
-  const errorEl = document.getElementById('manualPlanError');
-  if (planSelectedTeamIds.length !== 2) {
-    errorEl.textContent = 'Select exactly 2 teams.';
-    return;
-  }
-  const courtId = document.getElementById('planCourtSelect').value;
-  const [teamAId, teamBId] = planSelectedTeamIds;
-  await SessionAPI.addManualQueueEntry(activeSession.id, courtId, teamAId, teamBId);
-  planSelectedTeamIds = [];
-  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
-}
-
-async function handleRemovePlannedMatch(entryId) {
-  await SessionAPI.removeManualQueueEntry(entryId);
-  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
 
 // ============================================================
@@ -2351,6 +2463,21 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matchups', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'bracket') renderActiveTab(); })
     .subscribe();
+}
+
+let hostTimerInterval = null;
+function startHostTimerLoop() {
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
+  hostTimerInterval = setInterval(() => {
+    document.querySelectorAll('.court-host-timer[data-start]').forEach(el => {
+      const start = el.getAttribute('data-start');
+      if (!start) return;
+      const elapsed = Math.max(0, Math.floor((Date.now() - new Date(start).getTime()) / 1000));
+      const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+      const secs = String(elapsed % 60).padStart(2, '0');
+      el.textContent = `${mins}:${secs}`;
+    });
+  }, 1000);
 }
 
 function escapeHtml(str) {
