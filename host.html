@@ -106,6 +106,33 @@
   .matchup-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 600; }
   .matchup-vs { color: var(--resting-slate); font-size: 11px; }
   .win-select-btn { background: var(--winner-green); color: white; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+  .ongoing-pill { display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 700; color: var(--kitchen-gold); background: rgba(232,184,75,0.15); padding: 3px 10px; border-radius: 999px; }
+
+  /* result confirm + review modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(21,32,28,0.55); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+  .modal-box { background: white; border-radius: var(--radius); max-width: 480px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
+  .modal-box h2 { font-size: 16px; margin: 0 0 6px; }
+  .modal-sub { font-size: 13px; color: var(--resting-slate); margin: 0 0 18px; }
+  .confirm-actions { display: flex; gap: 10px; margin-top: 18px; }
+  .confirm-actions button { flex: 1; padding: 11px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; border: none; }
+  .btn-yes { background: var(--winner-green); color: white; }
+  .btn-no { background: #eee; color: var(--ink); }
+  .winner-pick-row { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+  .winner-pick-option { border: 2px solid #ddd; border-radius: var(--radius-sm); padding: 12px; font-weight: 700; font-size: 13px; cursor: pointer; text-align: center; }
+  .winner-pick-option:hover { border-color: var(--court-green); }
+
+  .regroup-lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .regroup-lane { border-radius: var(--radius-sm); padding: 12px; min-height: 100px; }
+  .regroup-lane.winners-lane { background: rgba(63,166,107,0.1); border: 2px solid var(--winner-green); }
+  .regroup-lane.losers-lane { background: rgba(224,101,79,0.1); border: 2px solid var(--loser-coral); }
+  .regroup-lane h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .regroup-lane.winners-lane h4 { color: var(--winner-green); }
+  .regroup-lane.losers-lane h4 { color: var(--loser-coral); }
+  .regroup-chip {
+    background: white; border: 1px solid #ddd; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 600;
+    margin: 0 4px 6px 0; display: inline-block; cursor: pointer;
+  }
+  .regroup-hint { font-size: 11px; color: var(--resting-slate); margin: -8px 0 14px; }
   .court-empty-msg { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 12px 0; }
   .assign-btn { width: 100%; background: var(--kitchen-gold); color: var(--ink); border: none; padding: 9px; border-radius: var(--radius-sm); font-weight: 700; font-size: 12px; margin-top: 8px; }
 
@@ -293,15 +320,53 @@ const SessionAPI = (() => {
     if (error) throw error;
     await supabaseClient.from('teams').update({ queue_lane: 'playing', queue_position: null }).in('id', [teamAId, teamBId]);
   }
-  async function recordResult(courtId, winnerTeamId) {
+  async function logMatchResult(courtId, winnerTeamId) {
     const { data: court, error: courtErr } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (courtErr) throw courtErr;
-    const loserTeamId = court.team_a_id === winnerTeamId ? court.team_b_id : court.team_a_id;
     await supabaseClient.from('matches').insert({
       session_id: court.session_id, court_id: courtId, team_a_id: court.team_a_id, team_b_id: court.team_b_id,
       winner_team_id: winnerTeamId, started_at: court.game_started_at, ended_at: new Date().toISOString(),
       duration_seconds: court.game_started_at ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
     });
+    return court;
+  }
+
+  /**
+   * Apply the host's final decision on how the 4 players from a finished
+   * match regroup into the winners/losers queues. Unlike a rigid "winning
+   * pair stays together" rule, this lets the host freely re-pair players
+   * across the original teams (e.g. one winner + one loser can team up
+   * in the winners queue together) before they're queued.
+   *
+   * winnersGroup / losersGroup: arrays of player_id, each either length 0
+   * (skip that lane) or length matching the session's team size.
+   */
+  async function applyQueuePlacement(courtId, sessionId, pairingMode, winnersGroup, losersGroup) {
+    const [winnersQ, losersQ] = await Promise.all([getQueueLane(sessionId, 'winners_queue'), getQueueLane(sessionId, 'losers_queue')]);
+
+    if (winnersGroup && winnersGroup.length > 0) {
+      await createTeam(sessionId, winnersGroup, pairingMode, 'winners_queue');
+    }
+    if (losersGroup && losersGroup.length > 0) {
+      await createTeam(sessionId, losersGroup, pairingMode, 'losers_queue');
+    }
+
+    // deactivate the two original teams that just finished playing — they've
+    // been replaced by the freshly-arranged groups above
+    const { data: court } = await supabaseClient.from('courts').select('team_a_id, team_b_id').eq('id', courtId).single();
+    if (court) {
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', [court.team_a_id, court.team_b_id]);
+    }
+
+    await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
+    await tryRefillCourt(courtId);
+  }
+
+  async function recordResult(courtId, winnerTeamId) {
+    // Legacy simple path (default split, no manual reassignment) — kept for
+    // the "Auto-Fill" quick path elsewhere if ever needed.
+    const court = await logMatchResult(courtId, winnerTeamId);
+    const loserTeamId = court.team_a_id === winnerTeamId ? court.team_b_id : court.team_a_id;
     const [winnersQ, losersQ] = await Promise.all([getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue')]);
     await supabaseClient.from('teams').update({ queue_lane: 'winners_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(winnersQ) }).eq('id', winnerTeamId);
     await supabaseClient.from('teams').update({ queue_lane: 'losers_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(losersQ) }).eq('id', loserTeamId);
@@ -341,7 +406,7 @@ const SessionAPI = (() => {
   return {
     createSession, getMySessions, getSession,
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane,
-    getCourts, assignCourt, recordResult, tryRefillCourt,
+    getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     getPendingRestRequests, getMessages, markMessageStatus,
   };
 })();
@@ -527,9 +592,11 @@ async function courtsTabHtml() {
         <div class="court-host-card">
           <div class="court-host-label"><span>Court ${court.court_number}</span><span class="mono" id="hostTimer-${court.id}">00:00</span></div>
           <div class="court-host-body">
-            <div class="matchup-row"><span>${escapeHtml(namesA)}</span><button class="win-select-btn" onclick="handleRecordWin('${court.id}', '${court.team_a_id}')">Won</button></div>
+            <div class="matchup-row"><span>${escapeHtml(namesA)}</span></div>
             <div class="matchup-vs">vs</div>
-            <div class="matchup-row"><span>${escapeHtml(namesB)}</span><button class="win-select-btn" onclick="handleRecordWin('${court.id}', '${court.team_b_id}')">Won</button></div>
+            <div class="matchup-row"><span>${escapeHtml(namesB)}</span></div>
+            <div class="ongoing-pill">● Ongoing</div>
+            <button class="assign-btn" style="margin-top:10px;" onclick="handleMarkFinished('${court.id}')">Mark Match Finished</button>
           </div>
         </div>
       `;
@@ -608,14 +675,145 @@ async function confirmManualAssign() {
   document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
 
-async function handleAutoRefill(courtId) {
-  const result = await SessionAPI.tryRefillCourt(courtId);
-  if (!result) alert('Not enough eligible players in queue yet to fill this court.');
+// ============================================================
+// MATCH RESULT FLOW: Mark Finished -> Confirm -> Pick Winner -> Regroup
+// ============================================================
+let resultFlowCourt = null; // holds court object mid-flow
+let resultFlowWinnerTeamId = null;
+let regroupAssignment = {}; // playerId -> 'winners' | 'losers'
+
+async function handleMarkFinished(courtId) {
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+  if (!court) return;
+  resultFlowCourt = court;
+  showConfirmFinishedModal();
+}
+
+function showConfirmFinishedModal() {
+  const modal = document.createElement('div');
+  modal.className = 'modal-backdrop';
+  modal.id = 'resultModal';
+  modal.innerHTML = `
+    <div class="modal-box">
+      <h2>Match Finished?</h2>
+      <p class="modal-sub">Confirm Court ${resultFlowCourt.court_number}'s match has ended.</p>
+      <div class="confirm-actions">
+        <button class="btn-no" onclick="closeResultModal()">No, still playing</button>
+        <button class="btn-yes" onclick="showPickWinnerModal()">Yes, finished</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function showPickWinnerModal() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const namesA = playerNamesForTeam(resultFlowCourt.team_a, players).join(' & ');
+  const namesB = playerNamesForTeam(resultFlowCourt.team_b, players).join(' & ');
+
+  document.getElementById('resultModal').innerHTML = `
+    <div class="modal-box">
+      <h2>Who Won?</h2>
+      <p class="modal-sub">Court ${resultFlowCourt.court_number} — select the winning side.</p>
+      <div class="winner-pick-row">
+        <div class="winner-pick-option" onclick="selectWinner('${resultFlowCourt.team_a_id}')">${escapeHtml(namesA)}</div>
+        <div class="winner-pick-option" onclick="selectWinner('${resultFlowCourt.team_b_id}')">${escapeHtml(namesB)}</div>
+      </div>
+      <button class="btn-secondary" style="width:auto;padding:8px 16px;" onclick="closeResultModal()">Cancel</button>
+    </div>
+  `;
+}
+
+async function selectWinner(winnerTeamId) {
+  resultFlowWinnerTeamId = winnerTeamId;
+  await SessionAPI.logMatchResult(resultFlowCourt.id, winnerTeamId);
+  await showRegroupModal();
+}
+
+async function showRegroupModal() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const teamA = resultFlowCourt.team_a;
+  const teamB = resultFlowCourt.team_b;
+  const winningTeam = teamA.id === resultFlowWinnerTeamId ? teamA : teamB;
+  const losingTeam = teamA.id === resultFlowWinnerTeamId ? teamB : teamA;
+
+  // default: winning pair -> winners lane, losing pair -> losers lane
+  regroupAssignment = {};
+  winningTeam.player_ids.forEach(pid => { regroupAssignment[pid] = 'winners'; });
+  losingTeam.player_ids.forEach(pid => { regroupAssignment[pid] = 'losers'; });
+
+  renderRegroupModal(players);
+}
+
+function renderRegroupModal(players) {
+  const allPlayerIds = Object.keys(regroupAssignment);
+  const playerName = (pid) => players.find(p => p.id === pid)?.name || '—';
+
+  const winnersIds = allPlayerIds.filter(pid => regroupAssignment[pid] === 'winners');
+  const losersIds = allPlayerIds.filter(pid => regroupAssignment[pid] === 'losers');
+
+  document.getElementById('resultModal').innerHTML = `
+    <div class="modal-box">
+      <h2>Arrange Next Queues</h2>
+      <p class="modal-sub">Default: winning pair → Winners Queue, losing pair → Losers Queue. Tap any name to move it.</p>
+
+      <div class="regroup-lanes">
+        <div class="regroup-lane winners-lane">
+          <h4>Winners Queue</h4>
+          <div id="winnersLaneChips">
+            ${winnersIds.map(pid => `<span class="regroup-chip" onclick="toggleRegroup('${pid}')">${escapeHtml(playerName(pid))}</span>`).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— none —</span>'}
+          </div>
+        </div>
+        <div class="regroup-lane losers-lane">
+          <h4>Losers Queue</h4>
+          <div id="losersLaneChips">
+            ${losersIds.map(pid => `<span class="regroup-chip" onclick="toggleRegroup('${pid}')">${escapeHtml(playerName(pid))}</span>`).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— none —</span>'}
+          </div>
+        </div>
+      </div>
+      <p class="regroup-hint">Tip: tap a name to move it between lanes — you can mix players from either original pair, e.g. keep two friends together even if one lost.</p>
+
+      <div class="confirm-actions">
+        <button class="btn-no" onclick="closeResultModal()">Cancel</button>
+        <button class="btn-yes" onclick="confirmRegroup()">Confirm & Send to Queues</button>
+      </div>
+    </div>
+  `;
+}
+
+async function toggleRegroup(playerId) {
+  regroupAssignment[playerId] = regroupAssignment[playerId] === 'winners' ? 'losers' : 'winners';
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  renderRegroupModal(players);
+}
+
+async function confirmRegroup() {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const winnersGroup = Object.keys(regroupAssignment).filter(pid => regroupAssignment[pid] === 'winners');
+  const losersGroup = Object.keys(regroupAssignment).filter(pid => regroupAssignment[pid] === 'losers');
+
+  if (winnersGroup.length !== teamSize || losersGroup.length !== teamSize) {
+    alert(`Each lane needs exactly ${teamSize} player${teamSize > 1 ? 's' : ''} to form a team. Adjust before confirming.`);
+    return;
+  }
+
+  await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, activeSession.pairing_default, winnersGroup, losersGroup);
+  closeResultModal();
   document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
 
-async function handleRecordWin(courtId, winnerTeamId) {
-  await SessionAPI.recordResult(courtId, winnerTeamId);
+function closeResultModal() {
+  const modal = document.getElementById('resultModal');
+  if (modal) modal.remove();
+  resultFlowCourt = null;
+  resultFlowWinnerTeamId = null;
+  regroupAssignment = {};
+}
+
+async function handleAutoRefill(courtId) {
+  const result = await SessionAPI.tryRefillCourt(courtId);
+  if (!result) alert('Not enough eligible players in queue yet to fill this court.');
   document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
 }
 
