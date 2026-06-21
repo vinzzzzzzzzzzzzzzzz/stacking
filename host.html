@@ -253,6 +253,7 @@
   .inbox-item .when { font-size: 11px; color: var(--resting-slate); }
   .inbox-actions button { font-size: 11px; font-weight: 700; border: none; padding: 6px 10px; border-radius: 6px; margin-left: 6px; }
   .btn-dismiss { background: #eee; color: var(--ink); }
+  .btn-confirm-rest { background: var(--winner-green); color: white; }
   .empty-inbox { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 20px; }
 
   /* ============================================================
@@ -848,6 +849,12 @@ const SessionAPI = (() => {
    * and opponent history (for swiss rematch avoidance), then frees the court.
    */
   async function recordTournamentResult(matchupId, courtId, teamAScore, teamBScore) {
+    if (teamAScore === teamBScore) {
+      // Defense-in-depth: the UI already blocks ties before calling this,
+      // but this function shouldn't silently default to "Team B wins" if
+      // it's ever called from somewhere else without that check.
+      throw new Error('Scores cannot be tied — a winner must be determined.');
+    }
     const { data: matchup, error: mErr } = await supabaseClient.from('tournament_matchups').select('*').eq('id', matchupId).single();
     if (mErr) throw mErr;
     const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
@@ -865,8 +872,11 @@ const SessionAPI = (() => {
     await supabaseClient.from('tournament_matchups').update({ status: 'completed', match_id: matchRow.id }).eq('id', matchupId);
 
     // update team stats
-    const { data: teamA } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_a_id).single();
-    const { data: teamB } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_b_id).single();
+    const { data: teamA, error: teamAErr } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_a_id).single();
+    const { data: teamB, error: teamBErr } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_b_id).single();
+    if (teamAErr || teamBErr || !teamA || !teamB) {
+      throw new Error('Could not load team data to update standings — the match was recorded, but standings may be out of date. Please refresh.');
+    }
 
     await supabaseClient.from('teams').update({
       wins: teamA.wins + (winnerTeamId === teamA.id ? 1 : 0),
@@ -1011,9 +1021,9 @@ const SessionAPI = (() => {
     // no longer valid — deactivate it so the auto-fill engine doesn't try
     // to send a now-departed player onto a court. Their now-unpaired
     // partner (if any) goes back to waiting for a new partner.
-    const { data: sessionId } = await supabaseClient.from('players').select('session_id').eq('id', playerId).single();
-    if (sessionId) {
-      const activeTeams = await getTeams(sessionId.session_id);
+    const { data: playerRow } = await supabaseClient.from('players').select('session_id').eq('id', playerId).single();
+    if (playerRow) {
+      const activeTeams = await getTeams(playerRow.session_id);
       const affectedTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane === 'waiting');
       if (affectedTeam) {
         await supabaseClient.from('teams').update({ is_active: false }).eq('id', affectedTeam.id);
@@ -1048,7 +1058,12 @@ const SessionAPI = (() => {
     }
   }
   async function getQueueLane(sessionId, lane) {
-    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('queue_lane', lane).eq('is_active', true).order('queue_position', { ascending: true });
+    // Secondary sort by created_at breaks any queue_position ties caused
+    // by the read-then-write race in createTeam() (two teams created in
+    // quick succession can compute the same "next position" before either
+    // writes) — created_at is set by the database at insert time, so it
+    // reflects true creation order even when queue_position collides.
+    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('queue_lane', lane).eq('is_active', true).order('queue_position', { ascending: true }).order('created_at', { ascending: true });
     if (error) throw error;
     return data;
   }
@@ -1058,8 +1073,26 @@ const SessionAPI = (() => {
     return data;
   }
   async function assignCourt(courtId, teamAId, teamBId) {
-    const { error } = await supabaseClient.from('courts').update({ status: 'in_progress', team_a_id: teamAId, team_b_id: teamBId, game_started_at: new Date().toISOString() }).eq('id', courtId);
+    // Conditional update: only succeeds if the court is NOT already
+    // in_progress at the moment of the write. This closes the race window
+    // where two near-simultaneous calls (e.g. a host double-tapping a
+    // court, or two staff devices acting within the same instant) could
+    // otherwise both pass an earlier status check and the second write
+    // would silently overwrite an already-started match.
+    const { data: updated, error } = await supabaseClient
+      .from('courts')
+      .update({ status: 'in_progress', team_a_id: teamAId, team_b_id: teamBId, game_started_at: new Date().toISOString() })
+      .eq('id', courtId)
+      .neq('status', 'in_progress')
+      .select();
     if (error) throw error;
+    if (!updated || updated.length === 0) {
+      // Court was already in_progress by the time this write landed —
+      // someone else got there first. Surface this clearly rather than
+      // silently no-op, so the caller (and ultimately the host) knows
+      // their tap didn't actually do anything.
+      throw new Error('This court was just assigned by someone else. Refresh and try again.');
+    }
     const { data: teamRows } = await supabaseClient.from('teams').select('player_ids').in('id', [teamAId, teamBId]);
     await supabaseClient.from('teams').update({ queue_lane: 'playing', queue_position: null }).in('id', [teamAId, teamBId]);
     if (teamRows && teamRows.length > 0) {
@@ -1222,7 +1255,8 @@ const SessionAPI = (() => {
       .select('*, team_a:team_a_id(*), team_b:team_b_id(*), court:court_id(*)')
       .eq('session_id', sessionId)
       .in('status', ['planned', 'active'])
-      .order('queue_position', { ascending: true });
+      .order('queue_position', { ascending: true })
+      .order('created_at', { ascending: true });
     if (error) throw error;
     return data;
   }
@@ -1235,6 +1269,7 @@ const SessionAPI = (() => {
       .eq('court_id', courtId)
       .eq('status', 'planned')
       .order('queue_position', { ascending: true })
+      .order('created_at', { ascending: true })
       .limit(1);
     if (error) throw error;
     return data && data.length > 0 ? data[0] : null;
@@ -1253,6 +1288,41 @@ const SessionAPI = (() => {
     if (error) throw error;
     return data;
   }
+  /**
+   * Confirm a rest request. If the player is currently mid-match, we
+   * don't pull them off court — we just mark the request confirmed and
+   * flag intent; the host should mark them resting via the Roster tab
+   * once their current match actually ends. If they're NOT mid-match
+   * (waiting/queued), we can safely rest them immediately: deactivate
+   * any waiting team they're part of so they don't get matched while
+   * resting, and set their status to 'resting' right away.
+   */
+  async function confirmRestRequest(requestId, playerId) {
+    const { data: player, error: playerErr } = await supabaseClient.from('players').select('*').eq('id', playerId).single();
+    if (playerErr || !player) throw new Error('Could not find this player.');
+
+    const { error: reqErr } = await supabaseClient.from('rest_requests').update({ status: 'confirmed', resolved_at: new Date().toISOString() }).eq('id', requestId);
+    if (reqErr) throw reqErr;
+
+    if (player.status === 'playing') {
+      // Mid-match — don't disrupt the live game. The host will mark them
+      // resting manually from the Roster tab once the match ends.
+      return { deferred: true };
+    }
+
+    // Not mid-match: safe to rest them right now.
+    const activeTeams = await getTeams(player.session_id);
+    const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
+    if (theirTeam) {
+      await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
+    }
+    await supabaseClient.from('players').update({ status: 'resting' }).eq('id', playerId);
+    return { deferred: false };
+  }
+  async function declineRestRequest(requestId) {
+    const { error } = await supabaseClient.from('rest_requests').update({ status: 'declined', resolved_at: new Date().toISOString() }).eq('id', requestId);
+    if (error) throw error;
+  }
   async function getMessages(sessionId, statusFilter = null) {
     let query = supabaseClient.from('messages').select('*').eq('session_id', sessionId).order('created_at', { ascending: false });
     if (statusFilter) query = query.eq('status', statusFilter);
@@ -1270,7 +1340,7 @@ const SessionAPI = (() => {
     addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getPlayerWaveEligibility, deactivateTeamsContainingPlayers,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     addManualQueueEntry, getManualQueue, getNextManualQueueEntry, removeManualQueueEntry,
-    getPendingRestRequests, getMessages, markMessageStatus,
+    getPendingRestRequests, confirmRestRequest, declineRestRequest, getMessages, markMessageStatus,
   };
 })();
 window.SessionAPI = SessionAPI;
@@ -1296,6 +1366,15 @@ async function init() {
 }
 
 async function renderSessionList() {
+  // Reset form selection state every time this renders — otherwise a
+  // leftover selection from a PREVIOUS visit to this form (e.g. picking
+  // Tournament, going back, then opening "Start New Session" again) would
+  // silently submit the old selection while the UI visually shows the
+  // hardcoded default (Open Play), a real mismatch between what's shown
+  // and what's actually submitted.
+  selectedSessionType = 'open_play';
+  selectedOpenPlayMode = 'automated';
+
   const sessions = await SessionAPI.getMySessions();
   const activeOnes = sessions.filter(s => s.status === 'active');
   const completedOnes = sessions.filter(s => s.status === 'completed').slice(0, 10);
@@ -1558,10 +1637,13 @@ async function handleCreateSession() {
 // ----------------------------
 function sessionPasswordKey(sessionId) { return `istackyyy_pw_ok_${sessionId}`; }
 function rememberSessionPassword(sessionId, password) {
-  sessionStorage.setItem(sessionPasswordKey(sessionId), 'unlocked');
+  // localStorage (not sessionStorage) so the unlock survives closing the
+  // browser tab — hosts running live events shouldn't have to re-type a
+  // password every time a tab gets closed/reopened on their phone.
+  localStorage.setItem(sessionPasswordKey(sessionId), 'unlocked');
 }
 function isSessionUnlocked(sessionId) {
-  return sessionStorage.getItem(sessionPasswordKey(sessionId)) === 'unlocked';
+  return localStorage.getItem(sessionPasswordKey(sessionId)) === 'unlocked';
 }
 
 async function promptOpenSession(sessionId) {
@@ -1602,6 +1684,13 @@ async function confirmSessionPassword(sessionId) {
 async function openSession(sessionId) {
   activeSession = await SessionAPI.getSession(sessionId);
   activeTab = 'roster';
+  // Reset all per-session in-memory UI state — otherwise partially-built
+  // tournament team formations (or other in-progress selections) from a
+  // PREVIOUSLY opened session could leak into this one, since these are
+  // plain module-level variables that don't know which session they
+  // belong to.
+  bracketSetupTeams = [];
+  bracketSetupSelectedPlayers = [];
   renderConsole();
   subscribeRealtime();
   startHostTimerLoop();
@@ -1670,6 +1759,7 @@ async function handleFinishSession() {
   await SessionAPI.finishSession(activeSession.id);
   document.getElementById('finishModal').remove();
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
   activeSession = null;
   await renderSessionList();
 }
@@ -1720,10 +1810,18 @@ async function confirmHostAgain(oldSessionId) {
   const carryPlayers = selectedChips.map(el => ({ name: el.dataset.name, skill_tier: el.dataset.tier }));
 
   try {
+    // Carry over EVERY session setting, not just a subset — a Tournament's
+    // division/category/format must survive "Host Again," not silently
+    // fall back to a default Open Play session with that data dropped.
     const newSession = await SessionAPI.createSession({
       name, format: oldSession.format, courtCount,
       stackingMode: oldSession.stacking_mode, pairingDefault: oldSession.pairing_default,
       skillMatchMode: oldSession.skill_match_mode, restPriorityEnabled: oldSession.rest_priority_enabled,
+      allowCrossLaneFill: oldSession.allow_cross_lane_fill,
+      sessionType: oldSession.session_type, openPlayMode: oldSession.open_play_mode,
+      tournamentFormat: oldSession.tournament_format, division: oldSession.division, category: oldSession.category,
+      roundsTotal: null, // a fresh tournament needs a fresh round count, not the old one's CURRENT round
+      scoringMode: oldSession.scoring_mode, pointsToWin: oldSession.points_to_win,
       password, parentSessionId: oldSessionId,
     });
     rememberSessionPassword(newSession.id, password);
@@ -1808,22 +1906,40 @@ async function handleAddPlayer() {
   const name = document.getElementById('newPlayerName').value.trim();
   const tier = document.getElementById('newPlayerTier').value;
   if (!name) return;
-  await SessionAPI.addPlayer(activeSession.id, name, tier);
-  document.getElementById('newPlayerName').value = '';
+  try {
+    await SessionAPI.addPlayer(activeSession.id, name, tier);
+    document.getElementById('newPlayerName').value = '';
+  } catch (err) {
+    alert(err.message || 'Could not add this player. Please try again.');
+  }
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
 }
 
 async function handleRemovePlayer(playerId) {
-  await SessionAPI.removePlayer(playerId);
+  try {
+    await SessionAPI.removePlayer(playerId);
+  } catch (err) {
+    alert(err.message || 'Could not remove this player. Please try again.');
+  }
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
 }
 
 async function handleReturnFromRest(playerId) {
   await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', playerId);
 
-  // Re-pair into the waiting queue, same logic as a brand-new player joining —
-  // otherwise they'd show "waiting" in the roster but have no team, so the
-  // auto-fill engine could never actually queue them back up.
+  // Manual mode: same rule as addPlayer — no auto-pairing, the host forms
+  // teams explicitly via the court picker. Without this check, a player
+  // returning from rest would get silently auto-paired, contradicting
+  // Manual mode's entire premise.
+  if (activeSession.open_play_mode === 'manual') {
+    document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+    return;
+  }
+
+  // Automated / Hybrid: re-pair into the waiting queue, same logic as a
+  // brand-new player joining — otherwise they'd show "waiting" in the
+  // roster but have no team, so the auto-fill engine could never actually
+  // queue them back up.
   const session = activeSession;
   const teamSize = session.format === 'doubles' ? 2 : 1;
   if (teamSize === 1) {
@@ -2030,7 +2146,11 @@ function bracketMatchupRow(m, players, courts) {
 }
 
 async function handleAssignMatchup(matchupId, courtId) {
-  await SessionAPI.assignMatchupToCourt(matchupId, courtId);
+  try {
+    await SessionAPI.assignMatchupToCourt(matchupId, courtId);
+  } catch (err) {
+    alert(err.message || 'Could not assign this matchup — the court may already be in use.');
+  }
   document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
 }
 
@@ -2064,13 +2184,22 @@ async function confirmScoreEntry(matchupId, courtId) {
     return;
   }
 
-  await SessionAPI.recordTournamentResult(matchupId, courtId, scoreA, scoreB);
+  try {
+    await SessionAPI.recordTournamentResult(matchupId, courtId, scoreA, scoreB);
+  } catch (err) {
+    errorEl.textContent = err.message || 'Could not record this result. Please try again.';
+    return;
+  }
   document.getElementById('scoreModal').remove();
   document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
 }
 
 async function handleAdvanceRound() {
-  await SessionAPI.advanceToNextRound(activeSession.id);
+  try {
+    await SessionAPI.advanceToNextRound(activeSession.id);
+  } catch (err) {
+    alert(err.message || 'Could not advance to the next round. Please try again.');
+  }
   document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
 }
 
@@ -2333,13 +2462,37 @@ async function finalizeCourtPickerTeams() {
     return;
   }
 
-  const teamA = await SessionAPI.createTeam(activeSession.id, courtPickerTeamAPlayerIds, activeSession.pairing_default, 'waiting');
-  const teamB = await SessionAPI.createTeam(activeSession.id, courtPickerTeamBPlayerIds, activeSession.pairing_default, 'waiting');
+  // Create both teams directly in the 'playing' lane, not 'waiting' — these
+  // were just hand-picked by the host for THIS specific match, they must
+  // never be visible to the automated engine's queue scan in the brief
+  // window before assignCourt() runs (a real, if narrow, race condition:
+  // a realtime-triggered re-render of another court could otherwise pull
+  // one of these teams into a different match before it's actually assigned).
+  const teamA = await SessionAPI.createTeam(activeSession.id, courtPickerTeamAPlayerIds, activeSession.pairing_default, 'playing');
+  const teamB = await SessionAPI.createTeam(activeSession.id, courtPickerTeamBPlayerIds, activeSession.pairing_default, 'playing');
 
   if (courtPickerIsQueueNext) {
+    // Manual queue entries reference the team rows directly by ID, so
+    // 'playing' lane is harmless here too — manual_queue doesn't scan the
+    // teams table by queue_lane, it stores explicit team_a_id/team_b_id.
+    // NOTE: this team is technically QUEUED, not actually playing yet —
+    // 'playing' is used here only to keep it out of the automated engine's
+    // waiting-queue scan, not as a literal status claim. The schema's
+    // queue_lane CHECK constraint doesn't include a "queued" value, so
+    // this is the safest existing option without a migration.
     await SessionAPI.addManualQueueEntry(activeSession.id, courtPickerCourtId, teamA.id, teamB.id);
   } else {
-    await SessionAPI.assignCourt(courtPickerCourtId, teamA.id, teamB.id);
+    try {
+      await SessionAPI.assignCourt(courtPickerCourtId, teamA.id, teamB.id);
+    } catch (err) {
+      // Court got taken by something else between opening this modal and
+      // confirming. Clean up the two teams we just created so they don't
+      // sit as orphaned rows, then surface the error clearly.
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', [teamA.id, teamB.id]);
+      const errorEl = document.getElementById('courtPickerError');
+      if (errorEl) errorEl.textContent = err.message || 'This court was just taken. Close and try a different court.';
+      return;
+    }
   }
 
   closeCourtPickerModal();
@@ -2369,7 +2522,13 @@ async function automatedModeCourtsHtml() {
   // then falls back to the automated engine — see tryRefillCourt).
   for (const court of courts) {
     if (court.status === 'open') {
-      await SessionAPI.tryRefillCourt(court.id);
+      try {
+        await SessionAPI.tryRefillCourt(court.id);
+      } catch (err) {
+        // One court's race-condition failure must not prevent the OTHER
+        // courts in this loop from getting their own refill attempt.
+        console.error(`Refill failed for court ${court.court_number}:`, err.message);
+      }
     }
   }
   const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
@@ -2404,7 +2563,11 @@ async function manualModeCourtsHtml() {
   // itself, via tapping each court card.
   for (const court of courts) {
     if (court.status === 'open') {
-      await SessionAPI.tryRefillCourt(court.id);
+      try {
+        await SessionAPI.tryRefillCourt(court.id);
+      } catch (err) {
+        console.error(`Refill failed for court ${court.court_number}:`, err.message);
+      }
     }
   }
   const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
@@ -2571,8 +2734,23 @@ function playerNamesForTeam(team, players) {
 }
 
 async function inboxTabHtml() {
-  const messages = await SessionAPI.getMessages(activeSession.id, 'pending');
+  const [messages, restRequests] = await Promise.all([
+    SessionAPI.getMessages(activeSession.id, 'pending'),
+    SessionAPI.getPendingRestRequests(activeSession.id),
+  ]);
   return `
+    <div class="card">
+      <h2>Rest Requests</h2>
+      ${restRequests.length ? restRequests.map(r => `
+        <div class="inbox-item">
+          <div><div class="who">${escapeHtml(r.player?.name || 'Unknown player')}</div><div class="what">Asked to sit out</div><div class="when">${new Date(r.requested_at).toLocaleTimeString()}</div></div>
+          <div class="inbox-actions">
+            <button class="btn-dismiss" onclick="handleDeclineRest('${r.id}')">Decline</button>
+            <button class="btn-confirm-rest" onclick="handleConfirmRest('${r.id}', '${r.player_id}')">Confirm Rest</button>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-inbox">No rest requests</div>'}
+    </div>
     <div class="card">
       <h2>Player Messages</h2>
       ${messages.length ? messages.map(m => `
@@ -2583,6 +2761,27 @@ async function inboxTabHtml() {
       `).join('') : '<div class="empty-inbox">No messages</div>'}
     </div>
   `;
+}
+
+async function handleConfirmRest(requestId, playerId) {
+  try {
+    const result = await SessionAPI.confirmRestRequest(requestId, playerId);
+    if (result?.deferred) {
+      alert('This player is still mid-match — they\'ll need to be marked "resting" from the Roster tab once their current game ends.');
+    }
+  } catch (err) {
+    alert(err.message || 'Could not confirm this rest request.');
+  }
+  document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+}
+
+async function handleDeclineRest(requestId) {
+  try {
+    await SessionAPI.declineRestRequest(requestId);
+  } catch (err) {
+    alert(err.message || 'Could not decline this rest request.');
+  }
+  document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
 }
 
 async function handleDismissMessage(messageId) {
