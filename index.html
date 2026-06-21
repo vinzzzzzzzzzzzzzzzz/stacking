@@ -159,6 +159,12 @@
   .recent-result-duration { font-size: 11px; color: var(--resting-slate); text-align: right; }
   .winner-name { color: var(--winner-green); }
 
+  .rest-request-box { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; margin-bottom: 16px; }
+  .rest-request-box h3 { font-size: 13px; margin: 0 0 10px; }
+  .rest-request-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .rest-request-row select { flex: 1; min-width: 160px; padding: 12px; border: 1px solid #ddd; border-radius: var(--radius-sm); font-size: 16px; }
+  .rest-request-row button { background: var(--waiting-blue); color: white; border: none; padding: 12px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; white-space: nowrap; }
+
   .message-box { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; }
   .message-box h3 { font-size: 13px; margin: 0 0 10px; }
   .message-row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -198,6 +204,9 @@
 
     .message-row { flex-direction: column; }
     .message-row input[name="from"], .message-row input[name="msg"], .message-row button { width: 100%; }
+
+    .rest-request-row { flex-direction: column; }
+    .rest-request-row select, .rest-request-row button { width: 100%; }
 
     .matchup-card { flex-direction: column; align-items: stretch; text-align: left; gap: 6px; }
     .tournament-round-banner { flex-wrap: wrap; }
@@ -429,7 +438,11 @@ const SessionAPI = (() => {
     const { error } = await supabaseClient.from('messages').insert({ session_id: sessionId, player_name: playerName, message });
     if (error) throw error;
   }
-  return { getCurrentUser, getSession, getSessionByReferenceCode, getPlayers, getTeams, getQueueLane, getCourts, getMatchups, getRecentMatches, sendMessage };
+  async function requestRest(sessionId, playerId) {
+    const { error } = await supabaseClient.from('rest_requests').insert({ session_id: sessionId, player_id: playerId, status: 'pending' });
+    if (error) throw error;
+  }
+  return { getCurrentUser, getSession, getSessionByReferenceCode, getPlayers, getTeams, getQueueLane, getCourts, getMatchups, getRecentMatches, sendMessage, requestRest };
 })();
 window.SessionAPI = SessionAPI;
 
@@ -613,6 +626,14 @@ function renderShell() {
     <div class="courts-grid" id="courtsGrid"></div>
     <div class="queues" id="queuesGrid"></div>
     <div class="recent-results" id="recentResults"></div>
+    <div class="rest-request-box">
+      <h3>Need a break?</h3>
+      <div class="rest-request-row">
+        <select id="restPlayerSelect"><option value="">Select your name...</option></select>
+        <button onclick="handleRequestRest()" id="restRequestBtn">🧘 Request Rest</button>
+      </div>
+      <p class="message-hint" id="restRequestStatus">Lets the host know you'd like to sit out — they'll confirm it on their end.</p>
+    </div>
     <div class="message-box">
       <h3>Message the host</h3>
       <div class="message-row">
@@ -620,9 +641,27 @@ function renderShell() {
         <input type="text" name="msg" id="msgText" placeholder="e.g. Vince rest please" maxlength="280">
         <button onclick="sendHostMessage()">Send</button>
       </div>
-      <p class="message-hint">Optional — let the host know if you need to rest, swap, or have a question.</p>
+      <p class="message-hint">Optional — let the host know about a swap request or anything else.</p>
     </div>
   `;
+}
+
+async function handleRequestRest() {
+  const select = document.getElementById('restPlayerSelect');
+  const statusEl = document.getElementById('restRequestStatus');
+  const playerId = select.value;
+  if (!playerId) {
+    statusEl.textContent = 'Pick your name from the list first.';
+    return;
+  }
+  try {
+    await SessionAPI.requestRest(currentSessionId, playerId);
+    statusEl.textContent = '✅ Rest request sent — the host will see this in their inbox.';
+    statusEl.style.color = 'var(--winner-green)';
+  } catch (err) {
+    statusEl.textContent = 'Could not send request, please try again.';
+    statusEl.style.color = 'var(--loser-coral)';
+  }
 }
 
 let _playersCache = [];
@@ -643,6 +682,21 @@ async function refreshAll() {
   renderCourts(courts, players, teams);
   renderQueues(teams, players);
   renderRecentResults(recentMatches, players);
+  syncRestPlayerDropdown(players);
+}
+
+function syncRestPlayerDropdown(players) {
+  const select = document.getElementById('restPlayerSelect');
+  if (!select) return;
+  const currentValue = select.value;
+  const activePlayers = players.filter(p => p.status !== 'resting');
+  select.innerHTML = `<option value="">Select your name...</option>` +
+    activePlayers.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  // preserve the player's current selection across re-renders if they're
+  // still a valid option, so a realtime refresh doesn't reset their pick
+  if (activePlayers.some(p => p.id === currentValue)) {
+    select.value = currentValue;
+  }
 }
 
 function formatDuration(seconds) {
