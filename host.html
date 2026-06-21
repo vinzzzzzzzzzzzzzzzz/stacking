@@ -167,7 +167,13 @@
   .status-winners_queue { background: var(--winner-green); }
   .status-losers_queue { background: var(--loser-coral); }
   .status-resting { background: var(--resting-slate); }
-  .roster-table button.remove-btn { background: none; border: none; color: var(--loser-coral); font-size: 11px; font-weight: 700; }
+  .status-left { background: #b8b0a3; }
+  .roster-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  .roster-action-btn { font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 5px; border: none; min-height: 0; white-space: nowrap; }
+  .roster-action-rest { background: var(--resting-slate); color: white; }
+  .roster-action-bring-back { background: var(--winner-green); color: white; }
+  .roster-action-leave { background: none; color: var(--loser-coral); padding-left: 4px; padding-right: 4px; }
+  .remove-btn { background: none; border: none; color: var(--loser-coral); font-size: 11px; font-weight: 700; }
 
   .player-checklist { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
   .player-check { border: 1.5px solid #ddd; padding: 7px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
@@ -1027,6 +1033,21 @@ const SessionAPI = (() => {
     if (error) throw error;
     return data;
   }
+  /**
+   * Roster-display version: includes 'left' players too, since the host
+   * needs to actually SEE someone to bring them back. getPlayers() above
+   * stays filtered for everything else (queue logic, matching, etc.) —
+   * those code paths correctly should never see a departed player.
+   */
+  async function getAllPlayersIncludingLeft(sessionId) {
+    const { data, error } = await supabaseClient.from('players').select('*').eq('session_id', sessionId).order('joined_at', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+  async function setPlayerStatus(playerId, status) {
+    const { error } = await supabaseClient.from('players').update({ status }).eq('id', playerId);
+    if (error) throw error;
+  }
   async function removePlayer(playerId) {
     const { error } = await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
     if (error) throw error;
@@ -1311,6 +1332,21 @@ const SessionAPI = (() => {
    * any waiting team they're part of so they don't get matched while
    * resting, and set their status to 'resting' right away.
    */
+  /**
+   * Core "put this player into resting state" logic — deactivates any
+   * waiting team they're part of so they don't get matched while resting.
+   * Shared by both the rest-REQUEST confirmation flow and a host directly
+   * resting someone manually (no request needed) from the Roster tab.
+   */
+  async function restPlayerNow(playerId, sessionId) {
+    const activeTeams = await getTeams(sessionId);
+    const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
+    if (theirTeam) {
+      await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
+    }
+    await supabaseClient.from('players').update({ status: 'resting' }).eq('id', playerId);
+  }
+
   async function confirmRestRequest(requestId, playerId) {
     const { data: player, error: playerErr } = await supabaseClient.from('players').select('*').eq('id', playerId).single();
     if (playerErr || !player) throw new Error('Could not find this player.');
@@ -1324,14 +1360,21 @@ const SessionAPI = (() => {
       return { deferred: true };
     }
 
-    // Not mid-match: safe to rest them right now.
-    const activeTeams = await getTeams(player.session_id);
-    const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
-    if (theirTeam) {
-      await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
-    }
-    await supabaseClient.from('players').update({ status: 'resting' }).eq('id', playerId);
+    await restPlayerNow(playerId, player.session_id);
     return { deferred: false };
+  }
+  /**
+   * Host directly rests a player from the Roster tab — no rest request
+   * needed. Not allowed mid-match (same reasoning as the request flow):
+   * pulling someone off a live court would disrupt the game in progress.
+   */
+  async function restPlayerManually(playerId) {
+    const { data: player, error: playerErr } = await supabaseClient.from('players').select('*').eq('id', playerId).single();
+    if (playerErr || !player) throw new Error('Could not find this player.');
+    if (player.status === 'playing') {
+      throw new Error('This player is mid-match — mark them resting once their current game ends.');
+    }
+    await restPlayerNow(playerId, player.session_id);
   }
   async function declineRestRequest(requestId) {
     const { error } = await supabaseClient.from('rest_requests').update({ status: 'declined', resolved_at: new Date().toISOString() }).eq('id', requestId);
@@ -1351,10 +1394,10 @@ const SessionAPI = (() => {
   return {
     createSession, getMySessions, getSession, getSessionByReferenceCode, verifySessionPassword, finishSession, carryPlayersToNewSession,
     startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
-    addPlayer, getPlayers, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getPlayerWaveEligibility, deactivateTeamsContainingPlayers,
+    addPlayer, getPlayers, getAllPlayersIncludingLeft, setPlayerStatus, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getPlayerWaveEligibility, deactivateTeamsContainingPlayers,
     getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
     addManualQueueEntry, getManualQueue, getNextManualQueueEntry, removeManualQueueEntry,
-    getPendingRestRequests, confirmRestRequest, declineRestRequest, getMessages, markMessageStatus,
+    getPendingRestRequests, confirmRestRequest, declineRestRequest, restPlayerManually, getMessages, markMessageStatus,
   };
 })();
 window.SessionAPI = SessionAPI;
@@ -1890,7 +1933,11 @@ function copyShareMessage(url, referenceCode) {
 }
 
 async function rosterTabHtml() {
-  const players = await SessionAPI.getPlayers(activeSession.id);
+  // Use the include-left version here specifically — the Roster tab is
+  // the one place the host needs to actually SEE departed/resting
+  // players in order to bring them back. Every other part of the app
+  // still correctly uses the filtered getPlayers().
+  const players = await SessionAPI.getAllPlayersIncludingLeft(activeSession.id);
   return `
     <div class="card">
       <h2>Add Player</h2>
@@ -1901,20 +1948,19 @@ async function rosterTabHtml() {
       </div>
     </div>
     <div class="card">
-      <h2>Roster (${players.length})</h2>
+      <h2>Roster (${players.filter(p => p.status !== 'left').length})</h2>
       ${players.length ? `
         <div class="table-scroll">
         <table class="roster-table">
           <thead><tr><th>Name</th><th>Tier</th><th>Status</th><th></th></tr></thead>
           <tbody>
             ${players.map(p => `
-              <tr>
+              <tr style="${p.status === 'left' ? 'opacity:0.45;' : ''}">
                 <td>${escapeHtml(p.name)}</td>
                 <td>${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
                 <td><span class="status-pill status-${p.status}">${p.status.replace('_', ' ')}</span></td>
-                <td>
-                  ${p.status === 'resting' ? `<button onclick="handleReturnFromRest('${p.id}')" style="background:none;border:none;color:var(--winner-green);font-size:11px;font-weight:700;">Mark Ready</button>` : ''}
-                  <button class="remove-btn" onclick="handleRemovePlayer('${p.id}')">Remove</button>
+                <td class="roster-actions">
+                  ${rosterActionButtons(p)}
                 </td>
               </tr>
             `).join('')}
@@ -1924,6 +1970,26 @@ async function rosterTabHtml() {
       ` : '<p style="color:var(--resting-slate); font-size:13px;">No players yet — add some above.</p>'}
     </div>
   `;
+}
+
+/**
+ * Action buttons per player status:
+ *  - playing: Leave only (can't manually rest someone mid-match —
+ *    pulling them off a live court would disrupt the game in progress)
+ *  - waiting / winners_queue / losers_queue (active, not on court):
+ *    Rest + Leave
+ *  - resting: Bring Back + Leave
+ *  - left: Bring Back only (already gone, nothing to "leave" further)
+ */
+function rosterActionButtons(player) {
+  const restBtn = `<button onclick="handleRestManually('${player.id}')" class="roster-action-btn roster-action-rest">Rest</button>`;
+  const bringBackBtn = `<button onclick="handleReturnToWaiting('${player.id}')" class="roster-action-btn roster-action-bring-back">Bring Back</button>`;
+  const leaveBtn = `<button onclick="handleRemovePlayer('${player.id}')" class="roster-action-btn roster-action-leave">Leave</button>`;
+
+  if (player.status === 'left') return bringBackBtn;
+  if (player.status === 'resting') return `${bringBackBtn}${leaveBtn}`;
+  if (player.status === 'playing') return leaveBtn;
+  return `${restBtn}${leaveBtn}`; // waiting / winners_queue / losers_queue
 }
 
 async function handleAddPlayer() {
@@ -1948,13 +2014,19 @@ async function handleRemovePlayer(playerId) {
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
 }
 
-async function handleReturnFromRest(playerId) {
+/**
+ * Brings a player back into 'waiting' status, regardless of whether they
+ * were previously resting OR had left — same re-pairing logic either way.
+ * Used by both "Bring Back" (resting -> waiting) and "Bring Back" (left ->
+ * waiting), since the actual mechanics are identical.
+ */
+async function handleReturnToWaiting(playerId) {
   await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', playerId);
 
   // Manual mode: same rule as addPlayer — no auto-pairing, the host forms
   // teams explicitly via the court picker. Without this check, a player
-  // returning from rest would get silently auto-paired, contradicting
-  // Manual mode's entire premise.
+  // returning would get silently auto-paired, contradicting Manual
+  // mode's entire premise.
   if (activeSession.open_play_mode === 'manual') {
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
     return;
@@ -1977,6 +2049,15 @@ async function handleReturnFromRest(playerId) {
     // if no partner is available yet, they sit unpaired until the next one returns/joins
   }
 
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+async function handleRestManually(playerId) {
+  try {
+    await SessionAPI.restPlayerManually(playerId);
+  } catch (err) {
+    alert(err.message || 'Could not rest this player.');
+  }
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
 }
 
