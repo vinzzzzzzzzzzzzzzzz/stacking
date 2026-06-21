@@ -1351,6 +1351,14 @@ window.SessionAPI = SessionAPI;
 let activeSession = null;
 let activeTab = 'roster';
 let realtimeChannel = null;
+// Form selection state — declared here (not where first used further
+// down) because renderSessionList() resets these on every render and
+// runs immediately on page load via init(); a `let` declared later in
+// the file is not yet initialized at that point (temporal dead zone),
+// which previously crashed the very first page load with
+// "Cannot access 'selectedSessionType' before initialization."
+let selectedSessionType = 'open_play';
+let selectedOpenPlayMode = 'automated';
 
 init();
 
@@ -1518,8 +1526,6 @@ function togglePasswordVisibility(inputId, btn) {
   btn.textContent = showing ? '👁' : '🙈';
 }
 
-let selectedOpenPlayMode = 'automated';
-
 const MODE_EXPLAINERS = {
   automated: 'Players are randomly paired, trying to give everyone a chance to play with and against as many different people as possible. Once everyone has played once, winner-vs-winner and loser-vs-loser matching takes over.',
   manual: 'You set every matchup yourself — Round 1 for every court, plus the next matchups queued in advance. Players who finish a match are automatically added to the back of the line for whatever you have already queued.',
@@ -1533,8 +1539,6 @@ function selectOpenPlayMode(mode) {
   document.getElementById('modeHybrid').classList.toggle('selected', mode === 'hybrid');
   document.getElementById('modeExplainer').textContent = MODE_EXPLAINERS[mode];
 }
-
-let selectedSessionType = 'open_play';
 
 function selectSessionType(type) {
   selectedSessionType = type;
