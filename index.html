@@ -287,6 +287,9 @@
   .lane-item:hover { background: var(--surface-hover); padding-left: 14px; }
   .lane-item:last-child { border-bottom: none; }
   .lane-pos { font-family: var(--font-mono); color: var(--resting-slate); font-weight: 700; font-size: 11px; }
+  .result-badge { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; font-size: 9px; font-weight: 800; margin-left: 4px; }
+  .result-badge.won { background: var(--winner-green); color: white; }
+  .result-badge.lost { background: var(--loser-coral); color: white; }
   .lane-empty { padding: 16px; text-align: center; color: var(--resting-slate); font-size: 12px; }
 
   .find-me { background: var(--kitchen-gold); border-radius: var(--radius); padding: 16px; margin-bottom: 28px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -475,89 +478,10 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
-// STACKING ENGINE
+// TOURNAMENT STANDINGS (display-only — matching logic itself lives
+// entirely in host.html; this file never assigns matches, only shows
+// live state, so no copy of the matching engine belongs here)
 // ============================================================
-const TIER_RANK = { beginner: 0, intermediate: 1, advanced: 2, open: -1 };
-
-function tiersCompatible(teamATier, teamBTier, skillMatchMode) {
-  if (skillMatchMode === 'open') return true;
-  if (teamATier === 'open' || teamBTier === 'open') return true;
-  const rankA = TIER_RANK[teamATier];
-  const rankB = TIER_RANK[teamBTier];
-  if (skillMatchMode === 'strict') return rankA === rankB;
-  if (skillMatchMode === 'adjacent') return Math.abs(rankA - rankB) <= 1;
-  return true;
-}
-
-function getTeamTier(team, playersById) {
-  const tiers = team.player_ids.map(pid => playersById[pid]?.skill_tier).filter(Boolean);
-  if (tiers.length === 0) return 'open';
-  if (tiers.includes('open')) {
-    const nonOpen = tiers.filter(t => t !== 'open');
-    if (nonOpen.length === 0) return 'open';
-    tiers.length = 0;
-    tiers.push(...nonOpen);
-  }
-  const ranks = tiers.map(t => TIER_RANK[t]);
-  const minRank = Math.min(...ranks);
-  return Object.keys(TIER_RANK).find(k => TIER_RANK[k] === minRank);
-}
-
-function popEligibleTeam(queueTeams, opponentTier, skillMatchMode, playersById) {
-  for (let i = 0; i < queueTeams.length; i++) {
-    const candidate = queueTeams[i];
-    const candidateTier = getTeamTier(candidate, playersById);
-    if (tiersCompatible(candidateTier, opponentTier, skillMatchMode)) {
-      return { team: candidate, index: i };
-    }
-  }
-  return null;
-}
-
-function decideNextMatch({ stackingMode, skillMatchMode, winnersQueue, losersQueue, waitingQueue, playersById, preferredLane = null }) {
-  if (stackingMode === 'fifo') {
-    if (waitingQueue.length < 2) return null;
-    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
-  }
-  const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
-  for (const lane of lanesToTry) {
-    const queue = lane === 'winners' ? winnersQueue : losersQueue;
-    if (queue.length >= 2) {
-      const teamA = queue[0];
-      const teamATier = getTeamTier(teamA, playersById);
-      const rest = queue.slice(1);
-      const found = popEligibleTeam(rest, teamATier, skillMatchMode, playersById);
-      if (found) return { teamA, teamB: found.team, lane };
-    }
-  }
-  const combined = [...winnersQueue, ...losersQueue, ...waitingQueue];
-  if (combined.length >= 2) {
-    const teamA = combined[0];
-    const teamATier = getTeamTier(teamA, playersById);
-    const found = popEligibleTeam(combined.slice(1), teamATier, skillMatchMode, playersById);
-    if (found) return { teamA, teamB: found.team, lane: 'mixed' };
-  }
-  return null;
-}
-
-function calculateReturnPosition(queueTeams, restPriorityEnabled) {
-  if (queueTeams.length === 0) return 1;
-  if (restPriorityEnabled) {
-    const minPos = Math.min(...queueTeams.map(t => t.queue_position ?? 0));
-    return minPos - 1;
-  }
-  const maxPos = Math.max(...queueTeams.map(t => t.queue_position ?? 0));
-  return maxPos + 1;
-}
-
-function calculateBackOfQueuePosition(queueTeams) {
-  if (queueTeams.length === 0) return 1;
-  const maxPos = Math.max(...queueTeams.map(t => t.queue_position ?? 0));
-  return maxPos + 1;
-}
-
-window.StackingEngine = { tiersCompatible, getTeamTier, popEligibleTeam, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
-
 function computeStandings(teams) {
   return [...teams].sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins;
@@ -1006,40 +930,42 @@ function renderQueues(teams, players) {
   const grid = document.getElementById('queuesGrid');
   if (!grid) return;
 
-  // FLIP technique: capture each queue item's CURRENT on-screen position
-  // (by team id, which is stable across renders) before we touch the
-  // DOM. After the new HTML is in place, we measure where each item
-  // landed, then animate from the old position to the new one — this is
-  // what makes a queue reshuffle read as "these two swapped" instead of
-  // an instant re-render that's unreadable at a glance.
+  // FLIP technique: capture each item's CURRENT on-screen position (by
+  // player id, stable across renders) before touching the DOM — this is
+  // what makes a queue reshuffle read as "these people swapped" instead
+  // of an unreadable instant re-render.
   const firstRects = {};
-  grid.querySelectorAll('[data-team-id]').forEach(el => {
-    firstRects[el.dataset.teamId] = el.getBoundingClientRect();
+  grid.querySelectorAll('[data-player-id]').forEach(el => {
+    firstRects[el.dataset.playerId] = el.getBoundingClientRect();
   });
 
-  const lanes = [
-    { key: 'winners_queue', label: 'Winners Queue', cls: 'winners' },
-    { key: 'losers_queue', label: 'Losers Queue', cls: 'losers' },
-    { key: 'waiting', label: 'Waiting', cls: 'waiting' },
-  ];
-  grid.innerHTML = lanes.map(lane => {
-    const laneTeams = teams.filter(t => t.queue_lane === lane.key).sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
-    const items = laneTeams.length
-      ? laneTeams.map((t, i) => {
-          const names = playerNamesForTeam(t, players).join(' & ');
-          return `<li class="lane-item" data-team-id="${t.id}"><span>${escapeHtml(names)}</span><span class="lane-pos">#${i + 1}</span></li>`;
-        }).join('')
-      : `<div class="lane-empty">No one waiting here</div>`;
-    return `
-      <div class="lane ${lane.cls}">
-        <div class="lane-header"><span>${lane.label}</span><span class="count">${laneTeams.length}</span></div>
-        <ul class="lane-list">${items}</ul>
-      </div>
-    `;
-  }).join('');
+  // Unified pool: everyone with status 'waiting' is in ONE single
+  // time-ordered line — there is no separate winners/losers lane that
+  // could let someone skip ahead of a longer-waiting player. Order is
+  // strictly by became_free_at, exactly matching the actual matching
+  // engine's own ordering, so what players see IS what determines who
+  // plays next.
+  const waitingPlayers = players
+    .filter(p => p.status === 'waiting')
+    .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
+
+  const resultBadge = (player) => {
+    if (player.last_match_result === 'won') return '<span class="result-badge won">W</span>';
+    if (player.last_match_result === 'lost') return '<span class="result-badge lost">L</span>';
+    return '';
+  };
+
+  const items = waitingPlayers.length
+    ? waitingPlayers.map((p, i) => `<li class="lane-item" data-player-id="${p.id}"><span>${escapeHtml(p.name)} ${resultBadge(p)}</span><span class="lane-pos">#${i + 1}</span></li>`).join('')
+    : `<div class="lane-empty">No one waiting right now</div>`;
 
   const restingPlayers = players.filter(p => p.status === 'resting');
-  grid.innerHTML += `
+
+  grid.innerHTML = `
+    <div class="lane waiting">
+      <div class="lane-header"><span>Up Next</span><span class="count">${waitingPlayers.length}</span></div>
+      <ul class="lane-list">${items}</ul>
+    </div>
     <div class="lane resting">
       <div class="lane-header"><span>Resting</span><span class="count">${restingPlayers.length}</span></div>
       <ul class="lane-list">
@@ -1059,9 +985,9 @@ function renderQueues(teams, players) {
  * "shuffle" to show for something that just appeared.
  */
 function playQueueFlipAnimation(grid, firstRects) {
-  grid.querySelectorAll('[data-team-id]').forEach(el => {
-    const teamId = el.dataset.teamId;
-    const first = firstRects[teamId];
+  grid.querySelectorAll('[data-player-id]').forEach(el => {
+    const playerId = el.dataset.playerId;
+    const first = firstRects[playerId];
     if (!first) {
       // Wasn't on screen before — this is a genuinely new arrival, not a
       // reshuffle. Give it the drop-in entrance instead of a FLIP.
@@ -1103,16 +1029,17 @@ function handleFindMe() {
     resultEl.textContent = court ? `Playing now — Court ${court.court_number}` : 'Playing now';
   } else if (player.status === 'resting') {
     resultEl.textContent = 'You are resting';
+  } else if (player.status === 'waiting') {
+    // Unified pool: position is simply this player's rank by became_free_at
+    // among everyone else currently waiting — matches exactly what the
+    // matching engine itself uses, so this is always accurate.
+    const waitingSorted = _playersCache
+      .filter(p => p.status === 'waiting')
+      .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
+    const idx = waitingSorted.findIndex(p => p.id === player.id);
+    resultEl.textContent = idx >= 0 ? `#${idx + 1} in the queue` : 'Waiting to be added to a game';
   } else {
-    const team = _teamsCache.find(t => t.player_ids.includes(player.id));
-    if (team && team.queue_position != null) {
-      const laneTeams = _teamsCache.filter(t => t.queue_lane === team.queue_lane).sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
-      const idx = laneTeams.findIndex(t => t.id === team.id);
-      const laneLabel = team.queue_lane.replace('_', ' ');
-      resultEl.textContent = `#${idx + 1} in ${laneLabel}`;
-    } else {
-      resultEl.textContent = 'Waiting to be added to a game';
-    }
+    resultEl.textContent = 'Waiting to be added to a game';
   }
 }
 
