@@ -136,6 +136,20 @@
   .tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 2px solid #e5e0d5; }
   .tab-btn { background: none; border: none; padding: 10px 16px; font-weight: 700; font-size: 13px; color: var(--resting-slate); border-bottom: 3px solid transparent; margin-bottom: -2px; }
   .tab-btn.active { color: var(--court-green); border-bottom-color: var(--court-green); }
+  .inbox-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px;
+    background: var(--loser-coral); color: white; font-size: 11px; font-weight: 800;
+    border-radius: 999px; vertical-align: middle;
+    animation: badge-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes badge-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .inbox-badge { animation: none; }
+  }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -1737,7 +1751,7 @@ async function renderConsole() {
       <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
       ${activeSession.session_type === 'tournament' ? `<button class="tab-btn ${activeTab === 'bracket' ? 'active' : ''}" onclick="switchTab('bracket')">Bracket</button>` : ''}
       <button class="tab-btn ${activeTab === 'courts' ? 'active' : ''}" onclick="switchTab('courts')">Courts</button>
-      <button class="tab-btn ${activeTab === 'inbox' ? 'active' : ''}" onclick="switchTab('inbox')">Inbox</button>
+      <button class="tab-btn ${activeTab === 'inbox' ? 'active' : ''}" onclick="switchTab('inbox')">Inbox <span class="inbox-badge" id="inboxBadge" style="display:none;"></span></button>
     </div>
     <div class="tab-panel active" id="tabPanel"></div>
   `;
@@ -1842,8 +1856,14 @@ async function confirmHostAgain(oldSessionId) {
 function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  // Use closest('.tab-btn') instead of assuming event.target IS the button —
+  // the Inbox tab now has a badge span as a child, so a click landing on
+  // the badge itself would otherwise make event.target the span, not the
+  // button, leaving the tab visually un-highlighted.
+  const btn = event.target.closest('.tab-btn');
+  if (btn) btn.classList.add('active');
   renderActiveTab();
+  if (tab === 'inbox') updateInboxBadge();
 }
 
 async function renderActiveTab() {
@@ -2777,6 +2797,7 @@ async function handleConfirmRest(requestId, playerId) {
     alert(err.message || 'Could not confirm this rest request.');
   }
   document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+  updateInboxBadge();
 }
 
 async function handleDeclineRest(requestId) {
@@ -2786,21 +2807,60 @@ async function handleDeclineRest(requestId) {
     alert(err.message || 'Could not decline this rest request.');
   }
   document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+  updateInboxBadge();
 }
 
 async function handleDismissMessage(messageId) {
   await SessionAPI.markMessageStatus(messageId, 'seen');
   document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+  updateInboxBadge();
 }
 
 function subscribeRealtime() {
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
   realtimeChannel = supabaseClient
     .channel(`host-${activeSession.id}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'inbox') renderActiveTab(); })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${activeSession.id}` }, () => {
+      updateInboxBadge();
+      if (activeTab === 'inbox') renderActiveTab();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => {
+      updateInboxBadge();
+      if (activeTab === 'inbox') renderActiveTab();
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matchups', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'bracket') renderActiveTab(); })
     .subscribe();
+  updateInboxBadge();
+}
+
+/**
+ * Updates the red pulsing count on the Inbox tab — this runs on EVERY
+ * realtime event for messages/rest_requests regardless of which tab the
+ * host currently has open. Without this, a rest request arriving while
+ * the host is on the Courts tab (the most likely place for them to be)
+ * was previously invisible until they happened to click into Inbox —
+ * not a real notification, just a tab that updates if you're already
+ * looking at it.
+ */
+async function updateInboxBadge() {
+  if (!activeSession) return;
+  const badge = document.getElementById('inboxBadge');
+  if (!badge) return;
+  try {
+    const [messages, restRequests] = await Promise.all([
+      SessionAPI.getMessages(activeSession.id, 'pending'),
+      SessionAPI.getPendingRestRequests(activeSession.id),
+    ]);
+    const total = messages.length + restRequests.length;
+    if (total > 0) {
+      badge.textContent = total > 9 ? '9+' : String(total);
+      badge.style.display = 'inline-flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (err) {
+    // badge is a non-critical nicety — fail silently rather than disrupt anything else
+  }
 }
 
 let hostTimerInterval = null;
