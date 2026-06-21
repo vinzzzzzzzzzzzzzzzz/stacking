@@ -4,41 +4,177 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>iStackyyy — Live Court Board</title>
+<script>
+  // Runs immediately, before CSS/body paint, to avoid a flash of the
+  // wrong theme on load. Dark is the default per design direction;
+  // only switches to light if the person explicitly chose it before.
+  (function() {
+    var stored = localStorage.getItem('istackyyy_theme');
+    var theme = stored === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
-  /* ============ DESIGN TOKENS ============ */
-  :root {
+  /* ============================================================
+     DESIGN TOKENS — dual theme (dark default, light available)
+     Theme switches via [data-theme="light"] on <html>, persisted
+     to localStorage, defaults to dark per design direction.
+     ============================================================ */
+  :root,
+  html[data-theme="dark"] {
+    --bg: #0F1413;
+    --surface: #181F1D;
+    --surface-raised: #202927;
+    --surface-hover: #263330;
+    --ink: #F2F4F0;
+    --ink-muted: #8FA39B;
+    --border-soft: rgba(242, 244, 240, 0.08);
+    --court-green: #1B4D3E;
+    --court-green-dark: #0E2820;
+    --accent: #D7F23D;
+    --accent-ink: #0F1413;
+    --accent-glow: rgba(215, 242, 61, 0.35);
+    --winner-green: #4ECB7E;
+    --loser-coral: #FF7A5C;
+    --resting-slate: #6B7872;
+    --waiting-blue: #6FA8E0;
+    --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.35);
+    --shadow-raised: 0 8px 32px rgba(0, 0, 0, 0.45);
+  }
+  html[data-theme="light"] {
+    --bg: #F7F5EF;
+    --surface: #FFFFFF;
+    --surface-raised: #FFFFFF;
+    --surface-hover: #F0EEE6;
+    --ink: #15201C;
+    --ink-muted: #6B7872;
+    --border-soft: rgba(21, 32, 28, 0.08);
     --court-green: #1B4D3E;
     --court-green-dark: #123329;
-    --kitchen-gold: #E8B84B;
-    --line-paint: #F7F5EF;
-    --ink: #15201C;
-    --winner-green: #3FA66B;
-    --loser-coral: #E0654F;
+    --accent: #7A9A0E;
+    --accent-ink: #FFFFFF;
+    --accent-glow: rgba(122, 154, 14, 0.22);
+    --winner-green: #2F9A5C;
+    --loser-coral: #D9523A;
     --resting-slate: #8E9B97;
     --waiting-blue: #4E7FB5;
+    --shadow-card: 0 2px 14px rgba(21, 32, 28, 0.12);
+    --shadow-raised: 0 8px 28px rgba(21, 32, 28, 0.16);
+  }
+  :root {
     --font-display: 'Archivo Black', 'Arial Black', sans-serif;
     --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', 'Courier New', monospace;
-    --radius: 10px;
-    --radius-sm: 6px;
-    --shadow-card: 0 2px 14px rgba(21, 32, 28, 0.12);
+    --radius: 14px;
+    --radius-sm: 8px;
+
+    /* Backward-compatible aliases — the rest of this file's CSS was
+       written against the original token names (--kitchen-gold,
+       --line-paint). Rather than rewrite ~18 scattered references and
+       risk missing one, the old names now resolve through the new
+       theme-aware tokens, so every existing rule keeps working AND
+       correctly switches with the theme.
+       NOTE: --line-paint specifically is used as "the light color drawn
+       on top of the always-dark court-green diagram" (court lines, text
+       on the green topbar, paddle silhouettes) — the court diagram stays
+       dark green in BOTH themes since it's meant to look like an actual
+       court, so this stays a fixed off-white rather than theme-swapping. */
+    --kitchen-gold: var(--accent);
+    --line-paint: #F7F5EF;
+
+    /* Motion language — these specific curves ARE the design.
+       - bounce: physical "landing on a court line" settle, used for
+         entrances and queue-shuffle FLIP animations
+       - serve: sharp, decisive, no overshoot — used only when a match
+         actually starts, deliberately distinct from bounce
+       - settle: gentle, used for completed/locked states */
+    --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-serve: cubic-bezier(0.22, 0.68, 0.36, 1);
+    --ease-settle: cubic-bezier(0.16, 1, 0.3, 1);
+    --dur-fast: 220ms;
+    --dur-base: 380ms;
+    --dur-shuffle: 450ms;
+    --dur-pulse: 900ms;
   }
+
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; padding: 0; background: var(--line-paint); color: var(--ink); font-family: var(--font-body); overflow-x: hidden; }
+  html { color-scheme: dark; }
+  html[data-theme="light"] { color-scheme: light; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); overflow-x: hidden; transition: background var(--dur-base) var(--ease-settle), color var(--dur-base) var(--ease-settle); }
   h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; }
   a { color: inherit; }
   button { font-family: var(--font-body); cursor: pointer; touch-action: manipulation; }
-  ::selection { background: var(--kitchen-gold); color: var(--ink); }
-  :focus-visible { outline: 3px solid var(--kitchen-gold); outline-offset: 2px; }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   }
   .mono { font-family: var(--font-mono); }
 
-  input, select, textarea { font-size: 16px; min-height: 44px; }
+  input, select, textarea { font-size: 16px; min-height: 44px; background: var(--surface-raised); color: var(--ink); border-color: var(--border-soft); }
   button { min-height: 44px; }
+
+  /* ---------- Court-line motif used structurally (not just inside
+     literal court diagrams) — a recurring dashed-line texture used as
+     section dividers and active-tab indicator. ---------- */
+  .court-line-divider {
+    height: 2px; margin: 20px 0;
+    background-image: repeating-linear-gradient(90deg, var(--border-soft) 0 10px, transparent 10px 18px);
+  }
+
+  /* ---------- Realtime change pulse — a one-shot edge-glow sweep,
+     applied via a CSS class toggled briefly by JS when a row updates
+     from a realtime event. Not a flash; a sweep that settles. ---------- */
+  @keyframes realtime-pulse {
+    0% { box-shadow: 0 0 0 0 var(--accent-glow); }
+    35% { box-shadow: 0 0 0 6px var(--accent-glow); }
+    100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+  }
+  .pulse-update { animation: realtime-pulse var(--dur-pulse) var(--ease-settle); }
+
+  /* ---------- Card drop/settle entrance — physical weight, lands
+     on the court line rather than fading in place. ---------- */
+  @keyframes drop-settle {
+    0% { opacity: 0; transform: translateY(-14px) scale(0.97); }
+    60% { opacity: 1; }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .drop-in { animation: drop-settle var(--dur-base) var(--ease-bounce) both; }
+
+  /* ---------- Staggered list entrance — cascading drop-in, capped
+     at the first 8 items so long rosters don't feel slow. ---------- */
+  .stagger-item { animation: drop-settle var(--dur-base) var(--ease-bounce) both; }
+  .stagger-item:nth-child(1) { animation-delay: 0ms; }
+  .stagger-item:nth-child(2) { animation-delay: 40ms; }
+  .stagger-item:nth-child(3) { animation-delay: 80ms; }
+  .stagger-item:nth-child(4) { animation-delay: 120ms; }
+  .stagger-item:nth-child(5) { animation-delay: 160ms; }
+  .stagger-item:nth-child(6) { animation-delay: 200ms; }
+  .stagger-item:nth-child(7) { animation-delay: 240ms; }
+  .stagger-item:nth-child(8) { animation-delay: 280ms; }
+
+  /* ---------- "Serve" transition — sharp diagonal motion used ONLY
+     when a match actually starts on a court. Deliberately NOT bouncy:
+     decisive, not playful, distinct from the drop-settle entrance. ---------- */
+  @keyframes serve-in {
+    0% { opacity: 0; transform: translate(-10px, 8px) rotate(-1.2deg); }
+    100% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  }
+  .serve-in { animation: serve-in var(--dur-fast) var(--ease-serve) both; }
+
+  /* ---------- Theme toggle ---------- */
+  .theme-toggle {
+    background: var(--surface-hover); border: 1px solid var(--border-soft); border-radius: 999px;
+    width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+    transition: transform var(--dur-fast) var(--ease-bounce), background var(--dur-fast) var(--ease-settle);
+    flex-shrink: 0;
+  }
+  .theme-toggle:hover { transform: scale(1.08) rotate(-8deg); }
+  .theme-toggle:active { transform: scale(0.94); }
+  .theme-toggle svg { width: 18px; height: 18px; color: var(--accent); }
+
 
   /* ============ PAGE STYLES ============ */
   body { padding-bottom: 80px; }
@@ -60,7 +196,11 @@
   .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
 
   .courts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 36px; }
-  .court-card { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
+  .court-card {
+    background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden;
+    transition: transform var(--dur-fast) var(--ease-bounce), box-shadow var(--dur-fast) var(--ease-settle);
+  }
+  .court-card:hover { transform: translateY(-3px) scale(1.012); box-shadow: var(--shadow-raised); }
   .court-label { background: var(--court-green-dark); color: var(--line-paint); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; }
   .court-label .num { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.05em; }
   .court-timer { font-family: var(--font-mono); font-weight: 700; font-size: 15px; color: var(--kitchen-gold); }
@@ -119,18 +259,18 @@
   .format-pill { background: var(--kitchen-gold); color: var(--ink); font-weight: 700; font-size: 12px; padding: 6px 14px; border-radius: 999px; }
 
   .matchup-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px; }
-  .matchup-card { background: white; box-shadow: var(--shadow-card); display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600; flex-wrap: wrap; gap: 8px; }
+  .matchup-card { background: var(--surface); box-shadow: var(--shadow-card); display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600; flex-wrap: wrap; gap: 8px; }
   .matchup-card.in-progress { box-shadow: 0 0 0 2px var(--kitchen-gold), var(--shadow-card); }
   .matchup-card.completed { opacity: 0.7; }
   .status-waiting { background: var(--resting-slate); }
   .status-playing { background: var(--kitchen-gold); color: var(--ink); }
 
-  .standings-card { margin-bottom: 28px; background: white; box-shadow: var(--shadow-card); border-radius: var(--radius); padding: 18px; }
+  .standings-card { margin-bottom: 28px; background: var(--surface); box-shadow: var(--shadow-card); border-radius: var(--radius); padding: 18px; }
   .standings-title { font-size: 15px; margin: 0 0 12px; }
   .roster-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .roster-table th { text-align: left; padding: 8px; color: var(--resting-slate); font-size: 11px; text-transform: uppercase; border-bottom: 2px solid #eee; }
-  .roster-table td { padding: 8px; border-bottom: 1px solid #f0f0f0; }
-  .lane { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
+  .roster-table th { text-align: left; padding: 8px; color: var(--resting-slate); font-size: 11px; text-transform: uppercase; border-bottom: 2px solid var(--border-soft); }
+  .roster-table td { padding: 8px; border-bottom: 1px solid var(--border-soft); }
+  .lane { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
   .lane-header { padding: 12px 16px; font-family: var(--font-display); font-size: 13px; letter-spacing: 0.04em; color: white; display: flex; justify-content: space-between; align-items: center; }
   .lane-header .count { font-family: var(--font-mono); opacity: 0.85; }
   .lane.winners .lane-header { background: var(--winner-green); }
@@ -139,7 +279,12 @@
   .lane.resting .lane-header { background: var(--resting-slate); }
 
   .lane-list { list-style: none; margin: 0; padding: 8px; min-height: 60px; }
-  .lane-item { padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .lane-item {
+    padding: 8px 10px; border-bottom: 1px solid var(--border-soft); font-size: 13px; font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+    transition: background var(--dur-fast) var(--ease-settle), padding-left var(--dur-fast) var(--ease-bounce);
+  }
+  .lane-item:hover { background: var(--surface-hover); padding-left: 14px; }
   .lane-item:last-child { border-bottom: none; }
   .lane-pos { font-family: var(--font-mono); color: var(--resting-slate); font-weight: 700; font-size: 11px; }
   .lane-empty { padding: 16px; text-align: center; color: var(--resting-slate); font-size: 12px; }
@@ -149,26 +294,31 @@
   .find-me-result { font-weight: 700; font-size: 13px; background: var(--ink); color: white; padding: 8px 12px; border-radius: var(--radius-sm); }
 
   .recent-results { margin-bottom: 24px; }
-  .recent-results-title { font-size: 13px; margin: 0 0 10px; color: var(--ink); text-transform: uppercase; letter-spacing: 0.03em; }
+  .recent-results-title {
+    font-size: 13px; margin: 0 0 12px; color: var(--ink); text-transform: uppercase; letter-spacing: 0.03em;
+    padding-bottom: 8px;
+    background-image: repeating-linear-gradient(90deg, var(--border-soft) 0 8px, transparent 8px 14px);
+    background-position: bottom; background-repeat: repeat-x; background-size: 100% 2px;
+  }
   .recent-results-list { display: flex; flex-direction: column; gap: 6px; }
   .recent-result-row {
-    background: white; box-shadow: var(--shadow-card); border-radius: var(--radius-sm); padding: 10px 14px;
+    background: var(--surface); box-shadow: var(--shadow-card); border-radius: var(--radius-sm); padding: 10px 14px;
     display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 10px; align-items: center; font-size: 13px; font-weight: 600;
   }
   .recent-result-score { font-size: 13px; font-weight: 700; color: var(--court-green); text-align: center; }
   .recent-result-duration { font-size: 11px; color: var(--resting-slate); text-align: right; }
   .winner-name { color: var(--winner-green); }
 
-  .rest-request-box { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; margin-bottom: 16px; }
+  .rest-request-box { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; margin-bottom: 16px; }
   .rest-request-box h3 { font-size: 13px; margin: 0 0 10px; }
   .rest-request-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .rest-request-row select { flex: 1; min-width: 160px; padding: 12px; border: 1px solid #ddd; border-radius: var(--radius-sm); font-size: 16px; }
+  .rest-request-row select { flex: 1; min-width: 160px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: 16px; }
   .rest-request-row button { background: var(--waiting-blue); color: white; border: none; padding: 12px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; white-space: nowrap; }
 
-  .message-box { background: white; border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; }
+  .message-box { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; }
   .message-box h3 { font-size: 13px; margin: 0 0 10px; }
   .message-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .message-row input { padding: 12px; border: 1px solid #ddd; border-radius: var(--radius-sm); font-size: 16px; }
+  .message-row input { padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: 16px; }
   .message-row input[name="from"] { width: 120px; }
   .message-row input[name="msg"] { flex: 1; min-width: 160px; }
   .message-row button { background: var(--court-green); color: white; border: none; padding: 9px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; }
@@ -252,6 +402,22 @@
     <input type="text" id="sessionIdInput" placeholder="e.g. STACK-A3F9 or paste link">
     <button onclick="loadSessionFromInput()">View</button>
   </div>
+  <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" aria-label="Toggle light/dark theme" title="Toggle theme">
+    <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+      <circle cx="12" cy="12" r="4"></circle>
+      <line x1="12" y1="2" x2="12" y2="4"></line>
+      <line x1="12" y1="20" x2="12" y2="22"></line>
+      <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+      <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+      <line x1="2" y1="12" x2="4" y2="12"></line>
+      <line x1="20" y1="12" x2="22" y2="12"></line>
+      <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+      <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
+    </svg>
+    <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+    </svg>
+  </button>
 </div>
 
 <div class="container" id="mainContent">
@@ -277,6 +443,30 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
+// ============================================================
+// THEME TOGGLE
+// ============================================================
+function applyThemeIcon() {
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const sun = document.getElementById('themeIconSun');
+  const moon = document.getElementById('themeIconMoon');
+  if (!sun || !moon) return;
+  // Sun shows when in light mode (tap to go dark); moon shows in dark
+  // mode (tap to go light) — the icon represents the CURRENT state.
+  sun.style.display = theme === 'light' ? 'block' : 'none';
+  moon.style.display = theme === 'light' ? 'none' : 'block';
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('istackyyy_theme', next);
+  applyThemeIcon();
+}
+
+applyThemeIcon();
+
 // ============================================================
 // SUPABASE CONFIG
 // ============================================================
@@ -532,6 +722,7 @@ function renderTournamentShell() {
     </div>
     <div class="tournament-round-banner" id="tournamentRoundBanner"></div>
     <div class="matchup-list" id="tournamentMatchups"></div>
+    <div class="court-line-divider" role="separator"></div>
     <div class="card standings-card">
       <h2 class="standings-title">Standings</h2>
       <div class="table-scroll">
@@ -624,8 +815,10 @@ function renderShell() {
       <div id="findMeResult"></div>
     </div>
     <div class="courts-grid" id="courtsGrid"></div>
+    <div class="court-line-divider" role="separator"></div>
     <div class="queues" id="queuesGrid"></div>
     <div class="recent-results" id="recentResults"></div>
+    <div class="court-line-divider" role="separator"></div>
     <div class="rest-request-box">
       <h3>Need a break?</h3>
       <div class="rest-request-row">
@@ -676,10 +869,15 @@ async function refreshAll() {
     SessionAPI.getCourts(currentSessionId),
     SessionAPI.getRecentMatches(currentSessionId),
   ]);
+  // Capture the PREVIOUS court state before overwriting the cache — this
+  // is what powers serve-in/pulse transition detection in renderCourts().
+  // Order matters here: the comparison must happen against what was on
+  // screen a moment ago, not against the data we're about to render.
+  const previousCourts = _courtsCache;
   _playersCache = players;
   _teamsCache = teams;
   _courtsCache = courts;
-  renderCourts(courts, players, teams);
+  renderCourts(courts, players, teams, previousCourts);
   renderQueues(teams, players);
   renderRecentResults(recentMatches, players);
   syncRestPlayerDropdown(players);
@@ -706,6 +904,8 @@ function formatDuration(seconds) {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
+let _seenMatchIds = new Set();
+
 function renderRecentResults(matches, players) {
   const el = document.getElementById('recentResults');
   if (!el) return;
@@ -714,15 +914,20 @@ function renderRecentResults(matches, players) {
   el.innerHTML = `
     <h3 class="recent-results-title">Recent Results</h3>
     <div class="recent-results-list">
-      ${matches.map(m => {
+      ${matches.map((m, i) => {
         const namesA = playerNamesForTeam(m.team_a, players).join(' & ');
         const namesB = playerNamesForTeam(m.team_b, players).join(' & ');
         const winnerIsA = m.winner_team_id === m.team_a_id;
         const scoreText = m.score_visible && m.team_a_score != null
           ? `${m.team_a_score}–${m.team_b_score}`
           : 'Score not shared';
+        // Only the newest entry that wasn't in the previous render gets
+        // the entrance animation — re-rendering the whole list on every
+        // realtime tick would otherwise re-trigger it on rows that have
+        // been sitting there for minutes, which reads as broken, not alive.
+        const isNew = !_seenMatchIds.has(m.id);
         return `
-          <div class="recent-result-row">
+          <div class="recent-result-row ${isNew ? 'drop-in' : ''}">
             <span class="${winnerIsA ? 'winner-name' : ''}">${escapeHtml(namesA)}</span>
             <span class="recent-result-score mono">${scoreText}</span>
             <span class="${!winnerIsA ? 'winner-name' : ''}">${escapeHtml(namesB)}</span>
@@ -732,6 +937,7 @@ function renderRecentResults(matches, players) {
       }).join('')}
     </div>
   `;
+  _seenMatchIds = new Set(matches.map(m => m.id));
 }
 
 function playerNamesForTeam(team, players) {
@@ -753,17 +959,30 @@ function paddleChip(name) {
   `;
 }
 
-function renderCourts(courts, players, teams) {
+function renderCourts(courts, players, teams, previousCourts) {
   const grid = document.getElementById('courtsGrid');
   if (!grid) return;
+
+  // Detect which courts just CHANGED since the last render (status flip,
+  // or a new team assigned) — only these get the serve-in / pulse motion.
+  // Without this check, every realtime tick would re-trigger the entrance
+  // animation on every card, which reads as glitchy rather than alive.
+  const prevById = Object.fromEntries((previousCourts || []).map(c => [c.id, c]));
+
   grid.innerHTML = courts.map(court => {
     const teamA = court.team_a;
     const teamB = court.team_b;
     const isActive = court.status === 'in_progress';
     const sideA = isActive ? playerNamesForTeam(teamA, players).map(paddleChip).join('') : '';
     const sideB = isActive ? playerNamesForTeam(teamB, players).map(paddleChip).join('') : '';
+
+    const prev = prevById[court.id];
+    const justStarted = isActive && (!prev || prev.status !== 'in_progress' || prev.team_a_id !== court.team_a_id);
+    const justFinished = !isActive && prev && prev.status === 'in_progress';
+    const motionClass = justStarted ? 'serve-in' : (justFinished ? 'pulse-update' : '');
+
     return `
-      <div class="court-card">
+      <div class="court-card ${motionClass}">
         <div class="court-label">
           <span class="num">Court ${court.court_number}</span>
           <span class="court-timer ${isActive ? '' : 'idle'}" data-start="${court.game_started_at || ''}" id="timer-${court.id}">${isActive ? '00:00' : 'OPEN'}</span>
@@ -786,6 +1005,18 @@ function renderCourts(courts, players, teams) {
 function renderQueues(teams, players) {
   const grid = document.getElementById('queuesGrid');
   if (!grid) return;
+
+  // FLIP technique: capture each queue item's CURRENT on-screen position
+  // (by team id, which is stable across renders) before we touch the
+  // DOM. After the new HTML is in place, we measure where each item
+  // landed, then animate from the old position to the new one — this is
+  // what makes a queue reshuffle read as "these two swapped" instead of
+  // an instant re-render that's unreadable at a glance.
+  const firstRects = {};
+  grid.querySelectorAll('[data-team-id]').forEach(el => {
+    firstRects[el.dataset.teamId] = el.getBoundingClientRect();
+  });
+
   const lanes = [
     { key: 'winners_queue', label: 'Winners Queue', cls: 'winners' },
     { key: 'losers_queue', label: 'Losers Queue', cls: 'losers' },
@@ -796,7 +1027,7 @@ function renderQueues(teams, players) {
     const items = laneTeams.length
       ? laneTeams.map((t, i) => {
           const names = playerNamesForTeam(t, players).join(' & ');
-          return `<li class="lane-item"><span>${escapeHtml(names)}</span><span class="lane-pos">#${i + 1}</span></li>`;
+          return `<li class="lane-item" data-team-id="${t.id}"><span>${escapeHtml(names)}</span><span class="lane-pos">#${i + 1}</span></li>`;
         }).join('')
       : `<div class="lane-empty">No one waiting here</div>`;
     return `
@@ -816,6 +1047,46 @@ function renderQueues(teams, players) {
       </ul>
     </div>
   `;
+
+  playQueueFlipAnimation(grid, firstRects);
+}
+
+/**
+ * Plays the actual FLIP animation: for every item that existed before
+ * AND still exists now, measure the distance between its old and new
+ * position and animate that delta away. Brand-new items (no previous
+ * position recorded) get the drop-in entrance instead, since there's no
+ * "shuffle" to show for something that just appeared.
+ */
+function playQueueFlipAnimation(grid, firstRects) {
+  grid.querySelectorAll('[data-team-id]').forEach(el => {
+    const teamId = el.dataset.teamId;
+    const first = firstRects[teamId];
+    if (!first) {
+      // Wasn't on screen before — this is a genuinely new arrival, not a
+      // reshuffle. Give it the drop-in entrance instead of a FLIP.
+      el.classList.add('drop-in');
+      return;
+    }
+    const last = el.getBoundingClientRect();
+    const deltaY = first.top - last.top;
+    const deltaX = first.left - last.left;
+    if (Math.abs(deltaY) < 1 && Math.abs(deltaX) < 1) return; // didn't actually move
+
+    // Invert: jump it back to where it used to be (no visible jump,
+    // since we do this before the browser paints), then animate to 0,0
+    // (its real new position) on the next frame.
+    el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+    el.style.transition = 'none';
+    requestAnimationFrame(() => {
+      el.style.transition = `transform var(--dur-shuffle) var(--ease-bounce)`;
+      el.style.transform = 'translate(0, 0)';
+    });
+    el.addEventListener('transitionend', () => {
+      el.style.transition = '';
+      el.style.transform = '';
+    }, { once: true });
+  });
 }
 
 function handleFindMe() {
