@@ -547,9 +547,7 @@ function getTeamTier(team, playersById) {
 
 /**
  * Strict FIFO pop: always takes the front of the queue, no skipping for
- * skill matching or any other reason. Skill-tier filtering, if the host
- * wants it, should narrow WHICH queue gets used upstream, not reorder
- * within a queue.
+ * skill matching or any other reason.
  */
 function popFront(queueTeams) {
   if (!queueTeams || queueTeams.length === 0) return null;
@@ -557,97 +555,95 @@ function popFront(queueTeams) {
 }
 
 /**
- * Decide the next match for a freed court.
- *
  * ============================================================
- * CORE GUARANTEE — DO NOT BREAK THIS WHEN EDITING:
- * No team may play a 2nd match while ANY team is still sitting in the
- * waiting queue having not yet played its 1st match of the current cycle.
- * This holds at ANY group size (8, 12, 24, 48...) and regardless of how
- * unevenly courts finish relative to each other — each court checks the
- * LIVE waiting queue length independently every time it asks for a
- * decision, so a fast-finishing court can never "lap" a slow one.
+ * UNIFIED SINGLE-POOL MATCHING — the core open-play engine.
+ *
+ * CORE GUARANTEE: a player can NEVER play before someone who has been
+ * free LONGER, full stop — regardless of whether either of them won,
+ * lost, or never played yet. There is no separate "winners queue" that
+ * skips ahead of a longer-waiting "general queue"; everyone who is not
+ * currently on a court sits in ONE pool, ordered purely by
+ * became_free_at (when they joined, or when their last match ended).
+ *
+ * This directly fixes the old bug where a player who just won could
+ * replay seconds later just because another winner happened to also be
+ * free, while a dozen people who'd been waiting far longer sat idle in
+ * a different "lane."
+ *
+ * Doubles teams are formed FRESH every single time from the 4
+ * longest-free individuals — never persisted as a fixed pair between
+ * matches, since this is open play, not a tournament: players should
+ * get the chance to team up with and against many different people.
+ *
+ * players: array of { id, became_free_at, last_match_result } for
+ * everyone NOT currently on a court (already excludes 'playing').
+ * Must already be sorted oldest-became_free_at-first by the caller.
+ *
+ * Returns: { teamAPlayerIds: [...], teamBPlayerIds: [...] } | null
  * ============================================================
- *
- * The cycle works as ONE continuous line: everyone who has never played
- * (or has cycled back around after playing) sits in the WAITING queue,
- * strict FIFO, no skipping. Fresh/waiting teams always get priority over
- * teams that just finished a match — so 8 people who haven't played yet
- * always go before 2 people replaying each other immediately.
- *
- * Win/loss is tracked so that WHEN a team's turn comes back around (i.e.
- * the waiting line has been exhausted), the system tries to match them
- * against another team with the same recent result (winner vs winner,
- * loser vs loser) — but it never jumps them ahead of people who are
- * still waiting for their first/next turn.
- *
- * Priority order:
- *  1. Waiting queue has 2+ teams -> play from waiting (the default, normal case)
- *  2. Waiting queue has EXACTLY 1 team (never played this cycle, just
- *     doesn't have a same-status partner yet) -> that team must still go
- *     before any winners/losers rematch, since it hasn't had a turn at
- *     all. Pair it with whichever of winners/losers has been waiting
- *     longest, so a never-played team is never blocked behind a rematch.
- *  3. Waiting queue is empty -> only then consider winners/losers lanes
- *     facing each other (winner vs winner, loser vs loser), oldest first
- *  4. If still nothing fills the court and allowCrossLaneFill is on,
- *     mix winners front vs losers front so the court doesn't sit idle
  */
-function decideNextMatch({ stackingMode, winnersQueue, losersQueue, waitingQueue, allowCrossLaneFill = true, preferredLane = null }) {
-  if (stackingMode === 'fifo') {
-    if (waitingQueue.length < 2) return null;
-    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
+function decideNextMatchFromPool(players, teamSize) {
+  const needed = teamSize * 2;
+  if (!players || players.length < needed) return null;
+
+  // STRICT time-order: the next `needed` players are whoever has been
+  // free longest, no exceptions — this is the entire fairness guarantee
+  // and must never be reordered for any reason, including win/loss.
+  const group = players.slice(0, needed);
+
+  if (teamSize === 1) {
+    // Singles: no recombination needed, just the 2 longest-free individuals.
+    return { teamAPlayerIds: [group[0].id], teamBPlayerIds: [group[1].id] };
   }
 
-  // 1. Waiting queue takes priority — fresh/cycled-back teams play before
-  // anyone gets matched again off a recent win or loss.
-  if (waitingQueue.length >= 2) {
-    return { teamA: waitingQueue[0], teamB: waitingQueue[1], lane: 'waiting' };
+  // Doubles: within EXACTLY this group of 4 (never reaching further down
+  // the line), try to split into a "won last match" side and a "lost
+  // last match" side. If that split isn't clean (e.g. 3 winners + 1
+  // loser, or a mix including never-played), fall back to a simple
+  // first-2 vs last-2 split — still strictly the 4 longest-free people,
+  // just without a winner/loser grouping preference.
+  const winners = group.filter(p => p.last_match_result === 'won');
+  const losers = group.filter(p => p.last_match_result === 'lost');
+  const neutral = group.filter(p => p.last_match_result !== 'won' && p.last_match_result !== 'lost');
+
+  let teamAPlayerIds, teamBPlayerIds;
+  if (winners.length === 2 && losers.length === 2) {
+    teamAPlayerIds = winners.map(p => p.id);
+    teamBPlayerIds = losers.map(p => p.id);
+  } else if (winners.length === 2 && neutral.length === 2 && losers.length === 0) {
+    teamAPlayerIds = winners.map(p => p.id);
+    teamBPlayerIds = neutral.map(p => p.id);
+  } else if (losers.length === 2 && neutral.length === 2 && winners.length === 0) {
+    teamAPlayerIds = losers.map(p => p.id);
+    teamBPlayerIds = neutral.map(p => p.id);
+  } else if (neutral.length === 4) {
+    teamAPlayerIds = [group[0].id, group[1].id];
+    teamBPlayerIds = [group[2].id, group[3].id];
+  } else {
+    // No clean split available among these 4 specific people — fall back
+    // to time-order pairing (1st+2nd vs 3rd+4th longest-free) rather than
+    // reaching past them to find a cleaner grouping, which would violate
+    // strict time-order.
+    teamAPlayerIds = [group[0].id, group[1].id];
+    teamBPlayerIds = [group[2].id, group[3].id];
   }
 
-  // 2. Exactly one team waiting with no same-status partner — it still
-  // must be served before any winners/losers rematch, since a team that
-  // already played should never get a 2nd match while this team hasn't
-  // even had its 1st. Pair with whichever of winners/losers has been
-  // waiting longest overall (oldest queue_position across both lanes).
-  if (waitingQueue.length === 1 && allowCrossLaneFill) {
-    const winnerFront = winnersQueue[0] || null;
-    const loserFront = losersQueue[0] || null;
-    let opponent = null;
-    if (winnerFront && loserFront) {
-      opponent = (winnerFront.queue_position ?? 0) <= (loserFront.queue_position ?? 0) ? winnerFront : loserFront;
-    } else {
-      opponent = winnerFront || loserFront;
-    }
-    if (opponent) {
-      return { teamA: waitingQueue[0], teamB: opponent, lane: 'mixed' };
-    }
-    // no one in winners/losers yet either (very start of session) — this
-    // lone team just has to wait for an actual partner.
-    return null;
+  return { teamAPlayerIds, teamBPlayerIds };
+}
+
+/**
+ * Returning from rest: where in the unified pool should they land?
+ * If rest-priority is on, they jump to the FRONT (oldest became_free_at,
+ * i.e. effectively "first in line"); otherwise they go to the back (now).
+ * Returns a became_free_at timestamp, not a queue_position — the new
+ * engine orders purely by time, not by a separate position counter.
+ */
+function calculateReturnTimestamp(restPriorityEnabled, oldestKnownTimestamp) {
+  if (restPriorityEnabled && oldestKnownTimestamp) {
+    // 1ms before the oldest known became_free_at, so they sort as "first"
+    return new Date(new Date(oldestKnownTimestamp).getTime() - 1).toISOString();
   }
-
-  // 3. Waiting queue is empty — try same-lane FIFO match (winner vs winner,
-  // or loser vs loser), oldest first.
-  const lanesToTry = preferredLane === 'losers' ? ['losers', 'winners'] : ['winners', 'losers'];
-  for (const lane of lanesToTry) {
-    const queue = lane === 'winners' ? winnersQueue : losersQueue;
-    if (queue.length >= 2) {
-      return { teamA: queue[0], teamB: queue[1], lane };
-    }
-  }
-
-  if (!allowCrossLaneFill) return null;
-
-  // 4. Cross-lane fallback: front of winners vs front of losers, so an
-  // uneven head count (not divisible by 4 for doubles) doesn't stall a court.
-  const winnerFront = popFront(winnersQueue);
-  const loserFront = popFront(losersQueue);
-  if (winnerFront && loserFront) {
-    return { teamA: winnerFront, teamB: loserFront, lane: 'mixed' };
-  }
-
-  return null;
+  return new Date().toISOString();
 }
 
 function calculateReturnPosition(queueTeams, restPriorityEnabled) {
@@ -666,7 +662,7 @@ function calculateBackOfQueuePosition(queueTeams) {
   return maxPos + 1;
 }
 
-window.StackingEngine = { tiersCompatible, getTeamTier, popFront, decideNextMatch, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
+window.StackingEngine = { tiersCompatible, getTeamTier, popFront, decideNextMatchFromPool, calculateReturnTimestamp, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
 
 // ============================================================
 // TOURNAMENT ENGINE
@@ -751,96 +747,99 @@ window.TournamentEngine = { generateRoundRobinSchedule, totalRoundRobinRounds, g
 
 /**
  * Self-test: simulates a full open-play cycle at a given player count and
- * court count, verifying the CORE GUARANTEE never breaks — no team plays
- * twice while another team is still waiting for its first turn.
+ * court count, verifying the CORE GUARANTEE never breaks — no PLAYER
+ * plays a 2nd match while another player has been free LONGER and is
+ * still unmatched. This is the player-level rewrite for the unified
+ * single-pool engine (decideNextMatchFromPool) — the old version tested
+ * at the team-queue level, which no longer exists since teams are now
+ * formed fresh from individuals at match time, never persisted as pairs.
  *
  * Run from the browser console on host.html: window.testNoRepeatGuarantee(24, 2)
- * Logs PASS/FAIL plus the full round-by-round trace either way.
  */
-window.testNoRepeatGuarantee = function(playerCount = 24, courtCount = 2, matchesToSimulate = 20) {
-  const teamCount = Math.floor(playerCount / 2);
-  const teams = Array.from({ length: teamCount }, (_, i) => ({ id: `T${i + 1}` }));
-  let waitingQueue = [...teams];
-  let winnersQueue = [];
-  let losersQueue = [];
-  const playedThisCycle = new Set();
-  let cycleComplete = false;
+window.testNoRepeatGuarantee = function(playerCount = 24, courtCount = 2, matchesToSimulate = 20, teamSize = 2) {
+  // Use MINUTES as the simulation clock unit (not raw milliseconds) and
+  // give initial players a timestamp BEFORE the simulation even starts
+  // (negative offset) — this guarantees no accidental overlap between
+  // "joined before the session started" and "finished a match at t=X",
+  // which a too-small/colliding time scale could otherwise mask a real
+  // bug behind (or, as caught here, manufacture a FALSE failure from the
+  // test harness itself rather than the actual engine).
+  const MINUTE = 60 * 1000;
+  let clock = 0;
+  const pool = Array.from({ length: playerCount }, (_, i) => ({
+    id: `P${i + 1}`, became_free_at: new Date(-1 * (playerCount - i) * MINUTE).toISOString(), last_match_result: null,
+  }));
+
+  const playedCountById = {};
+  pool.forEach(p => { playedCountById[p.id] = 0; });
+
+  console.log(`%cTesting: ${playerCount} players, ${courtCount} courts, team size ${teamSize}`, 'font-weight:bold');
+
+  const courtBusyUntil = Array(courtCount).fill(0);
+  const courtCurrentMatch = Array(courtCount).fill(null); // { teamAIds, teamBIds }
+  let matchesPlayed = 0;
   let failure = null;
 
-  function removeFromAll(team) {
-    [winnersQueue, losersQueue, waitingQueue].forEach(q => {
-      const idx = q.findIndex(t => t.id === team.id);
-      if (idx >= 0) q.splice(idx, 1);
-    });
+  function getAvailablePlayers() {
+    const onCourtIds = new Set(courtCurrentMatch.filter(Boolean).flatMap(m => [...m.teamAIds, ...m.teamBIds]));
+    return pool.filter(p => !onCourtIds.has(p.id)).sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
   }
 
-  console.log(`%cTesting: ${playerCount} players, ${courtCount} courts`, 'font-weight:bold');
-
-  // Realistic model: courts are independent and asynchronous. We simulate
-  // this by giving each court a random "match duration," then processing
-  // finish events strictly in time order — one court finishing and getting
-  // refilled BEFORE another court (which started earlier) has necessarily
-  // finished yet. This is the scenario that actually matters: a fast
-  // court must never be allowed to "lap" a slower one.
-  const courtBusyUntil = Array(courtCount).fill(0);
-  const courtCurrentMatch = Array(courtCount).fill(null);
-  let clock = 0;
-  let matchesPlayed = 0;
-
-  // Fill any courts that are currently empty, using time `clock`
   function fillEmptyCourts() {
     for (let c = 0; c < courtCount; c++) {
-      if (courtCurrentMatch[c] !== null) continue; // still occupied
-      const decision = window.StackingEngine.decideNextMatch({
-        stackingMode: 'win_loss_queue', winnersQueue, losersQueue, waitingQueue, allowCrossLaneFill: true,
-      });
-      if (!decision) continue; // genuinely nothing available right now — stays idle
+      if (courtCurrentMatch[c] !== null) continue;
+      const available = getAvailablePlayers();
+      const decision = window.StackingEngine.decideNextMatchFromPool(available, teamSize);
+      if (!decision) continue;
 
-      const aFresh = !playedThisCycle.has(decision.teamA.id);
-      const bFresh = !playedThisCycle.has(decision.teamB.id);
-      // Count teams still waiting AFTER this decision's teams are accounted
-      // for — if the only "still waiting" team is the one we're about to
-      // serve, that's not a violation, that's exactly correct.
-      const decidedIds = new Set([decision.teamA.id, decision.teamB.id]);
-      const stillWaitingCount = waitingQueue.filter(t => !decidedIds.has(t.id)).length;
-      if ((!aFresh || !bFresh) && stillWaitingCount > 0) {
-        failure = `Court ${c + 1} @ t=${clock}: ${decision.teamA.id} vs ${decision.teamB.id} — a repeat team played while ${stillWaitingCount} OTHER team(s) still waiting!`;
+      const matchedIds = [...decision.teamAPlayerIds, ...decision.teamBPlayerIds];
+
+      // VIOLATION CHECK: every available player NOT selected must NOT have
+      // been free longer than every selected player — i.e. the selected
+      // group must be EXACTLY the N longest-waiting, no skipping.
+      const neededCount = teamSize * 2;
+      const expectedIds = new Set(available.slice(0, neededCount).map(p => p.id));
+      const actualIds = new Set(matchedIds);
+      const matches = expectedIds.size === actualIds.size && [...expectedIds].every(id => actualIds.has(id));
+      if (!matches) {
+        failure = `Court ${c + 1} @ t=${clock}: selected [${matchedIds.join(',')}] but the ${neededCount} longest-waiting were [${[...expectedIds].join(',')}] — someone got skipped!`;
         return;
       }
 
-      playedThisCycle.add(decision.teamA.id);
-      playedThisCycle.add(decision.teamB.id);
-      removeFromAll(decision.teamA);
-      removeFromAll(decision.teamB);
-      const duration = 5 + Math.floor(Math.random() * 15); // random match length
+      const duration = 5 + Math.floor(Math.random() * 15);
       courtBusyUntil[c] = clock + duration;
-      courtCurrentMatch[c] = decision;
-      console.log(`t=${clock} Court ${c + 1} starts: ${decision.teamA.id} vs ${decision.teamB.id} (lane: ${decision.lane}, ends t=${courtBusyUntil[c]})`);
+      courtCurrentMatch[c] = { teamAIds: decision.teamAPlayerIds, teamBIds: decision.teamBPlayerIds };
+      console.log(`t=${clock} Court ${c + 1} starts: [${decision.teamAPlayerIds.join(',')}] vs [${decision.teamBPlayerIds.join(',')}] (ends t=${courtBusyUntil[c]})`);
     }
   }
 
   fillEmptyCourts();
 
   while (matchesPlayed < matchesToSimulate && !failure) {
-    // advance clock to the NEXT court that finishes (asynchronous, not round-by-round)
     const activeCourts = courtCurrentMatch.map((m, i) => m ? i : -1).filter(i => i >= 0);
-    if (activeCourts.length === 0) break; // nothing playing and nothing fillable — stuck
+    if (activeCourts.length === 0) break;
     const nextFinishCourt = activeCourts.reduce((best, i) => courtBusyUntil[i] < courtBusyUntil[best] ? i : best, activeCourts[0]);
     clock = courtBusyUntil[nextFinishCourt];
 
     const finished = courtCurrentMatch[nextFinishCourt];
-    console.log(`t=${clock} Court ${nextFinishCourt + 1} finishes: ${finished.teamA.id} vs ${finished.teamB.id}`);
+    console.log(`t=${clock} Court ${nextFinishCourt + 1} finishes: [${finished.teamAIds.join(',')}] vs [${finished.teamBIds.join(',')}]`);
     courtCurrentMatch[nextFinishCourt] = null;
     matchesPlayed++;
 
-    // teamA always "wins" for deterministic test output
-    winnersQueue.push(finished.teamA);
-    losersQueue.push(finished.teamB);
-
-    if (playedThisCycle.size >= teamCount && !cycleComplete) {
-      console.log(`%cAll ${teamCount} teams have played at least once as of t=${clock}.`, 'color:green');
-      cycleComplete = true;
-    }
+    // teamA always "wins" for deterministic test output — every finished
+    // player rejoins the pool with a FRESH became_free_at (now) and a
+    // recorded result, exactly as applyQueuePlacement does for real.
+    const nowIso = new Date(clock).toISOString();
+    finished.teamAIds.forEach(id => {
+      const p = pool.find(pp => pp.id === id);
+      p.became_free_at = nowIso; p.last_match_result = 'won';
+      playedCountById[id]++;
+    });
+    finished.teamBIds.forEach(id => {
+      const p = pool.find(pp => pp.id === id);
+      p.became_free_at = nowIso; p.last_match_result = 'lost';
+      playedCountById[id]++;
+    });
 
     fillEmptyCourts();
   }
@@ -848,7 +847,7 @@ window.testNoRepeatGuarantee = function(playerCount = 24, courtCount = 2, matche
   if (failure) {
     console.log('%cFAIL — ' + failure, 'color:red; font-weight:bold');
   } else {
-    console.log(`%cPASS — simulated ${matchesPlayed} matches with realistic async court timing, no team ever played twice while another was still waiting.`, 'color:green; font-weight:bold');
+    console.log(`%cPASS — simulated ${matchesPlayed} matches, the matched group was ALWAYS exactly the longest-waiting players, every time.`, 'color:green; font-weight:bold');
   }
   return !failure;
 };
@@ -1145,35 +1144,14 @@ const SessionAPI = (() => {
   }
 
   async function addPlayer(sessionId, name, skillTier = 'open') {
+    // Unified pool model: a new player just needs to exist with status
+    // 'waiting' and a became_free_at timestamp (set by the DB default on
+    // insert) — they're immediately part of the single time-ordered pool.
+    // No pre-pairing into a fixed team here: teams are formed fresh only
+    // at the moment a court actually needs to be filled, from whoever has
+    // been free longest at that moment (see decideNextMatchFromPool).
     const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
     if (error) throw error;
-
-    const session = await getSession(sessionId);
-
-    // Manual mode: the host picks individual players and forms teams
-    // themselves via the court picker — no auto-pairing here at all,
-    // since that would lock players into pairs before the host gets a say.
-    if (session.open_play_mode === 'manual') {
-      return data;
-    }
-
-    // Automated / Hybrid: auto-pair into the waiting queue immediately so
-    // round-1 auto-fill actually has real team rows to pull from.
-    const teamSize = session.format === 'doubles' ? 2 : 1;
-
-    if (teamSize === 1) {
-      // singles: every player is their own team, queued immediately
-      await createTeam(sessionId, [data.id], session.pairing_default, 'waiting');
-    } else {
-      // doubles: pair with the longest-waiting OTHER unpaired player, FIFO
-      const unpaired = await getUnpairedWaitingPlayers(sessionId);
-      const partner = unpaired.find(p => p.id !== data.id);
-      if (partner) {
-        await createTeam(sessionId, [partner.id, data.id], session.pairing_default, 'waiting');
-      }
-      // if no partner yet, this player just sits unpaired until the next one joins
-    }
-
     return data;
   }
   async function getPlayers(sessionId) {
@@ -1313,10 +1291,11 @@ const SessionAPI = (() => {
   async function applyQueuePlacement(courtId, sessionId, pairingMode, winnersGroup, losersGroup) {
     const session = await getSession(sessionId);
     const isManualMode = session.open_play_mode === 'manual';
+    const now = new Date().toISOString();
 
     // Increment play count for every player who just finished this match —
-    // this is the source of truth for "wave" eligibility (no double-stacking
-    // until everyone's played the same number of times).
+    // source of truth for "wave" eligibility (no double-stacking until
+    // everyone's played the same number of times).
     const allFinishedPlayerIds = [...(winnersGroup || []), ...(losersGroup || [])];
     if (allFinishedPlayerIds.length > 0) {
       const { data: finishedPlayers } = await supabaseClient.from('players').select('id, total_games_played').in('id', allFinishedPlayerIds);
@@ -1333,26 +1312,27 @@ const SessionAPI = (() => {
     if (isManualMode) {
       // Pure Manual: finished players go back to being free INDIVIDUALS,
       // not re-paired into a team — the host explicitly re-forms teams
-      // via the court picker next time, which is the whole point of
-      // Manual mode (no pairing decision should happen without the host).
-      const allFinishedIds = [...(winnersGroup || []), ...(losersGroup || [])];
-      if (allFinishedIds.length > 0) {
-        await supabaseClient.from('players').update({ status: 'waiting' }).in('id', allFinishedIds);
+      // via the court picker next time.
+      if (allFinishedPlayerIds.length > 0) {
+        await supabaseClient.from('players').update({ status: 'waiting', became_free_at: now }).in('id', allFinishedPlayerIds);
       }
     } else {
-      // Automated / Hybrid: normal win/loss lane placement
+      // Automated / Hybrid: UNIFIED POOL — every finished player becomes
+      // an individual again (status 'waiting', a single pool, not split
+      // into separate winners_queue/losers_queue lanes that could let a
+      // winner skip ahead of someone who's been free longer). Their
+      // last_match_result is recorded purely as a soft recombination
+      // hint for decideNextMatchFromPool — it never affects ordering.
       if (winnersGroup && winnersGroup.length > 0) {
-        await createTeam(sessionId, winnersGroup, pairingMode, 'winners_queue');
-        await supabaseClient.from('players').update({ status: 'winners_queue' }).in('id', winnersGroup);
+        await supabaseClient.from('players').update({ status: 'waiting', became_free_at: now, last_match_result: 'won' }).in('id', winnersGroup);
       }
       if (losersGroup && losersGroup.length > 0) {
-        await createTeam(sessionId, losersGroup, pairingMode, 'losers_queue');
-        await supabaseClient.from('players').update({ status: 'losers_queue' }).in('id', losersGroup);
+        await supabaseClient.from('players').update({ status: 'waiting', became_free_at: now, last_match_result: 'lost' }).in('id', losersGroup);
       }
     }
 
-    // deactivate the two original teams that just finished playing — they've
-    // been replaced by the freshly-arranged groups above
+    // deactivate the team that just finished playing — open play teams
+    // are ephemeral (formed fresh per match), never reused as a fixed pair
     const { data: court } = await supabaseClient.from('courts').select('team_a_id, team_b_id').eq('id', courtId).single();
     if (court) {
       await supabaseClient.from('teams').update({ is_active: false }).in('id', [court.team_a_id, court.team_b_id]);
@@ -1398,17 +1378,29 @@ const SessionAPI = (() => {
       if (session.open_play_mode === 'manual') return null; // strictly manual — no automated fallback
     }
 
-    const [winnersQueue, losersQueue, waitingQueue] = await Promise.all([
-      getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue'),
-      getQueueLane(court.session_id, 'waiting'),
-    ]);
-    const decision = window.StackingEngine.decideNextMatch({
-      stackingMode: session.stacking_mode, winnersQueue, losersQueue, waitingQueue,
-      allowCrossLaneFill: session.allow_cross_lane_fill !== false,
-    });
+    // Unified single pool: everyone not currently playing and not left,
+    // ordered strictly by became_free_at — this IS the queue. There is
+    // no separate winners/losers lane that can skip ahead of someone
+    // who's been waiting longer.
+    const { data: pool, error: poolErr } = await supabaseClient
+      .from('players')
+      .select('id, became_free_at, last_match_result')
+      .eq('session_id', court.session_id)
+      .not('status', 'in', '("playing","left")')
+      .order('became_free_at', { ascending: true });
+    if (poolErr) throw poolErr;
+
+    const teamSize = session.format === 'doubles' ? 2 : 1;
+    const decision = window.StackingEngine.decideNextMatchFromPool(pool || [], teamSize);
     if (!decision) return null;
-    await assignCourt(courtId, decision.teamA.id, decision.teamB.id);
-    return decision;
+
+    // Teams are formed FRESH from individuals every time — open play
+    // partners are never persisted as a fixed pair between matches.
+    const teamA = await createTeam(court.session_id, decision.teamAPlayerIds, 'fixed', 'playing');
+    const teamB = await createTeam(court.session_id, decision.teamBPlayerIds, 'fixed', 'playing');
+
+    await assignCourt(courtId, teamA.id, teamB.id);
+    return { teamA, teamB, lane: 'pool' };
   }
 
   // ============================================================
@@ -2174,34 +2166,12 @@ async function handleRemovePlayer(playerId) {
  * waiting), since the actual mechanics are identical.
  */
 async function handleReturnToWaiting(playerId) {
-  await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', playerId);
-
-  // Manual mode: same rule as addPlayer — no auto-pairing, the host forms
-  // teams explicitly via the court picker. Without this check, a player
-  // returning would get silently auto-paired, contradicting Manual
-  // mode's entire premise.
-  if (activeSession.open_play_mode === 'manual') {
-    document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
-    return;
-  }
-
-  // Automated / Hybrid: re-pair into the waiting queue, same logic as a
-  // brand-new player joining — otherwise they'd show "waiting" in the
-  // roster but have no team, so the auto-fill engine could never actually
-  // queue them back up.
-  const session = activeSession;
-  const teamSize = session.format === 'doubles' ? 2 : 1;
-  if (teamSize === 1) {
-    await SessionAPI.createTeam(activeSession.id, [playerId], session.pairing_default, 'waiting');
-  } else {
-    const unpaired = await SessionAPI.getUnpairedWaitingPlayers(activeSession.id);
-    const partner = unpaired.find(p => p.id !== playerId);
-    if (partner) {
-      await SessionAPI.createTeam(activeSession.id, [partner.id, playerId], session.pairing_default, 'waiting');
-    }
-    // if no partner is available yet, they sit unpaired until the next one returns/joins
-  }
-
+  // Unified pool model: bringing someone back just means rejoining the
+  // single time-ordered pool with a FRESH became_free_at — this is what
+  // puts them at the back of the line, exactly as intended. No team
+  // pre-pairing needed; teams are formed fresh only when a court actually
+  // needs filling (see decideNextMatchFromPool).
+  await supabaseClient.from('players').update({ status: 'waiting', became_free_at: new Date().toISOString() }).eq('id', playerId);
   document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
 }
 
@@ -2778,10 +2748,9 @@ function closeCourtPickerModal() {
 }
 
 async function automatedModeCourtsHtml() {
-  const [courts, players, unpaired] = await Promise.all([
+  const [courts, players] = await Promise.all([
     SessionAPI.getCourts(activeSession.id),
     SessionAPI.getPlayers(activeSession.id),
-    SessionAPI.getUnpairedWaitingPlayers(activeSession.id),
   ]);
 
   // Automated / Hybrid: the moment a court is open, immediately try to
@@ -2811,9 +2780,14 @@ async function automatedModeCourtsHtml() {
     ? `<div class="card" style="background:color-mix(in srgb, var(--waiting-blue) 15%, var(--surface));"><p style="font-size:12px;margin:0;">💡 Hybrid mode — matches auto-pair by default. Tap any court (playing or open) to set or override its matchup.</p></div>`
     : '';
 
+  // Unified pool: everyone with status 'waiting' is in the single
+  // time-ordered line, regardless of count parity — no "needs a partner"
+  // concept anymore since teams are formed fresh per match, not pre-paired.
+  const waitingCount = players.filter(p => p.status === 'waiting').length;
+
   return `
     ${hybridHint}
-    ${unpaired.length > 0 ? `<div class="card" style="background:color-mix(in srgb, var(--accent) 15%, var(--surface));"><p style="font-size:12px;margin:0;">⏳ <strong>${unpaired.map(p => escapeHtml(p.name)).join(', ')}</strong> still waiting for a partner to be added.</p></div>` : ''}
+    ${waitingCount > 0 ? `<div class="card" style="background:color-mix(in srgb, var(--accent) 15%, var(--surface));"><p style="font-size:12px;margin:0;">🎾 <strong>${waitingCount}</strong> player${waitingCount === 1 ? '' : 's'} in the queue, waiting for a court.</p></div>` : ''}
     <div class="courts-host-grid">${courtCards}</div>
   `;
 }
