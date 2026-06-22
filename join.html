@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iStackyyy — Join Session</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
+:root {
+  --bg: #080b12;
+  --glass-bg: rgba(255,255,255,0.055);
+  --glass-border: rgba(255,255,255,0.10);
+  --glass-highlight: rgba(255,255,255,0.18);
+
+  --ink: #f0f4f8;
+  --ink-muted: rgba(240,244,248,0.55);
+  --ink-dim: rgba(240,244,248,0.32);
+
+  /* Gradient stops — pickleball neon meets court sport dark */
+  --g1: #d7f23d;   /* iStackyyy accent yellow-green */
+  --g2: #00f2a0;   /* success teal */
+  --g3: #4facfe;   /* electric blue */
+  --g4: #a78bfa;   /* soft violet */
+  --g5: #f472b6;   /* hot pink */
+
+  --orb-a: rgba(215,242,61,0.22);
+  --orb-b: rgba(79,172,254,0.18);
+  --orb-c: rgba(244,114,182,0.14);
+  --orb-d: rgba(167,139,250,0.16);
+
+  --success: #00f2a0;
+  --error: #ff6b6b;
+  --idle: rgba(255,255,255,0.25);
+
+  --font-display: 'Archivo Black', 'Arial Black', sans-serif;
+  --font-body: 'Inter', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-settle: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-sharp: cubic-bezier(0.22, 0.68, 0.36, 1);
+  --radius-card: 24px;
+  --radius-btn: 14px;
+  --radius-input: 12px;
+}
+
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; padding: 0;
+  width: 100%; min-height: 100%;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+::selection { background: var(--g1); color: #080b12; }
+:focus-visible { outline: 2px solid var(--g1); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ============================================================
+   CANVAS LAYER (particles)
+   ============================================================ */
+#particle-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ============================================================
+   ORBS
+   ============================================================ */
+.orbs {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  will-change: transform;
+}
+.orb-a {
+  width: 600px; height: 600px;
+  top: -200px; left: -150px;
+  background: radial-gradient(circle, var(--orb-a) 0%, transparent 70%);
+  animation: float-a 14s ease-in-out infinite;
+}
+.orb-b {
+  width: 500px; height: 500px;
+  top: 30%; right: -120px;
+  background: radial-gradient(circle, var(--orb-b) 0%, transparent 70%);
+  animation: float-b 18s ease-in-out infinite;
+}
+.orb-c {
+  width: 450px; height: 450px;
+  bottom: -100px; left: 20%;
+  background: radial-gradient(circle, var(--orb-c) 0%, transparent 70%);
+  animation: float-c 12s ease-in-out infinite;
+}
+.orb-d {
+  width: 350px; height: 350px;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--orb-d) 0%, transparent 70%);
+  animation: float-d 22s ease-in-out infinite;
+}
+
+@keyframes float-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(60px, 80px) scale(1.06); }
+  66%       { transform: translate(-40px, 40px) scale(0.96); }
+}
+@keyframes float-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25%       { transform: translate(-80px, -60px) scale(1.08); }
+  75%       { transform: translate(40px, 80px) scale(0.94); }
+}
+@keyframes float-c {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%       { transform: translate(80px, -60px) scale(1.1); }
+}
+@keyframes float-d {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  40%       { transform: translate(calc(-50% + 50px), calc(-50% - 40px)) scale(1.12); }
+  70%       { transform: translate(calc(-50% - 30px), calc(-50% + 60px)) scale(0.92); }
+}
+
+/* ============================================================
+   NOISE OVERLAY
+   ============================================================ */
+.noise {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+/* ============================================================
+   PAGE LAYOUT
+   ============================================================ */
+.page {
+  position: relative;
+  z-index: 10;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+
+/* ============================================================
+   CARD
+   ============================================================ */
+.card {
+  width: 100%;
+  max-width: 480px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  padding: 44px 40px 40px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04) inset,
+    0 32px 80px rgba(0,0,0,0.55),
+    0 8px 32px rgba(0,0,0,0.35);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  position: relative;
+  overflow: hidden;
+
+  /* Entrance */
+  opacity: 0;
+  transform: translateY(24px) scale(0.96);
+  animation: card-in 700ms var(--ease-settle) 200ms both;
+}
+
+/* Rotating border glow */
+.card::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: calc(var(--radius-card) + 2px);
+  background: conic-gradient(
+    from var(--glow-angle, 0deg),
+    transparent 0deg,
+    var(--g1) 60deg,
+    var(--g3) 120deg,
+    var(--g4) 180deg,
+    var(--g5) 240deg,
+    transparent 300deg
+  );
+  z-index: -1;
+  opacity: 0.55;
+  animation: rotate-glow 6s linear infinite;
+}
+
+/* Inner glass highlight top edge */
+.card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 12%; right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-highlight) 30%, var(--glass-highlight) 70%, transparent);
+  border-radius: 50%;
+}
+
+/* Breathing pulse */
+@keyframes card-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset, 0 32px 80px rgba(0,0,0,0.55), 0 8px 32px rgba(0,0,0,0.35); }
+  50%       { box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset, 0 40px 100px rgba(0,0,0,0.60), 0 12px 48px rgba(0,0,0,0.40), 0 0 60px rgba(215,242,61,0.06); }
+}
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(24px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes rotate-glow {
+  from { --glow-angle: 0deg; }
+  to   { --glow-angle: 360deg; }
+}
+@property --glow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* ============================================================
+   BRANDING
+   ============================================================ */
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+
+  opacity: 0;
+  transform: translateY(12px);
+  animation: fade-up 500ms var(--ease-settle) 400ms both;
+}
+
+.brand-icon {
+  width: 40px; height: 40px;
+  background: linear-gradient(135deg, var(--g1), var(--g2));
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(215,242,61,0.35);
+}
+.brand-icon svg { width: 22px; height: 22px; }
+
+.brand-title {
+  font-family: var(--font-display);
+  font-size: clamp(26px, 5vw, 34px);
+  letter-spacing: -0.01em;
+  line-height: 1;
+  background: linear-gradient(90deg, var(--g1) 0%, var(--g2) 35%, var(--g3) 65%, var(--g4) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  background-size: 200% auto;
+  animation: gradient-shift 4s linear infinite;
+  position: relative;
+}
+
+.cursor-blink {
+  display: inline-block;
+  width: 3px;
+  height: 1em;
+  background: var(--g1);
+  margin-left: 3px;
+  border-radius: 2px;
+  vertical-align: middle;
+  animation: cursor-blink 1s step-end infinite;
+  -webkit-text-fill-color: var(--g1);
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% center; }
+  100% { background-position: 200% center; }
+}
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding-left: 4px;
+  border-left: 2px solid var(--g1);
+  margin-left: 2px;
+
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fade-up 500ms var(--ease-settle) 520ms both;
+}
+
+/* ============================================================
+   DIVIDER
+   ============================================================ */
+.divider {
+  height: 1px;
+  margin: 28px 0;
+  background: linear-gradient(90deg, transparent, var(--glass-border) 20%, var(--glass-border) 80%, transparent);
+
+  opacity: 0;
+  animation: fade-up 400ms var(--ease-settle) 600ms both;
+}
+
+/* ============================================================
+   STATUS SECTION
+   ============================================================ */
+.status-section {
+  margin-bottom: 28px;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fade-up 500ms var(--ease-settle) 650ms both;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.status-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--idle);
+  flex-shrink: 0;
+  transition: background 400ms var(--ease-settle), box-shadow 400ms var(--ease-settle);
+  position: relative;
+}
+.status-dot.active {
+  background: var(--success);
+  box-shadow: 0 0 0 0 rgba(0,242,160,0.5);
+  animation: pulse-dot 1.8s ease-out infinite;
+}
+.status-dot.error {
+  background: var(--error);
+  box-shadow: 0 0 0 0 rgba(255,107,107,0.5);
+  animation: pulse-dot-err 1.8s ease-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%   { box-shadow: 0 0 0 0 rgba(0,242,160,0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(0,242,160,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,242,160,0); }
+}
+@keyframes pulse-dot-err {
+  0%   { box-shadow: 0 0 0 0 rgba(255,107,107,0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(255,107,107,0); }
+  100% { box-shadow: 0 0 0 0 rgba(255,107,107,0); }
+}
+
+.status-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  transition: color 400ms;
+}
+
+.session-id-display {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  transition: background 200ms, border-color 200ms;
+  min-height: 44px;
+  overflow: hidden;
+}
+.session-id-display:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.18); }
+.session-id-display:active { background: rgba(255,255,255,0.10); }
+
+.session-id-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 300ms;
+}
+.session-id-text.loaded { color: var(--ink); }
+
+/* Shimmer on the placeholder */
+.shimmer-wrap {
+  display: inline-block;
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.08) 0%,
+    rgba(255,255,255,0.18) 40%,
+    rgba(255,255,255,0.08) 80%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer-text 2s linear infinite;
+}
+@keyframes shimmer-text {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.copy-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  color: var(--ink-dim);
+  transition: color 200ms, background 200ms;
+  flex-shrink: 0;
+  min-height: 28px;
+}
+.copy-btn:hover { color: var(--g1); background: rgba(215,242,61,0.10); }
+.copy-btn svg { width: 15px; height: 15px; }
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+.input-section {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fade-up 500ms var(--ease-settle) 750ms both;
+}
+
+.input-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 8px;
+}
+
+.input-wrap {
+  position: relative;
+}
+
+.session-input {
+  width: 100%;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-input);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 13px 16px 13px 42px;
+  outline: none;
+  transition: background 200ms, border-color 250ms, box-shadow 250ms;
+  min-height: 48px;
+  letter-spacing: 0.03em;
+}
+.session-input::placeholder { color: var(--ink-dim); font-family: var(--font-body); letter-spacing: 0; }
+.session-input:focus {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(215,242,61,0.5);
+  box-shadow: 0 0 0 3px rgba(215,242,61,0.12), 0 0 20px rgba(215,242,61,0.08);
+}
+
+.input-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-dim);
+  pointer-events: none;
+  transition: color 250ms;
+}
+.input-wrap:focus-within .input-icon { color: var(--g1); }
+
+/* Animated focus underline */
+.input-underline {
+  position: absolute;
+  bottom: 0; left: 50%; right: 50%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--g1), var(--g2));
+  border-radius: 0 0 4px 4px;
+  transition: left 300ms var(--ease-settle), right 300ms var(--ease-settle);
+  overflow: hidden;
+}
+.input-wrap:focus-within .input-underline { left: 0; right: 0; }
+
+/* ============================================================
+   QUICK-PASTE CHIP
+   ============================================================ */
+.chips-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 200ms, border-color 200ms, color 200ms, transform 200ms var(--ease-spring);
+  min-height: 32px;
+}
+.chip:hover {
+  background: rgba(215,242,61,0.10);
+  border-color: rgba(215,242,61,0.35);
+  color: var(--g1);
+  transform: translateY(-2px);
+}
+.chip:active { transform: scale(0.95); }
+.chip svg { width: 13px; height: 13px; }
+
+/* ============================================================
+   CONNECT BUTTON
+   ============================================================ */
+.btn-section {
+  margin-top: 24px;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fade-up 500ms var(--ease-settle) 850ms both;
+}
+
+.connect-btn {
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: var(--radius-btn);
+  padding: 16px 24px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  color: #080b12;
+  background: linear-gradient(90deg, var(--g1) 0%, var(--g2) 50%, var(--g3) 100%);
+  background-size: 200% auto;
+  transition: background-position 400ms var(--ease-settle), transform 200ms var(--ease-spring), box-shadow 300ms var(--ease-settle);
+  box-shadow: 0 4px 24px rgba(215,242,61,0.30);
+  min-height: 54px;
+}
+.connect-btn:hover {
+  background-position: right center;
+  transform: scale(1.02) translateY(-1px);
+  box-shadow: 0 8px 40px rgba(215,242,61,0.45), 0 4px 16px rgba(0,242,160,0.25);
+}
+.connect-btn:active { transform: scale(0.98); }
+.connect-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.connect-btn .btn-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Ripple */
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.35);
+  transform: scale(0);
+  animation: ripple-out 600ms linear;
+  pointer-events: none;
+}
+@keyframes ripple-out {
+  to { transform: scale(4); opacity: 0; }
+}
+
+/* Loading spinner inside button */
+.btn-spinner {
+  width: 18px; height: 18px;
+  border: 2.5px solid rgba(0,0,0,0.25);
+  border-top-color: #080b12;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+  display: none;
+}
+.connect-btn.loading .btn-spinner { display: block; }
+.connect-btn.loading .btn-text { display: none; }
+.connect-btn.loading .btn-arrow { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ============================================================
+   FOOTER LINK
+   ============================================================ */
+.footer-hint {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-dim);
+  opacity: 0;
+  animation: fade-up 400ms var(--ease-settle) 1000ms both;
+}
+.footer-hint a {
+  color: var(--ink-muted);
+  text-decoration: none;
+  border-bottom: 1px solid var(--glass-border);
+  transition: color 200ms, border-color 200ms;
+}
+.footer-hint a:hover { color: var(--g1); border-color: var(--g1); }
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+.toast-container {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  background: rgba(20,24,32,0.95);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(16px);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  animation: toast-in 300ms var(--ease-spring) both;
+}
+.toast.success { border-color: rgba(0,242,160,0.35); }
+.toast.success .toast-icon { color: var(--success); }
+.toast.error { border-color: rgba(255,107,107,0.35); }
+.toast.error .toast-icon { color: var(--error); }
+.toast.info .toast-icon { color: var(--g3); }
+.toast-out { animation: toast-out 300ms var(--ease-sharp) both; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.9); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(12px) scale(0.9); }
+}
+
+/* ============================================================
+   CONFETTI (sparkles)
+   ============================================================ */
+.confetti-piece {
+  position: fixed;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 200;
+  animation: confetti-fall var(--duration) ease-in var(--delay) both;
+}
+@keyframes confetti-fall {
+  0%   { transform: translate(var(--x0), var(--y0)) rotate(0deg) scale(1); opacity: 1; }
+  100% { transform: translate(var(--x1), var(--y1)) rotate(var(--rot)) scale(0); opacity: 0; }
+}
+
+/* ============================================================
+   UTILITY ANIMATIONS
+   ============================================================ */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   PARALLAX CHILDREN (shifted by JS)
+   ============================================================ */
+.parallax-slow  { transition: transform 120ms linear; }
+.parallax-med   { transition: transform 80ms linear; }
+.parallax-fast  { transition: transform 50ms linear; }
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 520px) {
+  .card { padding: 36px 24px 32px; }
+  .brand-title { font-size: 28px; }
+}
+@media (max-width: 380px) {
+  .card { padding: 28px 18px 24px; border-radius: 18px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Particle canvas -->
+<canvas id="particle-canvas"></canvas>
+
+<!-- Ambient orbs -->
+<div class="orbs" aria-hidden="true">
+  <div class="orb orb-a"></div>
+  <div class="orb orb-b"></div>
+  <div class="orb orb-c"></div>
+  <div class="orb orb-d"></div>
+</div>
+
+<!-- Noise texture -->
+<div class="noise" aria-hidden="true"></div>
+
+<!-- Main content -->
+<main class="page" id="page">
+  <div class="card" id="card" role="main">
+
+    <!-- Brand -->
+    <div class="brand-row parallax-slow" id="brandRow">
+      <div class="brand-icon" aria-hidden="true">
+        <!-- Pickleball paddle silhouette -->
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M13.5 3C10.46 3 8 5.46 8 8.5c0 1.74.8 3.29 2.05 4.33L5 17.88 6.12 19l5.05-5.05c.99.79 2.23 1.26 3.58 1.26C17.75 15.21 20 12.75 20 9.71 20 5.99 17.09 3 13.5 3z" fill="#080b12" opacity="0.9"/>
+          <circle cx="11" cy="8" r="1.1" fill="#080b12" opacity="0.7"/>
+          <circle cx="14" cy="7" r="1.1" fill="#080b12" opacity="0.7"/>
+          <circle cx="16" cy="10" r="1.1" fill="#080b12" opacity="0.7"/>
+          <circle cx="13" cy="11" r="1.1" fill="#080b12" opacity="0.7"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title" aria-label="iStackyyy">ISTACKYY<span class="cursor-blink" aria-hidden="true"></span></h1>
+      </div>
+    </div>
+
+    <p class="subtitle parallax-slow">Session Manager</p>
+
+    <div class="divider" aria-hidden="true"></div>
+
+    <!-- Session Status -->
+    <div class="status-section parallax-med" id="statusSection">
+      <div class="status-row">
+        <div class="status-dot" id="statusDot" role="status" aria-label="Connection status: no session loaded"></div>
+        <span class="status-label" id="statusLabel">No Session Loaded</span>
+      </div>
+      <div class="session-id-display" id="sessionIdDisplay" title="Click to copy session ID" role="button" tabindex="0" aria-label="Session ID — click to copy">
+        <span class="session-id-text" id="sessionIdText">
+          <span class="shimmer-wrap">Paste a session ID to get started</span>
+        </span>
+        <button class="copy-btn" id="copyBtn" title="Copy session ID" aria-label="Copy session ID" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-section parallax-med" id="inputSection">
+      <label class="input-label" for="sessionInput">Enter Session ID</label>
+      <div class="input-wrap">
+        <span class="input-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+          </svg>
+        </span>
+        <input
+          type="text"
+          id="sessionInput"
+          class="session-input"
+          placeholder="e.g. abc123-xyz"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          aria-label="Session ID"
+        >
+        <div class="input-underline" aria-hidden="true"></div>
+      </div>
+      <!-- Quick actions -->
+      <div class="chips-row">
+        <button class="chip" id="pasteChip" type="button" aria-label="Paste from clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/>
+          </svg>
+          Paste
+        </button>
+        <button class="chip" id="clearChip" type="button" aria-label="Clear input">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          Clear
+        </button>
+      </div>
+    </div>
+
+    <!-- Connect Button -->
+    <div class="btn-section parallax-fast" id="btnSection">
+      <button class="connect-btn" id="connectBtn" type="button" aria-label="Connect to session">
+        <!-- Ripple target -->
+        <div class="btn-inner">
+          <div class="btn-spinner" aria-hidden="true"></div>
+          <span class="btn-text">Connect to Session</span>
+          <svg class="btn-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </div>
+      </button>
+    </div>
+
+    <p class="footer-hint">
+      Got a link from your host? <a href="#" id="urlParamHint">It'll auto-load</a> — just follow the URL.
+    </p>
+
+  </div>
+</main>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+/* ============================================================
+   PARTICLE NETWORK
+   ============================================================ */
+(function() {
+  const canvas = document.getElementById('particle-canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H, dpr, particles, mouse = {x: -9999, y: -9999};
+  const COUNT = 90;
+  const MAX_DIST = 130;
+  const PARTICLE_SPEED = 0.35;
+  const MOUSE_RADIUS = 120;
+  const MOUSE_FORCE = 2.2;
+
+  const COLORS = ['#d7f23d','#00f2a0','#4facfe','#a78bfa','#f472b6'];
+
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = canvas.offsetWidth;
+    H = canvas.offsetHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function Particle() {
+    this.reset();
+  }
+  Particle.prototype.reset = function() {
+    this.x = Math.random() * W;
+    this.y = Math.random() * H;
+    this.vx = (Math.random() - 0.5) * PARTICLE_SPEED * 2;
+    this.vy = (Math.random() - 0.5) * PARTICLE_SPEED * 2;
+    this.r = Math.random() * 2 + 1;
+    this.color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    this.alpha = Math.random() * 0.5 + 0.2;
+  };
+  Particle.prototype.update = function() {
+    // Mouse attraction/repulsion
+    const dx = this.x - mouse.x;
+    const dy = this.y - mouse.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < MOUSE_RADIUS && dist > 0) {
+      const force = (MOUSE_RADIUS - dist) / MOUSE_RADIUS * MOUSE_FORCE;
+      // Repulsion
+      this.vx += (dx / dist) * force * 0.015;
+      this.vy += (dy / dist) * force * 0.015;
+    }
+    // Dampen
+    this.vx *= 0.995;
+    this.vy *= 0.995;
+    // Clamp speed
+    const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+    if (speed > PARTICLE_SPEED * 4) {
+      this.vx = (this.vx/speed) * PARTICLE_SPEED * 4;
+      this.vy = (this.vy/speed) * PARTICLE_SPEED * 4;
+    }
+    this.x += this.vx;
+    this.y += this.vy;
+    // Bounce on edges
+    if (this.x < 0) { this.x = 0; this.vx *= -1; }
+    if (this.x > W) { this.x = W; this.vx *= -1; }
+    if (this.y < 0) { this.y = 0; this.vy *= -1; }
+    if (this.y > H) { this.y = H; this.vy *= -1; }
+  };
+
+  function init() {
+    resize();
+    particles = Array.from({length: COUNT}, () => new Particle());
+  }
+
+  let raf;
+  function loop() {
+    ctx.clearRect(0, 0, W, H);
+    // Update
+    particles.forEach(p => p.update());
+    // Draw connections
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i+1; j < particles.length; j++) {
+        const a = particles[i], b = particles[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < MAX_DIST) {
+          const alpha = (1 - dist/MAX_DIST) * 0.12;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.strokeStyle = `rgba(215,242,61,${alpha})`;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+      }
+    }
+    // Draw particles
+    particles.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = p.alpha;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+    raf = requestAnimationFrame(loop);
+  }
+
+  // Debounced resize
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { resize(); }, 200);
+  });
+
+  // Mouse tracking
+  window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+  });
+  window.addEventListener('mouseleave', () => {
+    mouse.x = -9999; mouse.y = -9999;
+  });
+  window.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    mouse.x = t.clientX;
+    mouse.y = t.clientY;
+  }, {passive: true});
+
+  init();
+  loop();
+})();
+
+/* ============================================================
+   MOUSE PARALLAX
+   ============================================================ */
+(function() {
+  const page = document.getElementById('page');
+  const slow  = document.querySelectorAll('.parallax-slow');
+  const med   = document.querySelectorAll('.parallax-med');
+  const fast  = document.querySelectorAll('.parallax-fast');
+  let cx = 0, cy = 0, tx = 0, ty = 0;
+
+  window.addEventListener('mousemove', e => {
+    const rx = (e.clientX / window.innerWidth  - 0.5) * 2;
+    const ry = (e.clientY / window.innerHeight - 0.5) * 2;
+    tx = rx; ty = ry;
+  });
+
+  function tick() {
+    cx += (tx - cx) * 0.08;
+    cy += (ty - cy) * 0.08;
+    slow.forEach(el => { el.style.transform = `translate(${cx * -5}px, ${cy * -5}px)`; });
+    med.forEach(el  => { el.style.transform = `translate(${cx * -9}px, ${cy * -9}px)`; });
+    fast.forEach(el => { el.style.transform = `translate(${cx * -14}px, ${cy * -14}px)`; });
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+
+/* ============================================================
+   SESSION STATE
+   ============================================================ */
+const state = {
+  sessionId: null,
+  connected: false,
+  error: null,
+};
+
+const input       = document.getElementById('sessionInput');
+const connectBtn  = document.getElementById('connectBtn');
+const statusDot   = document.getElementById('statusDot');
+const statusLabel = document.getElementById('statusLabel');
+const sessionIdDisplay = document.getElementById('sessionIdDisplay');
+const sessionIdText    = document.getElementById('sessionIdText');
+const copyBtn     = document.getElementById('copyBtn');
+const pasteChip   = document.getElementById('pasteChip');
+const clearChip   = document.getElementById('clearChip');
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+function showToast(msg, type = 'info', duration = 2800) {
+  const icons = {
+    success: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+    error:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+    info:    `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  };
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span class="toast-icon">${icons[type]||icons.info}</span>${msg}`;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => {
+    el.classList.add('toast-out');
+    el.addEventListener('animationend', () => el.remove(), {once:true});
+  }, duration);
+}
+
+/* ============================================================
+   RIPPLE EFFECT
+   ============================================================ */
+function createRipple(btn, e) {
+  const rect = btn.getBoundingClientRect();
+  const x = e ? e.clientX - rect.left : rect.width / 2;
+  const y = e ? e.clientY - rect.top  : rect.height / 2;
+  const ripple = document.createElement('span');
+  ripple.className = 'ripple';
+  const size = Math.max(rect.width, rect.height) * 2;
+  ripple.style.cssText = `width:${size}px;height:${size}px;left:${x - size/2}px;top:${y - size/2}px`;
+  btn.appendChild(ripple);
+  ripple.addEventListener('animationend', () => ripple.remove(), {once:true});
+}
+
+/* ============================================================
+   CONFETTI BURST
+   ============================================================ */
+function launchConfetti(originX, originY) {
+  const colors = ['#d7f23d','#00f2a0','#4facfe','#a78bfa','#f472b6','#ffffff'];
+  const count = 48;
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'confetti-piece';
+    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.8;
+    const dist  = 80 + Math.random() * 180;
+    const dx = Math.cos(angle) * dist;
+    const dy = Math.sin(angle) * dist - (Math.random() * 60);
+    const rot  = (Math.random() - 0.5) * 720;
+    const dur  = 600 + Math.random() * 600;
+    const delay = Math.random() * 120;
+    el.style.cssText = `
+      left:${originX}px; top:${originY}px;
+      background:${colors[Math.floor(Math.random()*colors.length)]};
+      --x0:0px; --y0:0px;
+      --x1:${dx}px; --y1:${dy + 80}px;
+      --rot:${rot}deg;
+      --duration:${dur}ms;
+      --delay:${delay}ms;
+      border-radius:${Math.random() > 0.5 ? '50%' : '2px'};
+    `;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), dur + delay + 100);
+  }
+}
+
+/* ============================================================
+   STATUS UPDATE
+   ============================================================ */
+function setStatus(type, id) {
+  // type: 'idle' | 'active' | 'error'
+  statusDot.className = 'status-dot' + (type !== 'idle' ? ` ${type}` : '');
+
+  if (type === 'active' && id) {
+    statusLabel.textContent = 'Session Active';
+    statusDot.setAttribute('aria-label', 'Connection status: session active');
+
+    // Animate the session ID in (flip-like scale morph)
+    sessionIdText.style.transition = 'none';
+    sessionIdText.style.transform = 'scaleX(0.9)';
+    sessionIdText.style.opacity = '0';
+    sessionIdText.innerHTML = `<span style="color:var(--ink);font-family:var(--font-mono)">${escapeHtml(id)}</span>`;
+    requestAnimationFrame(() => {
+      sessionIdText.style.transition = 'transform 400ms cubic-bezier(0.16,1,0.3,1), opacity 300ms';
+      sessionIdText.style.transform = 'scaleX(1)';
+      sessionIdText.style.opacity = '1';
+    });
+
+    copyBtn.style.display = 'flex';
+    sessionIdDisplay.setAttribute('title', 'Click to copy: ' + id);
+
+  } else if (type === 'error') {
+    statusLabel.textContent = 'Session Not Found';
+    statusDot.setAttribute('aria-label', 'Connection status: error');
+    sessionIdText.innerHTML = `<span class="shimmer-wrap" style="color:var(--error)">Could not load session</span>`;
+    copyBtn.style.display = 'none';
+  } else {
+    statusLabel.textContent = 'No Session Loaded';
+    statusDot.setAttribute('aria-label', 'Connection status: no session loaded');
+    sessionIdText.innerHTML = `<span class="shimmer-wrap">Paste a session ID to get started</span>`;
+    copyBtn.style.display = 'none';
+  }
+}
+
+/* ============================================================
+   CONNECT LOGIC
+   ============================================================ */
+async function connectSession() {
+  const raw = input.value.trim();
+  if (!raw) {
+    input.focus();
+    showToast('Enter a session ID first', 'info');
+    input.animate([{transform:'translateX(-6px)'},{transform:'translateX(6px)'},{transform:'translateX(0)'}],
+      {duration:300, iterations:2, easing:'ease-in-out'});
+    return;
+  }
+
+  connectBtn.classList.add('loading');
+  connectBtn.disabled = true;
+
+  try {
+    // Simulate async session lookup (replace with real Supabase call)
+    await new Promise(r => setTimeout(r, 1100));
+
+    // ── In production, replace the above with:
+    // const { data, error } = await supabaseClient
+    //   .from('sessions')
+    //   .select('id, name')
+    //   .eq('id', raw)
+    //   .single();
+    // if (error || !data) throw new Error('Not found');
+    //
+    // Then redirect: window.location.href = `index.html?session=${raw}`;
+
+    // Demo: treat any non-empty input as valid
+    const isValid = raw.length >= 3;
+
+    if (!isValid) throw new Error('Invalid session ID');
+
+    state.sessionId = raw;
+    state.connected = true;
+
+    setStatus('active', raw);
+
+    // Confetti!
+    const btnRect = connectBtn.getBoundingClientRect();
+    launchConfetti(btnRect.left + btnRect.width/2, btnRect.top + btnRect.height/2);
+
+    showToast('Session connected!', 'success');
+
+    // Brief delay then redirect to the main board
+    setTimeout(() => {
+      window.location.href = `index.html?session=${encodeURIComponent(raw)}`;
+    }, 1400);
+
+  } catch (err) {
+    state.connected = false;
+    setStatus('error', null);
+    showToast('Session not found. Check the ID and try again.', 'error');
+    connectBtn.classList.remove('loading');
+    connectBtn.disabled = false;
+  }
+}
+
+/* ============================================================
+   EVENT LISTENERS
+   ============================================================ */
+connectBtn.addEventListener('click', function(e) {
+  createRipple(this, e);
+  connectSession();
+});
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter') connectSession();
+});
+
+input.addEventListener('input', () => {
+  // Reset status to idle when user modifies input
+  if (state.connected) {
+    state.connected = false;
+    setStatus('idle', null);
+  }
+});
+
+// Paste chip
+pasteChip.addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      input.value = text.trim();
+      input.focus();
+      // Bounce animation
+      pasteChip.animate(
+        [{transform:'scale(1)'},{transform:'scale(0.9) translateY(2px)'},{transform:'scale(1.1) translateY(-3px)'},{transform:'scale(1)'}],
+        {duration:400, easing:'cubic-bezier(0.34,1.56,0.64,1)'}
+      );
+      showToast('Pasted from clipboard', 'info', 1800);
+    }
+  } catch {
+    showToast('Allow clipboard access to paste', 'error', 2000);
+  }
+});
+
+// Clear chip
+clearChip.addEventListener('click', () => {
+  input.value = '';
+  input.focus();
+  setStatus('idle', null);
+  state.connected = false;
+});
+
+// Copy session ID
+function copySessionId() {
+  if (!state.sessionId) return;
+  navigator.clipboard.writeText(state.sessionId)
+    .then(() => showToast('Session ID copied!', 'success', 1800))
+    .catch(() => showToast('Could not copy', 'error'));
+}
+copyBtn.addEventListener('click', e => { e.stopPropagation(); copySessionId(); });
+sessionIdDisplay.addEventListener('click', () => { if(state.connected) copySessionId(); });
+sessionIdDisplay.addEventListener('keydown', e => { if(e.key==='Enter'||e.key===' ') copySessionId(); });
+
+/* ============================================================
+   URL PARAM AUTO-LOAD
+   ============================================================ */
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('session') || params.get('s');
+  if (id) {
+    input.value = id;
+    // Auto-connect after entrance animations settle
+    setTimeout(connectSession, 900);
+  }
+})();
+
+/* ============================================================
+   CARD BREATHING (subtle scale pulse, CSS can't target this
+   specifically enough so we drive it in JS)
+   ============================================================ */
+(function() {
+  const card = document.getElementById('card');
+  // Start breathing after entrance animation
+  setTimeout(() => {
+    card.style.animation = 'card-in 700ms var(--ease-settle) 200ms both, card-breathe 5s ease-in-out 1s infinite';
+  }, 900);
+})();
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
