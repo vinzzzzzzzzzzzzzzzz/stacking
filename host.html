@@ -1482,12 +1482,6 @@ async function selectWinner(winnerTeamId) {
   await showLoserScoreModal();
 }
 
-/**
- * Score entry — winner always gets 11 (auto-filled, read-only).
- * Host only enters the LOSING team's score (0–10).
- * Deuce rule: if loser reached 10, winner actually wins 12–10
- * (i.e. loserScore + 2). The UI shows this dynamically.
- */
 async function showLoserScoreModal() {
   const players = await SessionAPI.getPlayers(activeSession.id);
   const winnerTeam = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
@@ -1500,22 +1494,22 @@ async function showLoserScoreModal() {
   document.getElementById('resultModal').innerHTML = `
     <div class="modal-box">
       <h2>Enter Score</h2>
-      <p class="modal-sub">Court ${resultFlowCourt.court_number} — winner is fixed at 11 (or +2 if deuce).</p>
+      <p class="modal-sub">Court ${resultFlowCourt.court_number} — enter the losing team's score. Winner is auto-calculated.</p>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0;">
         <div style="text-align:center;">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--winner-green);margin-bottom:6px;">🏆 Winner</div>
           <div style="font-size:13px;font-weight:700;margin-bottom:10px;min-height:36px;">${escapeHtml(winnerNames)}</div>
           <div id="winnerScoreDisplay" style="font-family:var(--font-mono);font-size:40px;font-weight:800;color:var(--winner-green);line-height:1;">11</div>
-          <div style="font-size:10px;color:var(--resting-slate);margin-top:4px;" id="deuceNote"></div>
+          <div style="font-size:10px;color:var(--accent);font-weight:700;margin-top:4px;min-height:14px;" id="deuceNote"></div>
         </div>
         <div style="text-align:center;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--loser-coral);margin-bottom:6px;">Losing score</div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--loser-coral);margin-bottom:6px;">Loser's score</div>
           <div style="font-size:13px;font-weight:700;margin-bottom:10px;min-height:36px;">${escapeHtml(loserNames)}</div>
-          <input type="number" id="loserScoreInput" min="0" max="10" value="0"
+          <input type="number" id="loserScoreInput" min="0" value="0"
             style="font-size:40px;font-weight:800;font-family:var(--font-mono);width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--ink);padding:6px 0;min-height:0;"
             oninput="updateWinnerDisplay()" onchange="updateWinnerDisplay()">
-          <div style="font-size:10px;color:var(--resting-slate);margin-top:4px;">0 – 10</div>
+          <div style="font-size:10px;color:var(--resting-slate);margin-top:4px;" id="scoreLimitNote">0 – 9 normal · 10+ deuce</div>
         </div>
       </div>
 
@@ -1531,26 +1525,29 @@ async function showLoserScoreModal() {
 
 function updateWinnerDisplay() {
   const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
-  const loserScore = isNaN(raw) ? 0 : Math.min(Math.max(raw, 0), 10);
+  // Any non-negative integer is valid — no upper cap during deuce.
+  const loserScore = isNaN(raw) || raw < 0 ? 0 : raw;
   const isDeuce = loserScore >= 10;
+  // Standard pickleball: win by 2. Normal game ends at 11.
+  // Deuce: if loser reached 10, winner needs loserScore + 2.
+  // e.g. loser=10 → winner=12, loser=11 → winner=13, loser=16 → winner=18
   const winnerScore = isDeuce ? loserScore + 2 : 11;
   document.getElementById('winnerScoreDisplay').textContent = winnerScore;
-  document.getElementById('deuceNote').textContent = isDeuce ? `Deuce — ${winnerScore}–${loserScore}` : '';
+  const noteEl = document.getElementById('deuceNote');
+  noteEl.textContent = isDeuce ? `Deuce — ${winnerScore}–${loserScore}` : '';
 }
 
 async function confirmLoserScore() {
-  // Hard guard: if a submission is already in progress, silently ignore
-  // every subsequent tap until the first one completes.
   if (_resultInFlight) return;
 
   const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
-  if (isNaN(raw) || raw < 0 || raw > 10) {
-    document.getElementById('scoreEntryError').textContent = 'Enter the losing team\'s score (0–10).';
+  // Only guard: must be a non-negative integer. No upper limit — deuce games
+  // can go to any score as long as winner leads by exactly 2.
+  if (isNaN(raw) || raw < 0) {
+    document.getElementById('scoreEntryError').textContent = 'Enter a valid score (0 or higher).';
     return;
   }
 
-  // Immediately disable the button and set the flight flag so rapid
-  // re-taps can't fire a second write before the first resolves.
   _resultInFlight = true;
   const btn = document.querySelector('#resultModal .btn-yes');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -1558,7 +1555,6 @@ async function confirmLoserScore() {
   try {
     await finalizeResult(raw);
   } catch (err) {
-    // Re-enable on failure so the host can retry.
     _resultInFlight = false;
     const errEl = document.getElementById('scoreEntryError');
     if (errEl) errEl.textContent = err.message || 'Something went wrong — please try again.';
@@ -1691,47 +1687,58 @@ async function leaderboardTabHtml() {
 
     ${recentMatches.length ? `
     <div class="card">
-      <h2 style="margin:0 0 6px;">Match History — Correct a Result</h2>
-      <p style="font-size:12px;color:var(--resting-slate);margin:0 0 14px;">
-        If a result was recorded incorrectly, tap <strong>Flip Result</strong>.
-        All win, loss, and points stats for all four players update automatically.
+      <h2 style="margin:0 0 4px;">Match History</h2>
+      <p style="font-size:12px;color:var(--resting-slate);margin:0 0 16px;">
+        If the wrong team was recorded as the winner, tap <strong>Edit Result</strong> on that match.
+        All stats update automatically for all four players.
       </p>
-      <div class="table-scroll">
-        <table class="roster-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Winner</th>
-              <th>Score</th>
-              <th>Loser</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${recentMatches.map(m => {
-              const winnerTeam = m.winner_team_id === m.team_a_id ? m.team_a : m.team_b;
-              const loserTeam  = m.winner_team_id === m.team_a_id ? m.team_b : m.team_a;
-              const loserTeamId = m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id;
-              const wScore = scoreLabel(m, m.winner_team_id);
-              const lScore = scoreLabel(m, loserTeamId);
-              const timeStr = m.ended_at ? new Date(m.ended_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
-              return `
-                <tr>
-                  <td style="font-size:11px;color:var(--resting-slate);white-space:nowrap;">${timeStr}</td>
-                  <td style="color:var(--winner-green);font-weight:700;font-size:12px;">${escapeHtml(teamLabel(winnerTeam))}</td>
-                  <td style="font-family:var(--font-mono);font-size:12px;text-align:center;white-space:nowrap;">${wScore}–${lScore}</td>
-                  <td style="color:var(--loser-coral);font-size:12px;">${escapeHtml(teamLabel(loserTeam))}</td>
-                  <td>
-                    <button
-                      onclick="handleFlipResult('${m.id}','${loserTeamId}','${escapeHtml(teamLabel(loserTeam))}')"
-                      style="background:var(--surface-hover);color:var(--ink);border:1px solid var(--border-soft);padding:4px 10px;border-radius:var(--radius-sm);font-size:11px;font-weight:700;min-height:0;white-space:nowrap;">
-                      Flip Result
-                    </button>
-                  </td>
-                </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        ${recentMatches.map((m, idx) => {
+          const winnerTeam = m.winner_team_id === m.team_a_id ? m.team_a : m.team_b;
+          const loserTeam  = m.winner_team_id === m.team_a_id ? m.team_b : m.team_a;
+          const loserTeamId = m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id;
+          const wScore = m.winner_team_id === m.team_a_id ? m.team_a_score : m.team_b_score;
+          const lScore = m.winner_team_id === m.team_a_id ? m.team_b_score : m.team_a_score;
+          const timeStr = m.ended_at
+            ? new Date(m.ended_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+            : '—';
+          const durStr = m.duration_seconds
+            ? `${Math.floor(m.duration_seconds/60)}m ${m.duration_seconds%60}s`
+            : '';
+          const wNames = teamLabel(winnerTeam);
+          const lNames = teamLabel(loserTeam);
+          const wPlayerIds = winnerTeam?.player_ids || [];
+          const lPlayerIds = loserTeam?.player_ids || [];
+          return `
+          <div style="border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--surface-hover);font-size:11px;color:var(--resting-slate);">
+              <span>Match ${recentMatches.length - idx} · ${timeStr}${durStr ? ' · ' + durStr : ''}</span>
+              <span style="font-family:var(--font-mono);font-weight:700;color:var(--ink);">${wScore}–${lScore}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:0;">
+              <div style="padding:12px;">
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--winner-green);letter-spacing:0.05em;margin-bottom:6px;">Won</div>
+                ${(winnerTeam?.player_ids || []).map(pid => `
+                  <div style="font-size:13px;font-weight:700;padding:2px 0;">${escapeHtml(playerById[pid]?.name || '—')}</div>
+                `).join('')}
+              </div>
+              <div style="font-size:18px;font-weight:800;color:var(--border-soft);padding:0 8px;user-select:none;">vs</div>
+              <div style="padding:12px;border-left:1px solid var(--border-soft);">
+                <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--loser-coral);letter-spacing:0.05em;margin-bottom:6px;">Lost</div>
+                ${(loserTeam?.player_ids || []).map(pid => `
+                  <div style="font-size:13px;font-weight:700;padding:2px 0;">${escapeHtml(playerById[pid]?.name || '—')}</div>
+                `).join('')}
+              </div>
+            </div>
+            <div style="padding:8px 12px;border-top:1px solid var(--border-soft);text-align:right;">
+              <button
+                onclick="openMatchEditor('${m.id}','${loserTeamId}','${escapeHtml(wNames)}','${escapeHtml(lNames)}')"
+                style="background:transparent;color:var(--accent);border:1.5px solid var(--accent);padding:5px 14px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:0;">
+                Edit Result
+              </button>
+            </div>
+          </div>`;
+        }).join('')}
       </div>
     </div>
     ` : ''}
@@ -1747,24 +1754,49 @@ async function handleToggleLeaderboard(currentlyPublic) {
 }
 
 /**
- * Flip-result confirmation modal — shows clearly who currently won
- * and who would become the new winner, requires explicit confirm.
+ * Match editor modal — shows all 4 players in the match clearly,
+ * labelled Won / Lost. A single "Swap — make [loser] the winner"
+ * button does the correction. No ambiguity about who is being changed.
+ *
+ * @param {string} matchId
+ * @param {string} loserTeamId  — the team that is currently the LOSER
+ *                                (making them the new winner is the correction)
+ * @param {string} winnerNames  — display label for current winner
+ * @param {string} loserNames   — display label for current loser
  */
-async function handleFlipResult(matchId, newWinnerTeamId, newWinnerLabel) {
+async function openMatchEditor(matchId, loserTeamId, winnerNames, loserNames) {
+  // Prevent stacking if already open.
+  if (document.getElementById('matchEditModal')) return;
+
   document.body.insertAdjacentHTML('beforeend', `
-    <div class="modal-backdrop" id="flipModal">
+    <div class="modal-backdrop" id="matchEditModal">
       <div class="modal-box">
-        <h2>Correct This Result?</h2>
-        <p class="modal-sub">
-          This will make <strong style="color:var(--winner-green);">${escapeHtml(newWinnerLabel)}</strong>
-          the winner instead.<br>
-          All win, loss, and points totals for all four players will update immediately.
-        </p>
-        <div id="flipModalError" class="auth-error"></div>
+        <h2>Edit Match Result</h2>
+        <p class="modal-sub">Review who won and who lost. Tap "Swap Result" to correct it — all four players' stats update automatically.</p>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;">
+          <div style="background:rgba(78,203,126,0.1);border:2px solid var(--winner-green);border-radius:var(--radius-sm);padding:12px;text-align:center;">
+            <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--winner-green);margin-bottom:8px;">🏆 Currently Won</div>
+            <div style="font-size:13px;font-weight:700;line-height:1.5;">${escapeHtml(winnerNames.replace(' & ', '\n')).replace('\n','<br>')}</div>
+          </div>
+          <div style="background:rgba(255,122,92,0.1);border:2px solid var(--loser-coral);border-radius:var(--radius-sm);padding:12px;text-align:center;">
+            <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--loser-coral);margin-bottom:8px;">Currently Lost</div>
+            <div style="font-size:13px;font-weight:700;line-height:1.5;">${escapeHtml(loserNames.replace(' & ', '\n')).replace('\n','<br>')}</div>
+          </div>
+        </div>
+
+        <div style="background:var(--surface-hover);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--resting-slate);margin-bottom:16px;">
+          After swapping: <strong style="color:var(--winner-green);">${escapeHtml(loserNames)}</strong> becomes the winner · <strong style="color:var(--loser-coral);">${escapeHtml(winnerNames)}</strong> becomes the loser. Scores stay the same.
+        </div>
+
+        <div id="matchEditError" class="auth-error"></div>
+
         <div class="confirm-actions">
-          <button class="btn-no" onclick="document.getElementById('flipModal').remove()">Cancel</button>
-          <button class="btn-yes" id="flipConfirmBtn" onclick="confirmFlipResult('${matchId}','${newWinnerTeamId}')">
-            Yes, Correct It
+          <button class="btn-no" onclick="document.getElementById('matchEditModal').remove()">Cancel — Keep As Is</button>
+          <button class="btn-yes" id="matchEditConfirmBtn"
+            style="background:var(--loser-coral);"
+            onclick="confirmMatchEdit('${matchId}','${loserTeamId}')">
+            Swap Result
           </button>
         </div>
       </div>
@@ -1772,18 +1804,17 @@ async function handleFlipResult(matchId, newWinnerTeamId, newWinnerLabel) {
   `);
 }
 
-async function confirmFlipResult(matchId, newWinnerTeamId) {
-  const btn = document.getElementById('flipConfirmBtn');
-  const errEl = document.getElementById('flipModalError');
+async function confirmMatchEdit(matchId, newWinnerTeamId) {
+  const btn    = document.getElementById('matchEditConfirmBtn');
+  const errEl  = document.getElementById('matchEditError');
   if (btn) { btn.disabled = true; btn.textContent = 'Correcting…'; }
   try {
     await SessionAPI.correctMatchResult(matchId, newWinnerTeamId);
-    document.getElementById('flipModal').remove();
-    // Refresh leaderboard to show updated stats immediately.
+    document.getElementById('matchEditModal').remove();
     document.getElementById('tabPanel').innerHTML = await leaderboardTabHtml();
   } catch (err) {
-    if (errEl) errEl.textContent = err.message || 'Could not correct this result.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Yes, Correct It'; }
+    if (errEl) errEl.textContent = err.message || 'Could not correct this result — please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Swap Result'; }
   }
 }
 
