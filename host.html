@@ -801,6 +801,87 @@ const SessionAPI = (() => {
     if (error) throw error;
   }
 
+  /**
+   * Correct a previously recorded match result.
+   *
+   * How the reversal works:
+   *   - Old winner(s): subtract 1 win + old winner score from total_points,
+   *     add 1 loss + old loser score instead.
+   *   - Old loser(s): subtract 1 loss + old loser score from total_points,
+   *     add 1 win + old winner score instead.
+   * total_games_played is unchanged — the game still happened, the outcome changed.
+   *
+   * @param {string} matchId        - matches.id to correct
+   * @param {string} newWinnerTeamId - teams.id that should now be the winner
+   */
+  async function correctMatchResult(matchId, newWinnerTeamId) {
+    // 1. Load the original match row.
+    const { data: match, error: matchErr } = await supabaseClient
+      .from('matches').select('*').eq('id', matchId).single();
+    if (matchErr || !match) throw new Error('Match record not found.');
+
+    if (match.winner_team_id === newWinnerTeamId) {
+      throw new Error('That team is already recorded as the winner — no change needed.');
+    }
+
+    // The team that WAS the winner becomes the loser, and vice versa.
+    const oldWinnerTeamId = match.winner_team_id;
+    const oldLoserTeamId  = oldWinnerTeamId === match.team_a_id ? match.team_b_id : match.team_a_id;
+
+    // Derive which score belonged to each team from the original row.
+    const oldWinnerScore = oldWinnerTeamId === match.team_a_id ? match.team_a_score : match.team_b_score;
+    const oldLoserScore  = oldWinnerTeamId === match.team_a_id ? match.team_b_score : match.team_a_score;
+
+    // 2. Load player_ids for both teams.
+    const { data: teamRows, error: teamsErr } = await supabaseClient
+      .from('teams').select('id, player_ids').in('id', [oldWinnerTeamId, oldLoserTeamId]);
+    if (teamsErr || !teamRows) throw new Error('Could not load team data.');
+
+    const oldWinnerRow = teamRows.find(t => t.id === oldWinnerTeamId);
+    const oldLoserRow  = teamRows.find(t => t.id === oldLoserTeamId);
+
+    // 3. Reverse stats on old winners (they actually lost).
+    if (oldWinnerRow?.player_ids?.length) {
+      const { data: players } = await supabaseClient.from('players')
+        .select('id, wins, losses, total_points').in('id', oldWinnerRow.player_ids);
+      for (const p of players || []) {
+        await supabaseClient.from('players').update({
+          wins:         Math.max(0, (p.wins || 0) - 1),
+          losses:       (p.losses || 0) + 1,
+          total_points: Math.max(0, (p.total_points || 0) - (oldWinnerScore || 0) + (oldLoserScore || 0)),
+        }).eq('id', p.id);
+      }
+    }
+
+    // 4. Reverse stats on old losers (they actually won).
+    if (oldLoserRow?.player_ids?.length) {
+      const { data: players } = await supabaseClient.from('players')
+        .select('id, wins, losses, total_points').in('id', oldLoserRow.player_ids);
+      for (const p of players || []) {
+        await supabaseClient.from('players').update({
+          wins:         (p.wins || 0) + 1,
+          losses:       Math.max(0, (p.losses || 0) - 1),
+          total_points: Math.max(0, (p.total_points || 0) - (oldLoserScore || 0) + (oldWinnerScore || 0)),
+        }).eq('id', p.id);
+      }
+    }
+
+    // 5. Update the match row itself.
+    const { error: updateErr } = await supabaseClient.from('matches')
+      .update({ winner_team_id: newWinnerTeamId }).eq('id', matchId);
+    if (updateErr) throw updateErr;
+  }
+
+  async function getRecentMatches(sessionId, limit = 20) {
+    const { data, error } = await supabaseClient.from('matches')
+      .select('*, team_a:team_a_id(*), team_b:team_b_id(*)')
+      .eq('session_id', sessionId)
+      .order('ended_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data;
+  }
+
   async function carryPlayersToNewSession(newSessionId, playerRows) {
     const inserted = [];
     for (const p of playerRows) {
@@ -821,6 +902,7 @@ const SessionAPI = (() => {
     createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
+    correctMatchResult, getRecentMatches,
     carryPlayersToNewSession,
   };
 })();
@@ -1349,44 +1431,48 @@ function renderCourtDiagramCard(court, players) {
 // ============================================================
 let resultFlowCourt = null;
 let resultFlowWinnerTeamId = null;
+// Prevents any DB writes from firing more than once per result submission,
+// even if the host taps "Save" rapidly multiple times.
+let _resultInFlight = false;
 
 async function handleMarkFinished(courtId) {
+  // Guard: if a modal is already open, don't stack a second one.
+  if (document.getElementById('resultModal')) return;
+
   const courts = await SessionAPI.getCourts(activeSession.id);
   resultFlowCourt = courts.find(c => c.id === courtId);
-  if (!resultFlowCourt) return;
-  showConfirmFinishedModal();
-}
+  if (!resultFlowCourt || resultFlowCourt.status !== 'in_progress') return;
 
-function showConfirmFinishedModal() {
-  const modal = document.createElement('div');
-  modal.className = 'modal-backdrop';
-  modal.id = 'resultModal';
-  modal.innerHTML = `
-    <div class="modal-box">
-      <h2>Match Finished?</h2>
-      <p class="modal-sub">Confirm Court ${resultFlowCourt.court_number}'s match has ended.</p>
-      <div class="confirm-actions">
-        <button class="btn-no" onclick="closeResultModal()">No, still playing</button>
-        <button class="btn-yes" onclick="showPickWinnerModal()">Yes, finished</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
+  // Go straight to Who Won — skip the redundant "Match Finished?" confirm.
+  await showPickWinnerModal();
 }
 
 async function showPickWinnerModal() {
   const players = await SessionAPI.getPlayers(activeSession.id);
   const namesA = playerNamesForTeam(resultFlowCourt.team_a, players).join(' & ');
   const namesB = playerNamesForTeam(resultFlowCourt.team_b, players).join(' & ');
-  document.getElementById('resultModal').innerHTML = `
+
+  // Reuse existing modal if we're navigating back from the score step,
+  // otherwise create and inject a fresh one.
+  let modal = document.getElementById('resultModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal-backdrop';
+    modal.id = 'resultModal';
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
     <div class="modal-box">
       <h2>Who Won?</h2>
-      <p class="modal-sub">Court ${resultFlowCourt.court_number} — select the winning side.</p>
+      <p class="modal-sub">Court ${resultFlowCourt.court_number} — tap the winning side.</p>
       <div class="winner-pick-row">
         <div class="winner-pick-option" onclick="selectWinner('${resultFlowCourt.team_a_id}')">${escapeHtml(namesA)}</div>
         <div class="winner-pick-option" onclick="selectWinner('${resultFlowCourt.team_b_id}')">${escapeHtml(namesB)}</div>
       </div>
-      <button class="btn-secondary" style="width:auto;padding:8px 16px;" onclick="closeResultModal()">Cancel</button>
+      <div style="margin-top:14px;">
+        <button class="btn-secondary" style="width:auto;padding:8px 16px;" onclick="closeResultModal()">Cancel</button>
+      </div>
     </div>
   `;
 }
@@ -1453,12 +1539,31 @@ function updateWinnerDisplay() {
 }
 
 async function confirmLoserScore() {
+  // Hard guard: if a submission is already in progress, silently ignore
+  // every subsequent tap until the first one completes.
+  if (_resultInFlight) return;
+
   const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
   if (isNaN(raw) || raw < 0 || raw > 10) {
     document.getElementById('scoreEntryError').textContent = 'Enter the losing team\'s score (0–10).';
     return;
   }
-  await finalizeResult(raw);
+
+  // Immediately disable the button and set the flight flag so rapid
+  // re-taps can't fire a second write before the first resolves.
+  _resultInFlight = true;
+  const btn = document.querySelector('#resultModal .btn-yes');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  try {
+    await finalizeResult(raw);
+  } catch (err) {
+    // Re-enable on failure so the host can retry.
+    _resultInFlight = false;
+    const errEl = document.getElementById('scoreEntryError');
+    if (errEl) errEl.textContent = err.message || 'Something went wrong — please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Save & Continue'; }
+  }
 }
 
 async function finalizeResult(loserScore) {
@@ -1472,6 +1577,8 @@ async function finalizeResult(loserScore) {
     resultFlowCourt.id, activeSession.id,
     winnerTeam.player_ids, loserTeam.player_ids
   );
+  // Only clear the modal and flag after both DB writes succeed.
+  _resultInFlight = false;
   closeResultModal();
   if (activeTab === 'courts') {
     const panel = document.getElementById('tabPanel');
@@ -1484,29 +1591,45 @@ function closeResultModal() {
   if (modal) modal.remove();
   resultFlowCourt = null;
   resultFlowWinnerTeamId = null;
+  _resultInFlight = false;
 }
 
 // ============================================================
 // LEADERBOARD TAB
 // ============================================================
 async function leaderboardTabHtml() {
-  const players = await SessionAPI.getPlayers(activeSession.id);
-  const session = await SessionAPI.getSession(activeSession.id);
+  const [players, session, recentMatches] = await Promise.all([
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getSession(activeSession.id),
+    SessionAPI.getRecentMatches(activeSession.id),
+  ]);
   activeSession = session;
 
-  // Only players who've played at least once, sorted by wins desc, then points.
   const ranked = [...players]
     .filter(p => (p.total_games_played || 0) > 0)
     .sort((a, b) => {
-      const winsA = a.wins || 0, winsB = b.wins || 0;
-      if (winsB !== winsA) return winsB - winsA;
-      const ptsA = a.total_points || 0, ptsB = b.total_points || 0;
-      if (ptsB !== ptsA) return ptsB - ptsA;
+      const wA = a.wins || 0, wB = b.wins || 0;
+      if (wB !== wA) return wB - wA;
+      const pA = a.total_points || 0, pB = b.total_points || 0;
+      if (pB !== pA) return pB - pA;
       return (a.losses || 0) - (b.losses || 0);
     });
 
   const isPublic = !!session.leaderboard_public;
-  const totalMatches = players.reduce((s, p) => s + (p.total_games_played || 0), 0) / (activeSession.format === 'doubles' ? 4 : 2);
+  const totalMatches = recentMatches.length; // authoritative count from matches table
+
+  // Build a player lookup for rendering match history.
+  const playerById = Object.fromEntries(players.map(p => [p.id, p]));
+
+  function teamLabel(team) {
+    if (!team?.player_ids) return '—';
+    return team.player_ids.map(pid => playerById[pid]?.name || '—').join(' & ');
+  }
+
+  function scoreLabel(match, teamId) {
+    if (match.team_a_id === teamId) return match.team_a_score ?? '—';
+    return match.team_b_score ?? '—';
+  }
 
   return `
     <div class="card">
@@ -1518,13 +1641,13 @@ async function leaderboardTabHtml() {
         </button>
       </div>
       <p style="font-size:12px;color:var(--resting-slate);margin:-8px 0 14px;">
-        ${isPublic ? 'Players can see this on the live board.' : 'Tap the button to share this with players.'} 
+        ${isPublic ? 'Players can see this on the live board.' : 'Tap to share with players.'}
         Individual records since this session started.
       </p>
 
       <div class="stat-banner">
         <div class="stat-chip"><span>${ranked.length}</span>Players ranked</div>
-        <div class="stat-chip"><span>${Math.round(totalMatches) || 0}</span>Matches played</div>
+        <div class="stat-chip"><span>${totalMatches}</span>Matches played</div>
         <div class="stat-chip"><span>${players.filter(p=>p.status==='waiting'||p.status==='playing').length}</span>Active now</div>
       </div>
 
@@ -1533,9 +1656,7 @@ async function leaderboardTabHtml() {
         <table class="roster-table">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Player</th>
-              <th>Tier</th>
+              <th>#</th><th>Player</th><th>Tier</th>
               <th style="text-align:center;">W</th>
               <th style="text-align:center;">L</th>
               <th style="text-align:center;">GP</th>
@@ -1545,30 +1666,75 @@ async function leaderboardTabHtml() {
           </thead>
           <tbody>
             ${ranked.map((p, i) => {
-              const gp   = p.total_games_played || 0;
-              const wins = p.wins || 0;
-              const loss = p.losses || 0;
-              const pts  = p.total_points || 0;
-              const pct  = gp > 0 ? Math.round((wins / gp) * 100) : 0;
-              const isTop = i === 0;
+              const gp  = p.total_games_played || 0;
+              const w   = p.wins || 0;
+              const l   = p.losses || 0;
+              const pts = p.total_points || 0;
+              const pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
               return `
-                <tr class="${isTop ? 'lb-highlight' : ''}">
+                <tr class="${i === 0 ? 'lb-highlight' : ''}">
                   <td class="lb-rank">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</td>
                   <td class="lb-name">${escapeHtml(p.name)}</td>
                   <td style="font-size:11px;color:var(--resting-slate);">${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
-                  <td class="lb-stat lb-won">${wins}</td>
-                  <td class="lb-stat lb-lost">${loss}</td>
+                  <td class="lb-stat lb-won">${w}</td>
+                  <td class="lb-stat lb-lost">${l}</td>
                   <td class="lb-stat">${gp}</td>
                   <td class="lb-stat lb-pts">${pts}</td>
                   <td class="lb-stat">${pct}%</td>
-                </tr>
-              `;
+                </tr>`;
             }).join('')}
           </tbody>
         </table>
       </div>
-      ` : `<p style="color:var(--resting-slate);font-size:13px;text-align:center;padding:20px;">No matches played yet — rankings will appear here as games finish.</p>`}
+      ` : `<p style="color:var(--resting-slate);font-size:13px;text-align:center;padding:20px 0;">No matches played yet.</p>`}
     </div>
+
+    ${recentMatches.length ? `
+    <div class="card">
+      <h2 style="margin:0 0 6px;">Match History — Correct a Result</h2>
+      <p style="font-size:12px;color:var(--resting-slate);margin:0 0 14px;">
+        If a result was recorded incorrectly, tap <strong>Flip Result</strong>.
+        All win, loss, and points stats for all four players update automatically.
+      </p>
+      <div class="table-scroll">
+        <table class="roster-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Winner</th>
+              <th>Score</th>
+              <th>Loser</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${recentMatches.map(m => {
+              const winnerTeam = m.winner_team_id === m.team_a_id ? m.team_a : m.team_b;
+              const loserTeam  = m.winner_team_id === m.team_a_id ? m.team_b : m.team_a;
+              const loserTeamId = m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id;
+              const wScore = scoreLabel(m, m.winner_team_id);
+              const lScore = scoreLabel(m, loserTeamId);
+              const timeStr = m.ended_at ? new Date(m.ended_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
+              return `
+                <tr>
+                  <td style="font-size:11px;color:var(--resting-slate);white-space:nowrap;">${timeStr}</td>
+                  <td style="color:var(--winner-green);font-weight:700;font-size:12px;">${escapeHtml(teamLabel(winnerTeam))}</td>
+                  <td style="font-family:var(--font-mono);font-size:12px;text-align:center;white-space:nowrap;">${wScore}–${lScore}</td>
+                  <td style="color:var(--loser-coral);font-size:12px;">${escapeHtml(teamLabel(loserTeam))}</td>
+                  <td>
+                    <button
+                      onclick="handleFlipResult('${m.id}','${loserTeamId}','${escapeHtml(teamLabel(loserTeam))}')"
+                      style="background:var(--surface-hover);color:var(--ink);border:1px solid var(--border-soft);padding:4px 10px;border-radius:var(--radius-sm);font-size:11px;font-weight:700;min-height:0;white-space:nowrap;">
+                      Flip Result
+                    </button>
+                  </td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ` : ''}
   `;
 }
 
@@ -1578,6 +1744,47 @@ async function handleToggleLeaderboard(currentlyPublic) {
     activeSession = await SessionAPI.getSession(activeSession.id);
     document.getElementById('tabPanel').innerHTML = await leaderboardTabHtml();
   } catch (err) { alert(err.message || 'Could not update visibility.'); }
+}
+
+/**
+ * Flip-result confirmation modal — shows clearly who currently won
+ * and who would become the new winner, requires explicit confirm.
+ */
+async function handleFlipResult(matchId, newWinnerTeamId, newWinnerLabel) {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="flipModal">
+      <div class="modal-box">
+        <h2>Correct This Result?</h2>
+        <p class="modal-sub">
+          This will make <strong style="color:var(--winner-green);">${escapeHtml(newWinnerLabel)}</strong>
+          the winner instead.<br>
+          All win, loss, and points totals for all four players will update immediately.
+        </p>
+        <div id="flipModalError" class="auth-error"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('flipModal').remove()">Cancel</button>
+          <button class="btn-yes" id="flipConfirmBtn" onclick="confirmFlipResult('${matchId}','${newWinnerTeamId}')">
+            Yes, Correct It
+          </button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmFlipResult(matchId, newWinnerTeamId) {
+  const btn = document.getElementById('flipConfirmBtn');
+  const errEl = document.getElementById('flipModalError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Correcting…'; }
+  try {
+    await SessionAPI.correctMatchResult(matchId, newWinnerTeamId);
+    document.getElementById('flipModal').remove();
+    // Refresh leaderboard to show updated stats immediately.
+    document.getElementById('tabPanel').innerHTML = await leaderboardTabHtml();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not correct this result.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Yes, Correct It'; }
+  }
 }
 
 // ============================================================
