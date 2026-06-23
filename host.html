@@ -816,84 +816,113 @@ const SessionAPI = (() => {
   /**
    * Correct a previously recorded match result — winner, score, or both.
    *
-   * @param {string}      matchId         matches.id to correct
-   * @param {string|null} newWinnerTeamId teams.id that should now be the winner,
-   *                                      or null to keep the same winner
-   * @param {number|null} newLoserScore   the corrected losing score (0+),
-   *                                      or null to keep the existing score
+   * WHY RECOMPUTE INSTEAD OF DELTA:
+   *   Delta arithmetic (subtract old, add new) silently compounds any
+   *   prior data errors — triple-submits, null scores from the old "skip
+   *   score" flow, or any other inconsistency. By re-summing each player's
+   *   full match history AFTER patching the target row, we always converge
+   *   to ground truth regardless of what the current DB values say.
    *
-   * Stat reversal logic:
-   *   Each affected player gets the old delta subtracted and the new delta added.
-   *   total_games_played never changes — the game still happened.
-   *   Stats are floored at 0 (Math.max) to guard against any prior data inconsistencies.
+   * @param {string}      matchId          matches.id to correct
+   * @param {string|null} newWinnerTeamId  teams.id that should now be the winner,
+   *                                       or null to keep the current winner
+   * @param {number|null} newLoserScore    corrected losing score (0+), or null
+   *                                       to keep the existing score
    */
   async function correctMatchResult(matchId, newWinnerTeamId, newLoserScore = null) {
+
+    // ── 1. Load and validate the target match ──────────────────────────────
     const { data: match, error: matchErr } = await supabaseClient
       .from('matches').select('*').eq('id', matchId).single();
     if (matchErr || !match) throw new Error('Match record not found.');
 
-    // Resolve final winner team ID.
     const finalWinnerTeamId = newWinnerTeamId || match.winner_team_id;
-    const finalLoserTeamId  = finalWinnerTeamId === match.team_a_id ? match.team_b_id : match.team_a_id;
+    const finalLoserTeamId  = finalWinnerTeamId === match.team_a_id
+      ? match.team_b_id : match.team_a_id;
 
-    // Old scores as recorded.
-    const oldWinnerScore = match.winner_team_id === match.team_a_id ? match.team_a_score : match.team_b_score;
-    const oldLoserScore  = match.winner_team_id === match.team_a_id ? match.team_b_score : match.team_a_score;
-
-    // New scores — apply deuce rule to the corrected loser score if provided.
-    const resolvedLoserScore  = newLoserScore !== null ? newLoserScore : oldLoserScore;
+    const oldLoserScore = match.winner_team_id === match.team_a_id
+      ? match.team_b_score : match.team_a_score;
+    const resolvedLoserScore  = newLoserScore !== null ? newLoserScore : (oldLoserScore ?? 0);
     const resolvedWinnerScore = resolvedLoserScore >= 10 ? resolvedLoserScore + 2 : 11;
 
+    // Guard: nothing to do.
     const noWinnerChange = match.winner_team_id === finalWinnerTeamId;
-    const noScoreChange  = resolvedLoserScore === oldLoserScore;
+    const noScoreChange  = (newLoserScore === null) || (newLoserScore === (oldLoserScore ?? null));
     if (noWinnerChange && noScoreChange) {
       throw new Error('No changes detected — winner and score are already as recorded.');
     }
 
-    // Load player_ids for BOTH original teams (by original team_a/b, not winner/loser,
-    // so we can find the right rows regardless of which direction the flip goes).
-    const { data: teamRows, error: teamsErr } = await supabaseClient
-      .from('teams').select('id, player_ids').in('id', [match.team_a_id, match.team_b_id]);
-    if (teamsErr || !teamRows) throw new Error('Could not load team data.');
-
-    const teamARow = teamRows.find(t => t.id === match.team_a_id);
-    const teamBRow = teamRows.find(t => t.id === match.team_b_id);
-
-    // For each player, figure out their OLD role (winner/loser) and their NEW role,
-    // then apply the delta: subtract old contribution, add new contribution.
-    const oldWinnerIds = (match.winner_team_id === match.team_a_id ? teamARow : teamBRow)?.player_ids || [];
-    const oldLoserIds  = (match.winner_team_id === match.team_a_id ? teamBRow : teamARow)?.player_ids || [];
-    const newWinnerIds = (finalWinnerTeamId     === match.team_a_id ? teamARow : teamBRow)?.player_ids || [];
-    const newLoserIds  = (finalWinnerTeamId     === match.team_a_id ? teamBRow : teamARow)?.player_ids || [];
-
-    // Collect every unique player involved.
-    const allIds = [...new Set([...oldWinnerIds, ...oldLoserIds])];
-    const { data: allPlayers } = await supabaseClient.from('players')
-      .select('id, wins, losses, total_points').in('id', allIds);
-
-    for (const p of allPlayers || []) {
-      const wasWinner = oldWinnerIds.includes(p.id);
-      const isWinner  = newWinnerIds.includes(p.id);
-
-      const oldPts = wasWinner ? (oldWinnerScore || 0) : (oldLoserScore || 0);
-      const newPts = isWinner  ? resolvedWinnerScore   : resolvedLoserScore;
-
-      await supabaseClient.from('players').update({
-        wins:         Math.max(0, (p.wins   || 0) - (wasWinner ? 1 : 0) + (isWinner  ? 1 : 0)),
-        losses:       Math.max(0, (p.losses || 0) - (wasWinner ? 0 : 1) + (isWinner  ? 0 : 1)),
-        total_points: Math.max(0, (p.total_points || 0) - oldPts + newPts),
-      }).eq('id', p.id);
-    }
-
-    // Update the match row.
-    const newTeamAScore = finalWinnerTeamId === match.team_a_id ? resolvedWinnerScore : resolvedLoserScore;
-    const newTeamBScore = finalWinnerTeamId === match.team_a_id ? resolvedLoserScore  : resolvedWinnerScore;
-    const { error: updateErr } = await supabaseClient.from('matches').update({
+    // ── 2. Patch the match row first so the recompute sees the corrected data ──
+    const newTeamAScore = finalWinnerTeamId === match.team_a_id
+      ? resolvedWinnerScore : resolvedLoserScore;
+    const newTeamBScore = finalWinnerTeamId === match.team_a_id
+      ? resolvedLoserScore  : resolvedWinnerScore;
+    const { error: patchErr } = await supabaseClient.from('matches').update({
       winner_team_id: finalWinnerTeamId,
       team_a_score:   newTeamAScore,
       team_b_score:   newTeamBScore,
+      score_visible:  true,
     }).eq('id', matchId);
-    if (updateErr) throw updateErr;
+    if (patchErr) throw patchErr;
+
+    // ── 3. Find the 4 player IDs involved ──────────────────────────────────
+    const { data: teamRows } = await supabaseClient
+      .from('teams').select('id, player_ids')
+      .in('id', [match.team_a_id, match.team_b_id]);
+    if (!teamRows?.length) throw new Error('Could not load team rosters.');
+
+    const allPlayerIds = [...new Set(teamRows.flatMap(t => t.player_ids || []))];
+    if (!allPlayerIds.length) throw new Error('No players found for this match.');
+
+    // ── 4. For each player, recompute stats from their FULL match history ──
+    //  This is the only approach immune to accumulated delta errors.
+    for (const playerId of allPlayerIds) {
+      // All matches this player's team_a or team_b was involved in
+      // (we query by session to keep it fast; player IDs are contained
+      //  inside teams.player_ids which we can't filter on the DB directly,
+      //  so we pull all session matches and filter in JS).
+      const { data: sessionMatches } = await supabaseClient
+        .from('matches')
+        .select('id, team_a_id, team_b_id, winner_team_id, team_a_score, team_b_score')
+        .eq('session_id', match.session_id);
+
+      // Find the teams that ever contained this player.
+      const { data: playerTeams } = await supabaseClient
+        .from('teams')
+        .select('id, player_ids')
+        .eq('session_id', match.session_id)
+        .contains('player_ids', [playerId]);
+
+      const playerTeamIds = new Set((playerTeams || []).map(t => t.id));
+
+      let totalWins = 0, totalLosses = 0, totalPoints = 0, totalGP = 0;
+
+      for (const m of sessionMatches || []) {
+        const playerOnTeamA = playerTeamIds.has(m.team_a_id);
+        const playerOnTeamB = playerTeamIds.has(m.team_b_id);
+        if (!playerOnTeamA && !playerOnTeamB) continue;
+
+        totalGP++;
+        const playerTeamId = playerOnTeamA ? m.team_a_id : m.team_b_id;
+        const won = m.winner_team_id === playerTeamId;
+
+        if (won) totalWins++;
+        else     totalLosses++;
+
+        // Points: player's team score for this match (null-safe → 0).
+        const playerScore = playerOnTeamA
+          ? (m.team_a_score ?? 0)
+          : (m.team_b_score ?? 0);
+        totalPoints += playerScore;
+      }
+
+      await supabaseClient.from('players').update({
+        wins:               totalWins,
+        losses:             totalLosses,
+        total_games_played: totalGP,
+        total_points:       totalPoints,
+      }).eq('id', playerId);
+    }
   }
 
   async function getRecentMatches(sessionId, limit = 20) {
