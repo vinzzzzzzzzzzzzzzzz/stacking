@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>iStackyyy — Live Court Board</title>
+<title>iStackyyy — Host Console</title>
 <script>
   // Runs immediately, before CSS/body paint, to avoid a flash of the
-  // wrong theme on load. Dark is the default per design direction;
-  // only switches to light if the person explicitly chose it before.
+  // wrong theme on load. Same theme key as index.html so the host's
+  // preference is shared across both pages on the same device.
   (function() {
     var stored = localStorage.getItem('istackyyy_theme');
     var theme = stored === 'light' ? 'light' : 'dark';
@@ -20,7 +20,8 @@
   /* ============================================================
      DESIGN TOKENS — dual theme (dark default, light available)
      Theme switches via [data-theme="light"] on <html>, persisted
-     to localStorage, defaults to dark per design direction.
+     to localStorage. Same system as index.html for consistency
+     between the public board and the host console.
      ============================================================ */
   :root,
   html[data-theme="dark"] {
@@ -70,26 +71,13 @@
     --radius: 14px;
     --radius-sm: 8px;
 
-    /* Backward-compatible aliases — the rest of this file's CSS was
-       written against the original token names (--kitchen-gold,
-       --line-paint). Rather than rewrite ~18 scattered references and
-       risk missing one, the old names now resolve through the new
-       theme-aware tokens, so every existing rule keeps working AND
-       correctly switches with the theme.
-       NOTE: --line-paint specifically is used as "the light color drawn
-       on top of the always-dark court-green diagram" (court lines, text
-       on the green topbar, paddle silhouettes) — the court diagram stays
-       dark green in BOTH themes since it's meant to look like an actual
-       court, so this stays a fixed off-white rather than theme-swapping. */
+    /* Backward-compatible aliases — same reasoning as index.html: the
+       rest of this file's CSS references the original token names, so
+       these resolve through the new theme-aware tokens instead of
+       requiring every reference to be rewritten by hand. */
     --kitchen-gold: var(--accent);
     --line-paint: #F7F5EF;
 
-    /* Motion language — these specific curves ARE the design.
-       - bounce: physical "landing on a court line" settle, used for
-         entrances and queue-shuffle FLIP animations
-       - serve: sharp, decisive, no overshoot — used only when a match
-         actually starts, deliberately distinct from bounce
-       - settle: gentle, used for completed/locked states */
     --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
     --ease-serve: cubic-bezier(0.22, 0.68, 0.36, 1);
     --ease-settle: cubic-bezier(0.16, 1, 0.3, 1);
@@ -113,38 +101,24 @@
   }
   .mono { font-family: var(--font-mono); }
 
-  input, select, textarea { font-size: 16px; min-height: 44px; background: var(--surface-raised); color: var(--ink); border-color: var(--border-soft); }
-  button { min-height: 44px; }
-
-  /* ---------- Court-line motif used structurally (not just inside
-     literal court diagrams) — a recurring dashed-line texture used as
-     section dividers and active-tab indicator. ---------- */
+  /* ---------- Court-line motif, realtime pulse, drop-in entrance,
+     stagger, serve-in — identical system to index.html ---------- */
   .court-line-divider {
     height: 2px; margin: 20px 0;
     background-image: repeating-linear-gradient(90deg, var(--border-soft) 0 10px, transparent 10px 18px);
   }
-
-  /* ---------- Realtime change pulse — a one-shot edge-glow sweep,
-     applied via a CSS class toggled briefly by JS when a row updates
-     from a realtime event. Not a flash; a sweep that settles. ---------- */
   @keyframes realtime-pulse {
     0% { box-shadow: 0 0 0 0 var(--accent-glow); }
     35% { box-shadow: 0 0 0 6px var(--accent-glow); }
     100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
   }
   .pulse-update { animation: realtime-pulse var(--dur-pulse) var(--ease-settle); }
-
-  /* ---------- Card drop/settle entrance — physical weight, lands
-     on the court line rather than fading in place. ---------- */
   @keyframes drop-settle {
     0% { opacity: 0; transform: translateY(-14px) scale(0.97); }
     60% { opacity: 1; }
     100% { opacity: 1; transform: translateY(0) scale(1); }
   }
   .drop-in { animation: drop-settle var(--dur-base) var(--ease-bounce) both; }
-
-  /* ---------- Staggered list entrance — cascading drop-in, capped
-     at the first 8 items so long rosters don't feel slow. ---------- */
   .stagger-item { animation: drop-settle var(--dur-base) var(--ease-bounce) both; }
   .stagger-item:nth-child(1) { animation-delay: 0ms; }
   .stagger-item:nth-child(2) { animation-delay: 40ms; }
@@ -154,17 +128,12 @@
   .stagger-item:nth-child(6) { animation-delay: 200ms; }
   .stagger-item:nth-child(7) { animation-delay: 240ms; }
   .stagger-item:nth-child(8) { animation-delay: 280ms; }
-
-  /* ---------- "Serve" transition — sharp diagonal motion used ONLY
-     when a match actually starts on a court. Deliberately NOT bouncy:
-     decisive, not playful, distinct from the drop-settle entrance. ---------- */
   @keyframes serve-in {
     0% { opacity: 0; transform: translate(-10px, 8px) rotate(-1.2deg); }
     100% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
   }
   .serve-in { animation: serve-in var(--dur-fast) var(--ease-serve) both; }
 
-  /* ---------- Theme toggle ---------- */
   .theme-toggle {
     background: var(--surface-hover); border: 1px solid var(--border-soft); border-radius: 999px;
     width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
@@ -175,208 +144,301 @@
   .theme-toggle:active { transform: scale(0.94); }
   .theme-toggle svg { width: 18px; height: 18px; color: var(--accent); }
 
+  /* MOBILE-SAFE INPUT DEFAULTS — 16px minimum prevents iOS Safari
+     auto-zoom on focus; 44px minimum height meets Apple/Google touch
+     target guidelines. Every input/select/textarea/button inherits this
+     unless explicitly overridden below. */
+  input, select, textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  button, .player-check, .type-option, .win-select-btn, .assign-btn, .remove-btn {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+  @media (max-width: 600px) {
+    /* on small screens, compact UI chrome (badges, pills) can stay smaller
+       than 44px since they aren't primary tap targets, but anything that
+       triggers an action must not shrink below this */
+    .status-pill, .lane-pos, .round-pill, .format-pill { min-height: 0; }
+  }
 
   /* ============ PAGE STYLES ============ */
-  body { padding-bottom: 80px; }
+  body { padding-bottom: 60px; }
 
-  .topbar {
-    background: linear-gradient(135deg, var(--court-green) 0%, var(--court-green-dark) 100%); color: var(--line-paint); padding: 18px 24px;
-    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
-    position: sticky; top: 0; z-index: 10; box-shadow: var(--shadow-card);
-  }
-  .brand { display: flex; align-items: center; gap: 10px; }
-  .brand-paddle { width: 22px; height: 30px; color: var(--kitchen-gold); flex-shrink: 0; }
-  .brand .display { font-size: 22px; color: var(--line-paint); }
+  .topbar { background: var(--ink); color: var(--line-paint); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .brand { display: flex; align-items: center; gap: 8px; }
+  .brand-paddle { width: 18px; height: 24px; color: var(--kitchen-gold); flex-shrink: 0; }
+  .brand .display { font-size: 20px; }
   .brand .dot { color: var(--kitchen-gold); }
-  .session-name { font-size: 13px; opacity: 0.8; font-weight: 500; }
-  .session-picker { display: flex; gap: 8px; align-items: center; }
-  .session-picker input { font-family: var(--font-mono); padding: 10px 12px; border-radius: var(--radius-sm); border: none; width: 220px; font-size: 16px; }
-  .session-picker button { background: var(--kitchen-gold); color: var(--ink); border: none; font-weight: 700; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
+  .topbar-right-wrap { display: flex; align-items: center; gap: 12px; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+  .topbar-right button { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: var(--line-paint); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 12px; }
 
-  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 28px 24px; }
 
-  .courts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 36px; }
-  .court-card {
-    background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden;
-    transition: transform var(--dur-fast) var(--ease-bounce), box-shadow var(--dur-fast) var(--ease-settle);
+  .auth-box { max-width: 380px; margin: 80px auto; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 32px; }
+  .auth-box h1 { font-size: 22px; margin: 0 0 4px; }
+  .auth-box p.sub { color: var(--resting-slate); font-size: 13px; margin: 0 0 20px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .field input, .field select { width: 100%; padding: 12px; border: 1.5px solid var(--border-soft); border-radius: var(--radius-sm); font-size: 16px; }
+  .btn-primary { width: 100%; background: var(--court-green); color: white; border: none; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; margin-top: 6px; }
+  .btn-secondary { width: 100%; background: transparent; color: var(--court-green); border: 1.5px solid var(--court-green); padding: 10px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; margin-top: 8px; }
+  .auth-error { color: var(--loser-coral); font-size: 12px; margin-top: 8px; }
+
+  .card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 16px; margin: 0 0 14px; }
+  .session-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+  .session-row:last-child { border-bottom: none; }
+  .session-row .meta { font-size: 12px; color: var(--resting-slate); }
+  .finish-session-btn { background: var(--loser-coral); color: white; border: none; padding: 9px 16px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; }
+  .ref-code-pill { background: var(--court-green); color: white; font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 5px; letter-spacing: 0.03em; }
+
+  .share-card {
+    background: linear-gradient(135deg, var(--court-green) 0%, var(--court-green-dark) 100%);
+    border-radius: var(--radius); padding: 18px 20px; margin-bottom: 18px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 16px; box-shadow: var(--shadow-card);
   }
-  .court-card:hover { transform: translateY(-3px) scale(1.012); box-shadow: var(--shadow-raised); }
-  .court-label { background: var(--court-green-dark); color: var(--line-paint); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; }
-  .court-label .num { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.05em; }
-  .court-timer { font-family: var(--font-mono); font-weight: 700; font-size: 15px; color: var(--kitchen-gold); }
-  .court-timer.idle { color: var(--resting-slate); }
+  .share-card-code { display: flex; flex-direction: column; gap: 2px; }
+  .ref-code-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: rgba(255,255,255,0.65); letter-spacing: 0.04em; }
+  .ref-code-big { font-size: 22px; font-weight: 800; color: var(--kitchen-gold); letter-spacing: 0.05em; }
+  .share-card-link { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 180px; }
+  .share-card-link-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: rgba(255,255,255,0.65); letter-spacing: 0.04em; }
+  .share-card-url { font-size: 12px; color: rgba(255,255,255,0.9); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .share-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .share-btn { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 9px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .share-btn-primary { background: var(--kitchen-gold); color: var(--ink); border-color: var(--kitchen-gold); }
 
-  .court-diagram { background: linear-gradient(160deg, var(--court-green) 0%, var(--court-green-dark) 100%); aspect-ratio: 4 / 5; position: relative; display: flex; flex-direction: column; padding: 14px; }
-  .court-diagram::before { content: ''; position: absolute; inset: 14px; border: 3px solid var(--line-paint); opacity: 0.85; }
-  .net-line { position: absolute; left: 14px; right: 14px; top: 50%; height: 4px; background: var(--line-paint); transform: translateY(-50%); opacity: 0.9; }
-  .net-line::after { content: ''; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
-  .net-ball { position: absolute; width: 18px; height: 18px; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--kitchen-gold); z-index: 3; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
-  .kitchen-line-top, .kitchen-line-bottom { position: absolute; left: 14px; right: 14px; height: 2px; background: var(--line-paint); opacity: 0.55; z-index: 1; }
-  .kitchen-line-top { top: 32%; }
-  .kitchen-line-bottom { bottom: 32%; }
+  .session-row button { background: var(--court-green); color: white; border: none; padding: 7px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; }
 
-  /* Centerline ("the T line") — runs from each kitchen line to the
-     baseline on that side ONLY. It must NOT cross the net or pass
-     through the kitchen, since the non-volley zone is one continuous
-     unbroken strip — this gap is what makes the court read as accurate
-     rather than just a generic line down the middle. */
-  .centerline-top, .centerline-bottom {
-    position: absolute; left: 50%; width: 2px; background: var(--line-paint); opacity: 0.55; transform: translateX(-50%); z-index: 1;
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+
+  .session-type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .type-option { border: 2px solid var(--border-soft); border-radius: var(--radius-sm); padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+  .type-option strong { font-size: 14px; }
+  .type-option span { font-size: 11px; color: var(--resting-slate); }
+  .type-option.selected { border-color: var(--court-green); background: rgba(27,77,62,0.05); }
+  .type-option.selected strong { color: var(--court-green); }
+
+  .stacking-mode-toggle { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .mode-option { border: 2px solid var(--border-soft); border-radius: var(--radius-sm); padding: 12px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+  .mode-option strong { font-size: 13px; }
+  .mode-option span { font-size: 10px; color: var(--resting-slate); line-height: 1.3; }
+  .mode-option.selected { border-color: var(--kitchen-gold); background: rgba(232,184,75,0.1); }
+  .mode-option.selected strong { color: var(--ink); }
+  .mode-explainer { font-size: 11px; color: var(--resting-slate); margin: 4px 0 0; line-height: 1.4; }
+
+  .password-field-wrap { position: relative; }
+  .password-field-wrap input { width: 100%; padding-right: 42px; }
+  .password-toggle-btn {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; font-size: 16px; padding: 6px 8px; min-height: 0; cursor: pointer; opacity: 0.6;
   }
-  .centerline-top { top: 14px; height: calc(32% - 14px); }
-  .centerline-bottom { bottom: 14px; height: calc(32% - 14px); }
+  .password-toggle-btn:hover { opacity: 1; }
 
-  .court-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 2; padding: 8px 16px; }
-  .empty-court-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--line-paint); opacity: 0.6; font-size: 13px; font-weight: 600; z-index: 2; }
+  .console-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .console-header h1 { font-size: 22px; margin: 0; }
 
-  /* Paddle-shaped player markers — replaces the plain pill chip. Each
-     player gets a paddle silhouette with their name printed across the
-     face, sized to read clearly at a glance and centered in its own
-     service box (not clustered toward the middle of the court). */
-  .paddle-chip {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    width: 84px;
-    flex: 1 1 0;
-    max-width: 110px;
+  .tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 2px solid var(--border-soft); }
+  .tab-btn { background: none; border: none; padding: 10px 16px; font-weight: 700; font-size: 13px; color: var(--ink-muted); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: color var(--dur-fast) var(--ease-settle), border-color var(--dur-fast) var(--ease-bounce); }
+  .tab-btn.active { color: var(--ink); border-bottom-color: var(--accent); }
+  .inbox-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px;
+    background: var(--loser-coral); color: white; font-size: 11px; font-weight: 800;
+    border-radius: 999px; vertical-align: middle;
+    animation: badge-pulse 1.6s ease-in-out infinite;
   }
-  .paddle-chip-shape {
-    width: 100%; aspect-ratio: 48 / 64; position: relative;
-    filter: drop-shadow(0 3px 6px rgba(0,0,0,0.3));
+  @keyframes badge-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.15); }
   }
-  .paddle-chip-shape svg { width: 100%; height: 100%; display: block; color: var(--line-paint); }
-  .paddle-chip-name {
-    position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
-    width: 72%; font-size: 14px; font-weight: 800; color: var(--ink); text-align: center;
-    line-height: 1.15; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
-    -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word;
-    font-family: var(--font-body);
+  @media (prefers-reduced-motion: reduce) {
+    .inbox-badge { animation: none; }
   }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
 
-  .queues { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 36px; }
+  .add-player-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .add-player-row input { flex: 1; min-width: 140px; padding: 10px 12px; border: 1.5px solid var(--border-soft); border-radius: var(--radius-sm); }
+  .add-player-row select { padding: 10px; border: 1.5px solid var(--border-soft); border-radius: var(--radius-sm); }
+  .add-player-row button { background: var(--court-green); color: white; border: none; padding: 10px 18px; border-radius: var(--radius-sm); font-weight: 700; }
 
-  .tournament-round-banner { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
-  .round-pill { background: var(--court-green); color: white; font-family: var(--font-display); font-size: 13px; padding: 8px 16px; border-radius: 999px; }
-  .format-pill { background: var(--kitchen-gold); color: var(--ink); font-weight: 700; font-size: 12px; padding: 6px 14px; border-radius: 999px; }
-
-  .matchup-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px; }
-  .matchup-card { background: var(--surface); box-shadow: var(--shadow-card); display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600; flex-wrap: wrap; gap: 8px; }
-  .matchup-card.in-progress { box-shadow: 0 0 0 2px var(--kitchen-gold), var(--shadow-card); }
-  .matchup-card.completed { opacity: 0.7; }
-  .status-waiting { background: var(--resting-slate); }
-  .status-playing { background: var(--kitchen-gold); color: var(--ink); }
-
-  .standings-card { margin-bottom: 28px; background: var(--surface); box-shadow: var(--shadow-card); border-radius: var(--radius); padding: 18px; }
-  .standings-title { font-size: 15px; margin: 0 0 12px; }
   .roster-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .roster-table th { text-align: left; padding: 8px; color: var(--resting-slate); font-size: 11px; text-transform: uppercase; border-bottom: 2px solid var(--border-soft); }
   .roster-table td { padding: 8px; border-bottom: 1px solid var(--border-soft); }
-  .lane { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; }
-  .lane-header { padding: 12px 16px; font-family: var(--font-display); font-size: 13px; letter-spacing: 0.04em; color: white; display: flex; justify-content: space-between; align-items: center; }
-  .lane-header .count { font-family: var(--font-mono); opacity: 0.85; }
-  .lane.winners .lane-header { background: var(--winner-green); }
-  .lane.losers .lane-header { background: var(--loser-coral); }
-  .lane.waiting .lane-header { background: var(--waiting-blue); }
-  .lane.resting .lane-header { background: var(--resting-slate); }
+  .status-pill { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; color: white; }
+  .status-waiting { background: var(--waiting-blue); }
+  .status-playing { background: var(--court-green); }
+  .status-winners_queue { background: var(--winner-green); }
+  .status-losers_queue { background: var(--loser-coral); }
+  .status-resting { background: var(--resting-slate); }
+  .status-left { background: var(--resting-slate); opacity: 0.7; }
+  .roster-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  .roster-action-btn { font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 5px; border: none; min-height: 0; white-space: nowrap; }
+  .roster-action-rest { background: var(--resting-slate); color: white; }
+  .roster-action-bring-back { background: var(--winner-green); color: white; }
+  .roster-action-leave { background: none; color: var(--loser-coral); padding-left: 4px; padding-right: 4px; }
+  .remove-btn { background: none; border: none; color: var(--loser-coral); font-size: 11px; font-weight: 700; }
 
-  .lane-list { list-style: none; margin: 0; padding: 8px; min-height: 60px; }
-  .lane-item {
-    padding: 8px 10px; border-bottom: 1px solid var(--border-soft); font-size: 13px; font-weight: 600;
-    display: flex; justify-content: space-between; align-items: center;
-    transition: background var(--dur-fast) var(--ease-settle), padding-left var(--dur-fast) var(--ease-bounce);
+  .player-checklist { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .player-check { border: 1.5px solid var(--border-soft); padding: 7px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
+  .player-check.selected { background: var(--court-green); color: white; border-color: var(--court-green); }
+
+  .courts-host-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+
+  .planned-courts-list { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .planned-court-row { background: var(--surface-hover); border-radius: var(--radius-sm); padding: 12px; }
+  .planned-court-row h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; color: var(--resting-slate); }
+  .planned-matchup { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
+  .planned-matchup:last-child { border-bottom: none; }
+  #planCourtSelect { padding: 9px 12px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-soft); font-size: 14px; }
+  .court-host-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); overflow: hidden; cursor: pointer; transition: transform var(--dur-fast) var(--ease-bounce), box-shadow var(--dur-fast) var(--ease-settle); }
+  .court-host-card:hover { transform: translateY(-3px) scale(1.012); box-shadow: var(--shadow-raised); }
+  .court-host-label { background: var(--court-green-dark); color: white; padding: 10px 14px; font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+  .court-host-label .num { font-family: var(--font-display); font-size: 13px; letter-spacing: 0.04em; }
+  .court-host-timer { font-family: var(--font-mono); font-weight: 700; color: var(--kitchen-gold); }
+  .court-host-timer.idle { color: rgba(255,255,255,0.5); }
+
+  /* Visual court diagram — same geometry as index.html's public board.
+     flex-direction: column stacks the two sides top/bottom with a
+     HORIZONTAL net between them (this is the correct orientation — a
+     pickleball court viewed from above has players at each baseline,
+     not side by side). */
+  .court-host-diagram {
+    background: linear-gradient(160deg, var(--court-green) 0%, var(--court-green-dark) 100%);
+    aspect-ratio: 4 / 5; position: relative; display: flex; flex-direction: column; padding: 12px;
   }
-  .lane-item:hover { background: var(--surface-hover); padding-left: 14px; }
-  .lane-item:last-child { border-bottom: none; }
-  .lane-pos { font-family: var(--font-mono); color: var(--resting-slate); font-weight: 700; font-size: 11px; }
-  .result-badge { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 4px; font-size: 9px; font-weight: 800; margin-left: 4px; }
-  .result-badge.won { background: var(--winner-green); color: white; }
-  .result-badge.lost { background: var(--loser-coral); color: white; }
-  .lane-empty { padding: 16px; text-align: center; color: var(--resting-slate); font-size: 12px; }
-
-  .find-me { background: var(--kitchen-gold); border-radius: var(--radius); padding: 16px; margin-bottom: 28px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .find-me input { flex: 1; min-width: 180px; padding: 12px; border-radius: var(--radius-sm); border: none; font-size: 16px; }
-  .find-me-result { font-weight: 700; font-size: 13px; background: var(--ink); color: white; padding: 8px 12px; border-radius: var(--radius-sm); }
-
-  .recent-results { margin-bottom: 24px; }
-  .recent-results-title {
-    font-size: 13px; margin: 0 0 12px; color: var(--ink); text-transform: uppercase; letter-spacing: 0.03em;
-    padding-bottom: 8px;
-    background-image: repeating-linear-gradient(90deg, var(--border-soft) 0 8px, transparent 8px 14px);
-    background-position: bottom; background-repeat: repeat-x; background-size: 100% 2px;
+  .court-host-diagram::before { content: ''; position: absolute; inset: 12px; border: 2px solid var(--line-paint); opacity: 0.85; }
+  .court-host-net { position: absolute; left: 12px; right: 12px; top: 50%; height: 3px; background: var(--line-paint); transform: translateY(-50%); opacity: 0.9; z-index: 1; }
+  .court-host-net::after { content: ''; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 9px); opacity: 0.5; }
+  .court-host-kitchen-top, .court-host-kitchen-bottom { position: absolute; left: 12px; right: 12px; height: 2px; background: var(--line-paint); opacity: 0.55; z-index: 1; }
+  .court-host-kitchen-top { top: 32%; }
+  .court-host-kitchen-bottom { bottom: 32%; }
+  .court-host-centerline-top, .court-host-centerline-bottom {
+    position: absolute; left: 50%; width: 2px; background: var(--line-paint); opacity: 0.55; transform: translateX(-50%); z-index: 1;
   }
-  .recent-results-list { display: flex; flex-direction: column; gap: 6px; }
-  .recent-result-row {
-    background: var(--surface); box-shadow: var(--shadow-card); border-radius: var(--radius-sm); padding: 10px 14px;
-    display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 10px; align-items: center; font-size: 13px; font-weight: 600;
+  .court-host-centerline-top { top: 12px; height: calc(32% - 12px); }
+  .court-host-centerline-bottom { bottom: 12px; height: calc(32% - 12px); }
+  .court-host-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 2; }
+  .court-host-empty-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--line-paint); opacity: 0.7; font-size: 13px; font-weight: 700; z-index: 2; }
+  .court-host-paddle { display: flex; flex-direction: column; align-items: center; width: 64px; }
+  .court-host-paddle-shape { width: 100%; aspect-ratio: 48/64; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); position: relative; }
+  .court-host-paddle-shape svg { width: 100%; height: 100%; color: var(--line-paint); }
+  .court-host-paddle-name { position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%); width: 72%; font-size: 11px; font-weight: 800; color: var(--ink); text-align: center; line-height: 1.1; }
+  .court-host-footer { padding: 10px 14px; text-align: center; font-size: 11px; font-weight: 700; color: var(--resting-slate); }
+  .court-host-footer.ongoing { color: var(--kitchen-gold); }
+  .court-host-footer.queued { color: var(--winner-green); }
+
+  .planned-matchup { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
+  .planned-matchup:last-child { border-bottom: none; }
+  #planCourtSelect { padding: 9px 12px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-soft); font-size: 14px; }
+  .matchup-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 13px; font-weight: 600; }
+
+  .matchup-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .matchup-card { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; flex-wrap: wrap; gap: 8px; }
+  .matchup-card.pending { background: var(--surface-hover); border: 1px solid var(--border-soft); }
+  .matchup-card.in-progress { background: rgba(232,184,75,0.12); border: 1px solid var(--kitchen-gold); }
+  .matchup-card.completed { background: rgba(63,166,107,0.08); border: 1px solid var(--winner-green); opacity: 0.8; }
+  .matchup-card select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-soft); font-size: 12px; }
+  .matchup-vs { color: var(--resting-slate); font-size: 11px; }
+  .win-select-btn { background: var(--winner-green); color: white; border: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+  .ongoing-pill { display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 700; color: var(--kitchen-gold); background: rgba(232,184,75,0.15); padding: 3px 10px; border-radius: 999px; }
+
+  /* result confirm + review modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(21,32,28,0.55); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+  .modal-box { background: var(--surface); border-radius: var(--radius); max-width: 480px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
+  .modal-box h2 { font-size: 16px; margin: 0 0 6px; }
+  .modal-sub { font-size: 13px; color: var(--resting-slate); margin: 0 0 18px; }
+  .confirm-actions { display: flex; gap: 10px; margin-top: 18px; }
+  .confirm-actions button { flex: 1; padding: 11px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; border: none; }
+  .btn-yes { background: var(--winner-green); color: white; }
+  .btn-no { background: var(--surface-hover); color: var(--ink); }
+  .winner-pick-row { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+  .winner-pick-option { border: 2px solid var(--border-soft); border-radius: var(--radius-sm); padding: 12px; font-weight: 700; font-size: 13px; cursor: pointer; text-align: center; }
+  .winner-pick-option:hover { border-color: var(--court-green); }
+
+  .regroup-lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .regroup-lane { border-radius: var(--radius-sm); padding: 12px; min-height: 100px; }
+  .regroup-lane.winners-lane { background: rgba(63,166,107,0.1); border: 2px solid var(--winner-green); }
+  .regroup-lane.losers-lane { background: rgba(224,101,79,0.1); border: 2px solid var(--loser-coral); }
+  .regroup-lane h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .regroup-lane.winners-lane h4 { color: var(--winner-green); }
+  .regroup-lane.losers-lane h4 { color: var(--loser-coral); }
+  .regroup-chip {
+    background: var(--surface); border: 1px solid var(--border-soft); border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 600;
+    margin: 0 4px 6px 0; display: inline-block; cursor: pointer;
   }
-  .recent-result-score { font-size: 13px; font-weight: 700; color: var(--court-green); text-align: center; }
-  .recent-result-duration { font-size: 11px; color: var(--resting-slate); text-align: right; }
-  .winner-name { color: var(--winner-green); }
+  .regroup-hint { font-size: 11px; color: var(--resting-slate); margin: -8px 0 14px; }
+  .court-empty-msg { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 12px 0; }
+  .assign-btn { width: 100%; background: var(--kitchen-gold); color: var(--ink); border: none; padding: 9px; border-radius: var(--radius-sm); font-weight: 700; font-size: 12px; margin-top: 8px; }
 
-  .rest-request-box { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; margin-bottom: 16px; }
-  .rest-request-box h3 { font-size: 13px; margin: 0 0 10px; }
-  .rest-request-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .rest-request-row select { flex: 1; min-width: 160px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: 16px; }
-  .rest-request-row button { background: var(--waiting-blue); color: white; border: none; padding: 12px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; white-space: nowrap; }
-
-  .message-box { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 16px; }
-  .message-box h3 { font-size: 13px; margin: 0 0 10px; }
-  .message-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .message-row input { padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: 16px; }
-  .message-row input[name="from"] { width: 120px; }
-  .message-row input[name="msg"] { flex: 1; min-width: 160px; }
-  .message-row button { background: var(--court-green); color: white; border: none; padding: 9px 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; }
-  .message-hint { font-size: 11px; color: var(--resting-slate); margin-top: 8px; }
-
-  .empty-state { text-align: center; padding: 60px 20px; color: var(--resting-slate); }
-  .empty-state .display { font-size: 18px; color: var(--ink); margin-bottom: 8px; }
-  .empty-state-paddle { width: 56px; height: 75px; color: var(--court-green); opacity: 0.25; margin-bottom: 16px; }
+  .inbox-item { padding: 12px; border-radius: var(--radius-sm); background: var(--surface-hover); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .inbox-item .who { font-weight: 700; font-size: 13px; }
+  .inbox-item .what { font-size: 13px; color: var(--ink); }
+  .inbox-item .when { font-size: 11px; color: var(--resting-slate); }
+  .inbox-actions button { font-size: 11px; font-weight: 700; border: none; padding: 6px 10px; border-radius: 6px; margin-left: 6px; }
+  .btn-dismiss { background: var(--surface-hover); color: var(--ink); }
+  .btn-confirm-rest { background: var(--winner-green); color: white; }
+  .empty-inbox { color: var(--resting-slate); font-size: 13px; text-align: center; padding: 20px; }
 
   /* ============================================================
      MOBILE BREAKPOINT — tablet and below
      ============================================================ */
   @media (max-width: 768px) {
     .container { padding: 16px 14px; }
-    .topbar { padding: 12px 16px; flex-wrap: wrap; }
-    .brand { flex: 1 1 100%; }
-    .session-picker { flex: 1 1 100%; }
-    .session-picker input { width: 100%; }
+    .topbar { padding: 12px 16px; }
+    .session-type-toggle { grid-template-columns: 1fr; }
+    .stacking-mode-toggle { grid-template-columns: 1fr; }
+    .regroup-lanes { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
 
-    .courts-grid { grid-template-columns: 1fr; gap: 14px; margin-bottom: 24px; }
-    .queues { grid-template-columns: 1fr; gap: 12px; margin-bottom: 24px; }
+    /* tab bar: horizontal scroll instead of squeeze/wrap, since 3-4 tabs
+       at full tap-target width don't fit 375px without scrolling */
+    .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn { flex-shrink: 0; padding: 10px 14px; }
 
-    /* court diagram: cap height so a single-column phone layout doesn't
-       turn each court into a huge nearly-square block requiring lots of
-       scrolling to see all courts at a glance */
-    .court-diagram { aspect-ratio: 3 / 4; }
-    .paddle-chip { width: 64px; }
-    .paddle-chip-name { font-size: 11px; }
+    .console-header { flex-direction: column; align-items: stretch; }
+    .console-header > div:last-child { align-items: stretch; }
+    .share-card { flex-direction: column; align-items: stretch; }
+    .share-card-actions { justify-content: stretch; }
+    .share-card-actions .share-btn { flex: 1; }
+    .share-card-url { white-space: normal; word-break: break-all; }
 
-    .find-me { flex-direction: column; align-items: stretch; padding: 14px; }
-    .find-me input { width: 100%; }
-    .find-me-result { text-align: center; }
+    .courts-host-grid { grid-template-columns: 1fr; }
 
-    .message-row { flex-direction: column; }
-    .message-row input[name="from"], .message-row input[name="msg"], .message-row button { width: 100%; }
-
-    .rest-request-row { flex-direction: column; }
-    .rest-request-row select, .rest-request-row button { width: 100%; }
-
-    .matchup-card { flex-direction: column; align-items: stretch; text-align: left; gap: 6px; }
-    .tournament-round-banner { flex-wrap: wrap; }
-
-    .recent-result-row { grid-template-columns: 1fr; text-align: center; gap: 4px; }
-    .recent-result-duration { text-align: center; }
-
+    /* tables: wrap in horizontal scroll rather than crush columns —
+       see .table-scroll wrapper added in markup */
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -2px; }
-    .roster-table { min-width: 420px; }
+    .roster-table { min-width: 480px; }
+
+    /* modals: edge-to-edge with safe margin, no awkward floating box */
+    .modal-backdrop { padding: 12px; align-items: flex-end; }
+    .modal-box { max-width: 100%; max-height: 85vh; padding: 18px; border-radius: var(--radius) var(--radius) 0 0; }
+    .confirm-actions { flex-direction: column-reverse; }
+    .confirm-actions button { width: 100%; }
+
+    /* player checklists: bigger tap targets, more breathing room between chips */
+    .player-checklist { gap: 10px; }
+    .player-check { padding: 10px 14px; font-size: 13px; }
+
+    .add-player-row { flex-direction: column; }
+    .add-player-row input, .add-player-row select, .add-player-row button { width: 100%; }
+
+    .matchup-card { flex-direction: column; align-items: stretch; text-align: left; }
+    .matchup-card .win-select-btn { width: 100%; }
+    .matchup-card select { width: 100%; }
 
     h1 { font-size: 18px; }
-    .standings-title { font-size: 14px; }
+    .card h2 { font-size: 14px; }
   }
 
   @media (max-width: 420px) {
-    .brand .display { font-size: 18px; }
-    .empty-state { padding: 40px 16px; }
+    .auth-box { margin: 40px auto; padding: 24px 20px; }
+    .winner-pick-option { font-size: 12px; padding: 14px 10px; }
   }
 </style>
 </head>
@@ -399,50 +461,29 @@
       <circle cx="24" cy="38" r="1.4" fill="white" opacity="0.4"/>
     </svg>
     <span class="display">iStackyyy<span class="dot">.</span></span>
-    <span class="session-name" id="sessionNameLabel"></span>
   </div>
-  <div class="session-picker" id="sessionPicker">
-    <input type="text" id="sessionIdInput" placeholder="e.g. STACK-A3F9 or paste link">
-    <button onclick="loadSessionFromInput()">View</button>
+  <div class="topbar-right-wrap">
+    <div class="topbar-right" id="topbarRight"></div>
+    <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" aria-label="Toggle light/dark theme" title="Toggle theme">
+      <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+        <circle cx="12" cy="12" r="4"></circle>
+        <line x1="12" y1="2" x2="12" y2="4"></line>
+        <line x1="12" y1="20" x2="12" y2="22"></line>
+        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+        <line x1="2" y1="12" x2="4" y2="12"></line>
+        <line x1="20" y1="12" x2="22" y2="12"></line>
+        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
+      </svg>
+      <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+      </svg>
+    </button>
   </div>
-  <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" aria-label="Toggle light/dark theme" title="Toggle theme">
-    <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-      <circle cx="12" cy="12" r="4"></circle>
-      <line x1="12" y1="2" x2="12" y2="4"></line>
-      <line x1="12" y1="20" x2="12" y2="22"></line>
-      <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
-      <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
-      <line x1="2" y1="12" x2="4" y2="12"></line>
-      <line x1="20" y1="12" x2="22" y2="12"></line>
-      <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
-      <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
-    </svg>
-    <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-    </svg>
-  </button>
 </div>
 
-<div class="container" id="mainContent">
-  <div class="empty-state">
-    <svg class="empty-state-paddle" viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/>
-      <ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/>
-      <circle cx="16" cy="18" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="24" cy="14" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="32" cy="18" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="14" cy="26" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="24" cy="22" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="34" cy="26" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="16" cy="34" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="24" cy="30" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="32" cy="34" r="1.4" fill="white" opacity="0.5"/>
-      <circle cx="24" cy="38" r="1.4" fill="white" opacity="0.5"/>
-    </svg>
-    <div class="display">No session loaded</div>
-    <p>Ask your host for the session link, or paste the session ID above.</p>
-  </div>
-</div>
+<div class="container" id="appRoot"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -454,8 +495,6 @@ function applyThemeIcon() {
   const sun = document.getElementById('themeIconSun');
   const moon = document.getElementById('themeIconMoon');
   if (!sun || !moon) return;
-  // Sun shows when in light mode (tap to go dark); moon shows in dark
-  // mode (tap to go light) — the icon represents the CURRENT state.
   sun.style.display = theme === 'light' ? 'block' : 'none';
   moon.style.display = theme === 'light' ? 'none' : 'block';
 }
@@ -478,10 +517,222 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
-// TOURNAMENT STANDINGS (display-only — matching logic itself lives
-// entirely in host.html; this file never assigns matches, only shows
-// live state, so no copy of the matching engine belongs here)
+// STACKING ENGINE
 // ============================================================
+const TIER_RANK = { beginner: 0, intermediate: 1, advanced: 2, open: -1 };
+
+function tiersCompatible(teamATier, teamBTier, skillMatchMode) {
+  if (skillMatchMode === 'open') return true;
+  if (teamATier === 'open' || teamBTier === 'open') return true;
+  const rankA = TIER_RANK[teamATier];
+  const rankB = TIER_RANK[teamBTier];
+  if (skillMatchMode === 'strict') return rankA === rankB;
+  if (skillMatchMode === 'adjacent') return Math.abs(rankA - rankB) <= 1;
+  return true;
+}
+
+function getTeamTier(team, playersById) {
+  const tiers = team.player_ids.map(pid => playersById[pid]?.skill_tier).filter(Boolean);
+  if (tiers.length === 0) return 'open';
+  if (tiers.includes('open')) {
+    const nonOpen = tiers.filter(t => t !== 'open');
+    if (nonOpen.length === 0) return 'open';
+    tiers.length = 0;
+    tiers.push(...nonOpen);
+  }
+  const ranks = tiers.map(t => TIER_RANK[t]);
+  const minRank = Math.min(...ranks);
+  return Object.keys(TIER_RANK).find(k => TIER_RANK[k] === minRank);
+}
+
+/**
+ * Strict FIFO pop: always takes the front of the queue, no skipping for
+ * skill matching or any other reason.
+ */
+function popFront(queueTeams) {
+  if (!queueTeams || queueTeams.length === 0) return null;
+  return queueTeams[0];
+}
+
+/**
+ * ============================================================
+ * UNIFIED SINGLE-POOL MATCHING — the core open-play engine.
+ *
+ * CORE GUARANTEE: a player can NEVER play before someone who has been
+ * free LONGER, full stop — regardless of whether either of them won,
+ * lost, or never played yet. There is no separate "winners queue" that
+ * skips ahead of a longer-waiting "general queue"; everyone who is not
+ * currently on a court sits in ONE pool, ordered purely by
+ * became_free_at (when they joined, or when their last match ended).
+ *
+ * This directly fixes the old bug where a player who just won could
+ * replay seconds later just because another winner happened to also be
+ * free, while a dozen people who'd been waiting far longer sat idle in
+ * a different "lane."
+ *
+ * Doubles teams are formed FRESH every single time from the 4
+ * longest-free individuals — never persisted as a fixed pair between
+ * matches, since this is open play, not a tournament: players should
+ * get the chance to team up with and against many different people.
+ *
+ * players: array of { id, became_free_at, last_match_result } for
+ * everyone NOT currently on a court (already excludes 'playing').
+ * Must already be sorted oldest-became_free_at-first by the caller.
+ *
+ * Returns: { teamAPlayerIds: [...], teamBPlayerIds: [...] } | null
+ * ============================================================
+ */
+function decideNextMatchFromPool(players, teamSize) {
+  const needed = teamSize * 2;
+  if (!players || players.length < needed) return null;
+
+  // STRICT time-order: the next `needed` players are whoever has been
+  // free longest, no exceptions — this is the entire fairness guarantee
+  // and must never be reordered for any reason, including win/loss.
+  const group = players.slice(0, needed);
+
+  if (teamSize === 1) {
+    // Singles: no recombination needed, just the 2 longest-free individuals.
+    return { teamAPlayerIds: [group[0].id], teamBPlayerIds: [group[1].id] };
+  }
+
+  // Doubles: within EXACTLY this group of 4 (never reaching further down
+  // the line), try to split into a "won last match" side and a "lost
+  // last match" side. If that split isn't clean (e.g. 3 winners + 1
+  // loser, or a mix including never-played), fall back to a simple
+  // first-2 vs last-2 split — still strictly the 4 longest-free people,
+  // just without a winner/loser grouping preference.
+  const winners = group.filter(p => p.last_match_result === 'won');
+  const losers = group.filter(p => p.last_match_result === 'lost');
+  const neutral = group.filter(p => p.last_match_result !== 'won' && p.last_match_result !== 'lost');
+
+  let teamAPlayerIds, teamBPlayerIds;
+  if (winners.length === 2 && losers.length === 2) {
+    teamAPlayerIds = winners.map(p => p.id);
+    teamBPlayerIds = losers.map(p => p.id);
+  } else if (winners.length === 2 && neutral.length === 2 && losers.length === 0) {
+    teamAPlayerIds = winners.map(p => p.id);
+    teamBPlayerIds = neutral.map(p => p.id);
+  } else if (losers.length === 2 && neutral.length === 2 && winners.length === 0) {
+    teamAPlayerIds = losers.map(p => p.id);
+    teamBPlayerIds = neutral.map(p => p.id);
+  } else if (neutral.length === 4) {
+    teamAPlayerIds = [group[0].id, group[1].id];
+    teamBPlayerIds = [group[2].id, group[3].id];
+  } else {
+    // No clean split available among these 4 specific people — fall back
+    // to time-order pairing (1st+2nd vs 3rd+4th longest-free) rather than
+    // reaching past them to find a cleaner grouping, which would violate
+    // strict time-order.
+    teamAPlayerIds = [group[0].id, group[1].id];
+    teamBPlayerIds = [group[2].id, group[3].id];
+  }
+
+  return { teamAPlayerIds, teamBPlayerIds };
+}
+
+/**
+ * Returning from rest: where in the unified pool should they land?
+ * If rest-priority is on, they jump to the FRONT (oldest became_free_at,
+ * i.e. effectively "first in line"); otherwise they go to the back (now).
+ * Returns a became_free_at timestamp, not a queue_position — the new
+ * engine orders purely by time, not by a separate position counter.
+ */
+function calculateReturnTimestamp(restPriorityEnabled, oldestKnownTimestamp) {
+  if (restPriorityEnabled && oldestKnownTimestamp) {
+    // 1ms before the oldest known became_free_at, so they sort as "first"
+    return new Date(new Date(oldestKnownTimestamp).getTime() - 1).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function calculateReturnPosition(queueTeams, restPriorityEnabled) {
+  if (queueTeams.length === 0) return 1;
+  if (restPriorityEnabled) {
+    const minPos = Math.min(...queueTeams.map(t => t.queue_position ?? 0));
+    return minPos - 1;
+  }
+  const maxPos = Math.max(...queueTeams.map(t => t.queue_position ?? 0));
+  return maxPos + 1;
+}
+
+function calculateBackOfQueuePosition(queueTeams) {
+  if (queueTeams.length === 0) return 1;
+  const maxPos = Math.max(...queueTeams.map(t => t.queue_position ?? 0));
+  return maxPos + 1;
+}
+
+window.StackingEngine = { tiersCompatible, getTeamTier, popFront, decideNextMatchFromPool, calculateReturnTimestamp, calculateReturnPosition, calculateBackOfQueuePosition, TIER_RANK };
+
+// ============================================================
+// TOURNAMENT ENGINE
+// Round Robin (circle method) + Swiss pairing, pure functions.
+// ============================================================
+function generateRoundRobinSchedule(teamIds) {
+  const teams = [...teamIds];
+  const hasBye = teams.length % 2 !== 0;
+  if (hasBye) teams.push(null);
+
+  const n = teams.length;
+  const rounds = [];
+  const fixed = teams[0];
+  let rotating = teams.slice(1);
+
+  for (let r = 0; r < n - 1; r++) {
+    const roundTeams = [fixed, ...rotating];
+    const pairs = [];
+    let bye = null;
+
+    for (let i = 0; i < n / 2; i++) {
+      const a = roundTeams[i];
+      const b = roundTeams[n - 1 - i];
+      if (a === null || b === null) {
+        bye = a === null ? b : a;
+      } else {
+        pairs.push([a, b]);
+      }
+    }
+
+    rounds.push({ round: r + 1, pairs, bye });
+    rotating = [rotating[rotating.length - 1], ...rotating.slice(0, rotating.length - 1)];
+  }
+
+  return rounds;
+}
+
+function totalRoundRobinRounds(teamCount) {
+  return teamCount % 2 === 0 ? teamCount - 1 : teamCount;
+}
+
+function generateSwissRound(teams) {
+  const sorted = [...teams].sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    const diffA = a.points_for - a.points_against;
+    const diffB = b.points_for - b.points_against;
+    return diffB - diffA;
+  });
+
+  const pool = [...sorted];
+  const pairs = [];
+  let bye = null;
+
+  if (pool.length % 2 !== 0) {
+    const byeTeam = pool.pop();
+    bye = byeTeam.id;
+  }
+
+  while (pool.length > 0) {
+    const teamA = pool.shift();
+    const alreadyFaced = new Set(teamA.opponent_history || []);
+    let opponentIndex = pool.findIndex(t => !alreadyFaced.has(t.id));
+    if (opponentIndex === -1) opponentIndex = 0;
+    const teamB = pool.splice(opponentIndex, 1)[0];
+    pairs.push([teamA.id, teamB.id]);
+  }
+
+  return { pairs, bye };
+}
+
 function computeStandings(teams) {
   return [...teams].sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins;
@@ -492,22 +743,414 @@ function computeStandings(teams) {
   });
 }
 
+window.TournamentEngine = { generateRoundRobinSchedule, totalRoundRobinRounds, generateSwissRound, computeStandings };
+
+/**
+ * Self-test: simulates a full open-play cycle at a given player count and
+ * court count, verifying the CORE GUARANTEE never breaks — no PLAYER
+ * plays a 2nd match while another player has been free LONGER and is
+ * still unmatched. This is the player-level rewrite for the unified
+ * single-pool engine (decideNextMatchFromPool) — the old version tested
+ * at the team-queue level, which no longer exists since teams are now
+ * formed fresh from individuals at match time, never persisted as pairs.
+ *
+ * Run from the browser console on host.html: window.testNoRepeatGuarantee(24, 2)
+ */
+window.testNoRepeatGuarantee = function(playerCount = 24, courtCount = 2, matchesToSimulate = 20, teamSize = 2) {
+  // Use MINUTES as the simulation clock unit (not raw milliseconds) and
+  // give initial players a timestamp BEFORE the simulation even starts
+  // (negative offset) — this guarantees no accidental overlap between
+  // "joined before the session started" and "finished a match at t=X",
+  // which a too-small/colliding time scale could otherwise mask a real
+  // bug behind (or, as caught here, manufacture a FALSE failure from the
+  // test harness itself rather than the actual engine).
+  const MINUTE = 60 * 1000;
+  let clock = 0;
+  const pool = Array.from({ length: playerCount }, (_, i) => ({
+    id: `P${i + 1}`, became_free_at: new Date(-1 * (playerCount - i) * MINUTE).toISOString(), last_match_result: null,
+  }));
+
+  const playedCountById = {};
+  pool.forEach(p => { playedCountById[p.id] = 0; });
+
+  console.log(`%cTesting: ${playerCount} players, ${courtCount} courts, team size ${teamSize}`, 'font-weight:bold');
+
+  const courtBusyUntil = Array(courtCount).fill(0);
+  const courtCurrentMatch = Array(courtCount).fill(null); // { teamAIds, teamBIds }
+  let matchesPlayed = 0;
+  let failure = null;
+
+  function getAvailablePlayers() {
+    const onCourtIds = new Set(courtCurrentMatch.filter(Boolean).flatMap(m => [...m.teamAIds, ...m.teamBIds]));
+    return pool.filter(p => !onCourtIds.has(p.id)).sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
+  }
+
+  function fillEmptyCourts() {
+    for (let c = 0; c < courtCount; c++) {
+      if (courtCurrentMatch[c] !== null) continue;
+      const available = getAvailablePlayers();
+      const decision = window.StackingEngine.decideNextMatchFromPool(available, teamSize);
+      if (!decision) continue;
+
+      const matchedIds = [...decision.teamAPlayerIds, ...decision.teamBPlayerIds];
+
+      // VIOLATION CHECK: every available player NOT selected must NOT have
+      // been free longer than every selected player — i.e. the selected
+      // group must be EXACTLY the N longest-waiting, no skipping.
+      const neededCount = teamSize * 2;
+      const expectedIds = new Set(available.slice(0, neededCount).map(p => p.id));
+      const actualIds = new Set(matchedIds);
+      const matches = expectedIds.size === actualIds.size && [...expectedIds].every(id => actualIds.has(id));
+      if (!matches) {
+        failure = `Court ${c + 1} @ t=${clock}: selected [${matchedIds.join(',')}] but the ${neededCount} longest-waiting were [${[...expectedIds].join(',')}] — someone got skipped!`;
+        return;
+      }
+
+      const duration = 5 + Math.floor(Math.random() * 15);
+      courtBusyUntil[c] = clock + duration;
+      courtCurrentMatch[c] = { teamAIds: decision.teamAPlayerIds, teamBIds: decision.teamBPlayerIds };
+      console.log(`t=${clock} Court ${c + 1} starts: [${decision.teamAPlayerIds.join(',')}] vs [${decision.teamBPlayerIds.join(',')}] (ends t=${courtBusyUntil[c]})`);
+    }
+  }
+
+  fillEmptyCourts();
+
+  while (matchesPlayed < matchesToSimulate && !failure) {
+    const activeCourts = courtCurrentMatch.map((m, i) => m ? i : -1).filter(i => i >= 0);
+    if (activeCourts.length === 0) break;
+    const nextFinishCourt = activeCourts.reduce((best, i) => courtBusyUntil[i] < courtBusyUntil[best] ? i : best, activeCourts[0]);
+    clock = courtBusyUntil[nextFinishCourt];
+
+    const finished = courtCurrentMatch[nextFinishCourt];
+    console.log(`t=${clock} Court ${nextFinishCourt + 1} finishes: [${finished.teamAIds.join(',')}] vs [${finished.teamBIds.join(',')}]`);
+    courtCurrentMatch[nextFinishCourt] = null;
+    matchesPlayed++;
+
+    // teamA always "wins" for deterministic test output — every finished
+    // player rejoins the pool with a FRESH became_free_at (now) and a
+    // recorded result, exactly as applyQueuePlacement does for real.
+    const nowIso = new Date(clock).toISOString();
+    finished.teamAIds.forEach(id => {
+      const p = pool.find(pp => pp.id === id);
+      p.became_free_at = nowIso; p.last_match_result = 'won';
+      playedCountById[id]++;
+    });
+    finished.teamBIds.forEach(id => {
+      const p = pool.find(pp => pp.id === id);
+      p.became_free_at = nowIso; p.last_match_result = 'lost';
+      playedCountById[id]++;
+    });
+
+    fillEmptyCourts();
+  }
+
+  if (failure) {
+    console.log('%cFAIL — ' + failure, 'color:red; font-weight:bold');
+  } else {
+    console.log(`%cPASS — simulated ${matchesPlayed} matches, the matched group was ALWAYS exactly the longest-waiting players, every time.`, 'color:green; font-weight:bold');
+  }
+  return !failure;
+};
+
+// ============================================================
+// PASSWORD UTILITY (SHA-256 via Web Crypto API — no library needed)
+// ============================================================
+async function hashPassword(plainText) {
+  const data = new TextEncoder().encode(plainText);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================
+// REFERENCE CODE — short human-readable session ID, e.g. STACK-A3F9
+// ============================================================
+function generateReferenceCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid ambiguity when read aloud
+  let code = '';
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return `STACK-${code}`;
+}
+
 // ============================================================
 // SESSION API
+// (No auth layer for now — testing mode. Revisit before real launch.)
 // ============================================================
 const SessionAPI = (() => {
-  async function getCurrentUser() {
-    const { data: { user } } = await supabaseClient.auth.getUser();
-    return user;
+  async function createSession({ name, format, courtCount, stackingMode, pairingDefault, skillMatchMode, restPriorityEnabled, password, parentSessionId, sessionType, tournamentFormat, division, category, openPlayMode, roundsTotal, scoringMode, pointsToWin, allowCrossLaneFill }) {
+    if (!password || password.length < 4) {
+      throw new Error('Session password must be at least 4 characters.');
+    }
+    const passwordHash = await hashPassword(password);
+
+    let session, error;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const referenceCode = generateReferenceCode();
+      const result = await supabaseClient
+        .from('sessions')
+        .insert({
+          name, format, court_count: courtCount,
+          stacking_mode: stackingMode || 'win_loss_queue',
+          pairing_default: pairingDefault || 'fixed',
+          skill_match_mode: skillMatchMode || 'open',
+          rest_priority_enabled: restPriorityEnabled !== false,
+          allow_cross_lane_fill: allowCrossLaneFill !== false,
+          password_hash: passwordHash,
+          parent_session_id: parentSessionId || null,
+          session_type: sessionType || 'open_play',
+          tournament_format: tournamentFormat || null,
+          division: sessionType === 'tournament' ? (division || 'open') : null,
+          category: sessionType === 'tournament' ? (category || null) : null,
+          open_play_mode: sessionType === 'open_play' ? (openPlayMode || 'automated') : null,
+          rounds_total: roundsTotal || null,
+          scoring_mode: scoringMode || 'win_loss',
+          points_to_win: pointsToWin || 11,
+          reference_code: referenceCode,
+        })
+        .select().single();
+      session = result.data;
+      error = result.error;
+      if (!error) break;
+      if (error.code !== '23505') break; // not a uniqueness collision, stop retrying
+    }
+    if (error) throw error;
+    const courtRows = Array.from({ length: courtCount }, (_, i) => ({ session_id: session.id, court_number: i + 1, status: 'open' }));
+    const { error: courtError } = await supabaseClient.from('courts').insert(courtRows);
+    if (courtError) throw courtError;
+    return session;
+  }
+  async function getSessionByReferenceCode(code) {
+    const normalized = code.trim().toUpperCase();
+    const { data, error } = await supabaseClient.from('sessions').select('*').eq('reference_code', normalized).single();
+    if (error) throw error;
+    return data;
+  }
+  async function getMySessions() {
+    const { data, error } = await supabaseClient.from('sessions').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return data;
   }
   async function getSession(sessionId) {
     const { data, error } = await supabaseClient.from('sessions').select('*').eq('id', sessionId).single();
     if (error) throw error;
     return data;
   }
-  async function getSessionByReferenceCode(code) {
-    const normalized = code.trim().toUpperCase();
-    const { data, error } = await supabaseClient.from('sessions').select('*').eq('reference_code', normalized).single();
+  async function verifySessionPassword(sessionId, password) {
+    const session = await getSession(sessionId);
+    if (!session.password_hash) return true; // legacy sessions with no password set
+    const hash = await hashPassword(password);
+    return hash === session.password_hash;
+  }
+  async function finishSession(sessionId) {
+    const { error } = await supabaseClient.from('sessions').update({ status: 'completed', ended_at: new Date().toISOString() }).eq('id', sessionId);
+    if (error) throw error;
+  }
+  // ============================================================
+  // TOURNAMENT FUNCTIONS
+  // ============================================================
+
+  /**
+   * Create tournament teams from a list of player-id groups (already paired
+   * by the host) and kick off the schedule (round robin generates fully,
+   * swiss generates round 1 only).
+   */
+  async function startTournament(sessionId, teamPlayerGroups, format) {
+    const createdTeams = [];
+    for (const group of teamPlayerGroups) {
+      const { data, error } = await supabaseClient
+        .from('teams')
+        .insert({ session_id: sessionId, player_ids: group, pairing_mode: 'fixed', queue_lane: 'waiting' })
+        .select().single();
+      if (error) throw error;
+      createdTeams.push(data);
+    }
+
+    const teamIds = createdTeams.map(t => t.id);
+
+    if (format === 'round_robin') {
+      const schedule = window.TournamentEngine.generateRoundRobinSchedule(teamIds);
+      const rows = [];
+      schedule.forEach(round => {
+        round.pairs.forEach(([a, b]) => {
+          rows.push({ session_id: sessionId, round_number: round.round, team_a_id: a, team_b_id: b, status: 'pending' });
+        });
+      });
+      const { error } = await supabaseClient.from('tournament_matchups').insert(rows);
+      if (error) throw error;
+      await supabaseClient.from('sessions').update({ rounds_total: window.TournamentEngine.totalRoundRobinRounds(teamIds.length), current_round: 1 }).eq('id', sessionId);
+    } else if (format === 'swiss') {
+      const teamsForPairing = createdTeams.map(t => ({ id: t.id, wins: 0, losses: 0, points_for: 0, points_against: 0, opponent_history: [] }));
+      const { pairs } = window.TournamentEngine.generateSwissRound(teamsForPairing);
+      const rows = pairs.map(([a, b]) => ({ session_id: sessionId, round_number: 1, team_a_id: a, team_b_id: b, status: 'pending' }));
+      const { error } = await supabaseClient.from('tournament_matchups').insert(rows);
+      if (error) throw error;
+      await supabaseClient.from('sessions').update({ current_round: 1 }).eq('id', sessionId);
+    }
+
+    return createdTeams;
+  }
+
+  async function getMatchups(sessionId, roundNumber = null) {
+    let query = supabaseClient.from('tournament_matchups').select('*, team_a:team_a_id(*), team_b:team_b_id(*)').eq('session_id', sessionId);
+    if (roundNumber !== null) query = query.eq('round_number', roundNumber);
+    const { data, error } = await query.order('created_at', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+
+  async function getTournamentTeams(sessionId) {
+    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('is_active', true);
+    if (error) throw error;
+    return data;
+  }
+
+  async function assignMatchupToCourt(matchupId, courtId) {
+    const { data: matchup, error: mErr } = await supabaseClient.from('tournament_matchups').select('*').eq('id', matchupId).single();
+    if (mErr) throw mErr;
+    await assignCourt(courtId, matchup.team_a_id, matchup.team_b_id);
+    await supabaseClient.from('tournament_matchups').update({ court_id: courtId, status: 'in_progress' }).eq('id', matchupId);
+  }
+
+  /**
+   * Record a scored result for a tournament matchup: updates the matchup,
+   * logs the match with scores, updates both teams' win/loss/points stats
+   * and opponent history (for swiss rematch avoidance), then frees the court.
+   */
+  async function recordTournamentResult(matchupId, courtId, teamAScore, teamBScore) {
+    if (teamAScore === teamBScore) {
+      // Defense-in-depth: the UI already blocks ties before calling this,
+      // but this function shouldn't silently default to "Team B wins" if
+      // it's ever called from somewhere else without that check.
+      throw new Error('Scores cannot be tied — a winner must be determined.');
+    }
+    const { data: matchup, error: mErr } = await supabaseClient.from('tournament_matchups').select('*').eq('id', matchupId).single();
+    if (mErr) throw mErr;
+    const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+
+    const winnerTeamId = teamAScore > teamBScore ? matchup.team_a_id : matchup.team_b_id;
+
+    const { data: matchRow, error: matchErr } = await supabaseClient.from('matches').insert({
+      session_id: matchup.session_id, court_id: courtId, team_a_id: matchup.team_a_id, team_b_id: matchup.team_b_id,
+      winner_team_id: winnerTeamId, team_a_score: teamAScore, team_b_score: teamBScore, round_number: matchup.round_number,
+      started_at: court?.game_started_at || null, ended_at: new Date().toISOString(),
+      duration_seconds: court?.game_started_at ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
+    }).select().single();
+    if (matchErr) throw matchErr;
+
+    await supabaseClient.from('tournament_matchups').update({ status: 'completed', match_id: matchRow.id }).eq('id', matchupId);
+
+    // update team stats
+    const { data: teamA, error: teamAErr } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_a_id).single();
+    const { data: teamB, error: teamBErr } = await supabaseClient.from('teams').select('*').eq('id', matchup.team_b_id).single();
+    if (teamAErr || teamBErr || !teamA || !teamB) {
+      throw new Error('Could not load team data to update standings — the match was recorded, but standings may be out of date. Please refresh.');
+    }
+
+    await supabaseClient.from('teams').update({
+      wins: teamA.wins + (winnerTeamId === teamA.id ? 1 : 0),
+      losses: teamA.losses + (winnerTeamId === teamA.id ? 0 : 1),
+      points_for: teamA.points_for + teamAScore,
+      points_against: teamA.points_against + teamBScore,
+      opponent_history: [...(teamA.opponent_history || []), matchup.team_b_id],
+    }).eq('id', teamA.id);
+
+    await supabaseClient.from('teams').update({
+      wins: teamB.wins + (winnerTeamId === teamB.id ? 1 : 0),
+      losses: teamB.losses + (winnerTeamId === teamB.id ? 0 : 1),
+      points_for: teamB.points_for + teamBScore,
+      points_against: teamB.points_against + teamAScore,
+      opponent_history: [...(teamB.opponent_history || []), matchup.team_a_id],
+    }).eq('id', teamB.id);
+
+    if (courtId) {
+      await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
+    }
+  }
+
+  async function isRoundComplete(sessionId, roundNumber) {
+    const matchups = await getMatchups(sessionId, roundNumber);
+    return matchups.length > 0 && matchups.every(m => m.status === 'completed');
+  }
+
+  /**
+   * Advance to the next round. Round robin: just reveals the next
+   * pre-generated round. Swiss: generates a fresh pairing based on
+   * updated standings + opponent history.
+   */
+  async function advanceToNextRound(sessionId) {
+    const session = await getSession(sessionId);
+    const nextRound = session.current_round + 1;
+
+    if (session.tournament_format === 'swiss') {
+      const teams = await getTournamentTeams(sessionId);
+      const { pairs, bye } = window.TournamentEngine.generateSwissRound(teams);
+      const rows = pairs.map(([a, b]) => ({ session_id: sessionId, round_number: nextRound, team_a_id: a, team_b_id: b, status: 'pending' }));
+      if (rows.length > 0) {
+        const { error } = await supabaseClient.from('tournament_matchups').insert(rows);
+        if (error) throw error;
+      }
+    }
+    // round_robin: matchups for nextRound already exist from startTournament
+
+    await supabaseClient.from('sessions').update({ current_round: nextRound }).eq('id', sessionId);
+    return nextRound;
+  }
+
+  async function carryPlayersToNewSession(newSessionId, playerRows) {
+    // playerRows: array of { name, skill_tier } from the finished session
+    const inserted = [];
+    for (const p of playerRows) {
+      const { data, error } = await supabaseClient
+        .from('players')
+        .insert({ session_id: newSessionId, name: p.name, skill_tier: p.skill_tier || 'open', status: 'waiting' })
+        .select().single();
+      if (error) throw error;
+      inserted.push(data);
+    }
+    return inserted;
+  }
+  /**
+   * Find players who are marked 'waiting' on their player row but are NOT
+   * yet inside any active team (i.e. truly unpaired, sitting idle). This
+   * is the actual signal for "needs a partner" — player.status alone is
+   * not enough, since it doesn't track team membership.
+   */
+  async function getUnpairedWaitingPlayers(sessionId) {
+    const [players, activeTeams] = await Promise.all([
+      getPlayers(sessionId),
+      getTeams(sessionId),
+    ]);
+    const pairedPlayerIds = new Set(activeTeams.flatMap(t => t.player_ids));
+    return players
+      .filter(p => p.status === 'waiting' && !pairedPlayerIds.has(p.id))
+      .sort((a, b) => new Date(a.joined_at) - new Date(b.joined_at));
+  }
+
+  /**
+   * Player-level version of the same wave rule, for Manual mode's
+   * pick-individuals-then-form-teams flow. A player is eligible if their
+   * play count is no more than the session-wide minimum.
+   * Returns: { eligiblePlayerIds: Set<string>, minPlayCount: number, playCountById: object }
+   */
+  async function getPlayerWaveEligibility(sessionId) {
+    const players = await getPlayers(sessionId);
+    const activePlayers = players.filter(p => p.status !== 'left');
+    if (activePlayers.length === 0) return { eligiblePlayerIds: new Set(), minPlayCount: 0, playCountById: {} };
+
+    const minPlayCount = Math.min(...activePlayers.map(p => p.total_games_played || 0));
+    const playCountById = Object.fromEntries(activePlayers.map(p => [p.id, p.total_games_played || 0]));
+    const eligiblePlayerIds = new Set(activePlayers.filter(p => (p.total_games_played || 0) <= minPlayCount).map(p => p.id));
+
+    return { eligiblePlayerIds, minPlayCount, playCountById };
+  }
+
+  async function addPlayer(sessionId, name, skillTier = 'open') {
+    // Unified pool model: a new player just needs to exist with status
+    // 'waiting' and a became_free_at timestamp (set by the DB default on
+    // insert) — they're immediately part of the single time-ordered pool.
+    // No pre-pairing into a fixed team here: teams are formed fresh only
+    // at the moment a court actually needs to be filled, from whoever has
+    // been free longest at that moment (see decideNextMatchFromPool).
+    const { data, error } = await supabaseClient.from('players').insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'waiting' }).select().single();
     if (error) throw error;
     return data;
   }
@@ -516,13 +1159,72 @@ const SessionAPI = (() => {
     if (error) throw error;
     return data;
   }
+  /**
+   * Roster-display version: includes 'left' players too, since the host
+   * needs to actually SEE someone to bring them back. getPlayers() above
+   * stays filtered for everything else (queue logic, matching, etc.) —
+   * those code paths correctly should never see a departed player.
+   */
+  async function getAllPlayersIncludingLeft(sessionId) {
+    const { data, error } = await supabaseClient.from('players').select('*').eq('session_id', sessionId).order('joined_at', { ascending: true });
+    if (error) throw error;
+    return data;
+  }
+  async function setPlayerStatus(playerId, status) {
+    const { error } = await supabaseClient.from('players').update({ status }).eq('id', playerId);
+    if (error) throw error;
+  }
+  async function removePlayer(playerId) {
+    const { error } = await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
+    if (error) throw error;
+
+    // If this player was already paired into a waiting team, that team is
+    // no longer valid — deactivate it so the auto-fill engine doesn't try
+    // to send a now-departed player onto a court. Their now-unpaired
+    // partner (if any) goes back to waiting for a new partner.
+    const { data: playerRow } = await supabaseClient.from('players').select('session_id').eq('id', playerId).single();
+    if (playerRow) {
+      const activeTeams = await getTeams(playerRow.session_id);
+      const affectedTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane === 'waiting');
+      if (affectedTeam) {
+        await supabaseClient.from('teams').update({ is_active: false }).eq('id', affectedTeam.id);
+      }
+    }
+  }
+  async function createTeam(sessionId, playerIds, pairingMode = 'fixed', queueLane = 'waiting') {
+    const { data: existing } = await supabaseClient.from('teams').select('queue_position').eq('session_id', sessionId).eq('queue_lane', queueLane);
+    const position = window.StackingEngine.calculateBackOfQueuePosition(existing || []);
+    const { data, error } = await supabaseClient.from('teams').insert({ session_id: sessionId, player_ids: playerIds, pairing_mode: pairingMode, queue_lane: queueLane, queue_position: position }).select().single();
+    if (error) throw error;
+    return data;
+  }
   async function getTeams(sessionId) {
     const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('is_active', true);
     if (error) throw error;
     return data;
   }
+  /**
+   * Deactivate any currently-active team that contains one or more of the
+   * given player IDs. Used before manually assigning players to a court,
+   * so an auto-paired "waiting" team row doesn't linger as a stale duplicate
+   * once those same players get placed by hand instead.
+   */
+  async function deactivateTeamsContainingPlayers(sessionId, playerIds) {
+    const activeTeams = await getTeams(sessionId);
+    const staleTeamIds = activeTeams
+      .filter(t => t.player_ids.some(pid => playerIds.includes(pid)))
+      .map(t => t.id);
+    if (staleTeamIds.length > 0) {
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', staleTeamIds);
+    }
+  }
   async function getQueueLane(sessionId, lane) {
-    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('queue_lane', lane).eq('is_active', true).order('queue_position', { ascending: true });
+    // Secondary sort by created_at breaks any queue_position ties caused
+    // by the read-then-write race in createTeam() (two teams created in
+    // quick succession can compute the same "next position" before either
+    // writes) — created_at is set by the database at insert time, so it
+    // reflects true creation order even when queue_position collides.
+    const { data, error } = await supabaseClient.from('teams').select('*').eq('session_id', sessionId).eq('queue_lane', lane).eq('is_active', true).order('queue_position', { ascending: true }).order('created_at', { ascending: true });
     if (error) throw error;
     return data;
   }
@@ -531,337 +1233,1740 @@ const SessionAPI = (() => {
     if (error) throw error;
     return data;
   }
-  async function getMatchups(sessionId, roundNumber = null) {
-    let query = supabaseClient.from('tournament_matchups').select('*, team_a:team_a_id(*), team_b:team_b_id(*)').eq('session_id', sessionId);
-    if (roundNumber !== null) query = query.eq('round_number', roundNumber);
-    const { data, error } = await query.order('created_at', { ascending: true });
+  async function assignCourt(courtId, teamAId, teamBId) {
+    // Conditional update: only succeeds if the court is NOT already
+    // in_progress at the moment of the write. This closes the race window
+    // where two near-simultaneous calls (e.g. a host double-tapping a
+    // court, or two staff devices acting within the same instant) could
+    // otherwise both pass an earlier status check and the second write
+    // would silently overwrite an already-started match.
+    const { data: updated, error } = await supabaseClient
+      .from('courts')
+      .update({ status: 'in_progress', team_a_id: teamAId, team_b_id: teamBId, game_started_at: new Date().toISOString() })
+      .eq('id', courtId)
+      .neq('status', 'in_progress')
+      .select();
+    if (error) throw error;
+    if (!updated || updated.length === 0) {
+      // Court was already in_progress by the time this write landed —
+      // someone else got there first. Surface this clearly rather than
+      // silently no-op, so the caller (and ultimately the host) knows
+      // their tap didn't actually do anything.
+      throw new Error('This court was just assigned by someone else. Refresh and try again.');
+    }
+    const { data: teamRows } = await supabaseClient.from('teams').select('player_ids').in('id', [teamAId, teamBId]);
+    await supabaseClient.from('teams').update({ queue_lane: 'playing', queue_position: null }).in('id', [teamAId, teamBId]);
+    if (teamRows && teamRows.length > 0) {
+      const allPlayerIds = teamRows.flatMap(t => t.player_ids);
+      await supabaseClient.from('players').update({ status: 'playing' }).in('id', allPlayerIds);
+    }
+  }
+  async function logMatchResult(courtId, winnerTeamId, scoreData = null) {
+    const { data: court, error: courtErr } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+    if (courtErr) throw courtErr;
+    const insertRow = {
+      session_id: court.session_id, court_id: courtId, team_a_id: court.team_a_id, team_b_id: court.team_b_id,
+      winner_team_id: winnerTeamId, started_at: court.game_started_at, ended_at: new Date().toISOString(),
+      duration_seconds: court.game_started_at ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
+      score_visible: scoreData ? true : false,
+    };
+    if (scoreData) {
+      insertRow.team_a_score = scoreData.teamAScore;
+      insertRow.team_b_score = scoreData.teamBScore;
+    }
+    await supabaseClient.from('matches').insert(insertRow);
+    return court;
+  }
+
+  /**
+   * Apply the host's final decision on how the 4 players from a finished
+   * match regroup into the winners/losers queues. Unlike a rigid "winning
+   * pair stays together" rule, this lets the host freely re-pair players
+   * across the original teams (e.g. one winner + one loser can team up
+   * in the winners queue together) before they're queued.
+   *
+   * winnersGroup / losersGroup: arrays of player_id, each either length 0
+   * (skip that lane) or length matching the session's team size.
+   */
+  async function applyQueuePlacement(courtId, sessionId, pairingMode, winnersGroup, losersGroup) {
+    const session = await getSession(sessionId);
+    const isManualMode = session.open_play_mode === 'manual';
+    const now = new Date().toISOString();
+
+    // Increment play count for every player who just finished this match —
+    // source of truth for "wave" eligibility (no double-stacking until
+    // everyone's played the same number of times).
+    const allFinishedPlayerIds = [...(winnersGroup || []), ...(losersGroup || [])];
+    if (allFinishedPlayerIds.length > 0) {
+      const { data: finishedPlayers } = await supabaseClient.from('players').select('id, total_games_played').in('id', allFinishedPlayerIds);
+      if (finishedPlayers) {
+        for (const p of finishedPlayers) {
+          await supabaseClient.from('players').update({ total_games_played: (p.total_games_played || 0) + 1 }).eq('id', p.id);
+        }
+      }
+    }
+
+    // mark this court's active manual_queue entry (if any) as completed
+    await markManualQueueEntryCompleted(courtId);
+
+    if (isManualMode) {
+      // Pure Manual: finished players go back to being free INDIVIDUALS,
+      // not re-paired into a team — the host explicitly re-forms teams
+      // via the court picker next time.
+      if (allFinishedPlayerIds.length > 0) {
+        await supabaseClient.from('players').update({ status: 'waiting', became_free_at: now }).in('id', allFinishedPlayerIds);
+      }
+    } else {
+      // Automated / Hybrid: UNIFIED POOL — every finished player becomes
+      // an individual again (status 'waiting', a single pool, not split
+      // into separate winners_queue/losers_queue lanes that could let a
+      // winner skip ahead of someone who's been free longer). Their
+      // last_match_result is recorded purely as a soft recombination
+      // hint for decideNextMatchFromPool — it never affects ordering.
+      if (winnersGroup && winnersGroup.length > 0) {
+        await supabaseClient.from('players').update({ status: 'waiting', became_free_at: now, last_match_result: 'won' }).in('id', winnersGroup);
+      }
+      if (losersGroup && losersGroup.length > 0) {
+        await supabaseClient.from('players').update({ status: 'waiting', became_free_at: now, last_match_result: 'lost' }).in('id', losersGroup);
+      }
+    }
+
+    // deactivate the team that just finished playing — open play teams
+    // are ephemeral (formed fresh per match), never reused as a fixed pair
+    const { data: court } = await supabaseClient.from('courts').select('team_a_id, team_b_id').eq('id', courtId).single();
+    if (court) {
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', [court.team_a_id, court.team_b_id]);
+    }
+
+    await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
+    await tryRefillCourt(courtId);
+  }
+
+  async function recordResult(courtId, winnerTeamId) {
+    // Legacy simple path (default split, no manual reassignment) — kept for
+    // the "Auto-Fill" quick path elsewhere if ever needed.
+    const court = await logMatchResult(courtId, winnerTeamId);
+    const loserTeamId = court.team_a_id === winnerTeamId ? court.team_b_id : court.team_a_id;
+    const [winnersQ, losersQ] = await Promise.all([getQueueLane(court.session_id, 'winners_queue'), getQueueLane(court.session_id, 'losers_queue')]);
+    await supabaseClient.from('teams').update({ queue_lane: 'winners_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(winnersQ) }).eq('id', winnerTeamId);
+    await supabaseClient.from('teams').update({ queue_lane: 'losers_queue', queue_position: window.StackingEngine.calculateBackOfQueuePosition(losersQ) }).eq('id', loserTeamId);
+    const { data: teamRows } = await supabaseClient.from('teams').select('id, player_ids').in('id', [winnerTeamId, loserTeamId]);
+    if (teamRows) {
+      const winnerRow = teamRows.find(t => t.id === winnerTeamId);
+      const loserRow = teamRows.find(t => t.id === loserTeamId);
+      if (winnerRow) await supabaseClient.from('players').update({ status: 'winners_queue' }).in('id', winnerRow.player_ids);
+      if (loserRow) await supabaseClient.from('players').update({ status: 'losers_queue' }).in('id', loserRow.player_ids);
+    }
+    await supabaseClient.from('courts').update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null }).eq('id', courtId);
+    await tryRefillCourt(courtId);
+  }
+  async function tryRefillCourt(courtId) {
+    const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+    if (!court || court.status === 'in_progress') return null;
+    const session = await getSession(court.session_id);
+
+    // Manual mode: pull from the host's pre-built schedule instead of the
+    // automated engine. Hybrid mode also has a manual_queue available, but
+    // falls back to the automated engine if nothing's been pre-planned.
+    if (session.open_play_mode === 'manual' || session.open_play_mode === 'hybrid') {
+      const nextPlanned = await getNextManualQueueEntry(court.session_id, courtId);
+      if (nextPlanned) {
+        await assignCourt(courtId, nextPlanned.team_a_id, nextPlanned.team_b_id);
+        await supabaseClient.from('manual_queue').update({ status: 'active' }).eq('id', nextPlanned.id);
+        return { teamA: { id: nextPlanned.team_a_id }, teamB: { id: nextPlanned.team_b_id }, lane: 'manual' };
+      }
+      if (session.open_play_mode === 'manual') return null; // strictly manual — no automated fallback
+    }
+
+    // Unified single pool: everyone not currently playing and not left,
+    // ordered strictly by became_free_at — this IS the queue. There is
+    // no separate winners/losers lane that can skip ahead of someone
+    // who's been waiting longer.
+    const { data: pool, error: poolErr } = await supabaseClient
+      .from('players')
+      .select('id, became_free_at, last_match_result')
+      .eq('session_id', court.session_id)
+      .not('status', 'in', '("playing","left")')
+      .order('became_free_at', { ascending: true });
+    if (poolErr) throw poolErr;
+
+    const teamSize = session.format === 'doubles' ? 2 : 1;
+    const decision = window.StackingEngine.decideNextMatchFromPool(pool || [], teamSize);
+    if (!decision) return null;
+
+    // Teams are formed FRESH from individuals every time — open play
+    // partners are never persisted as a fixed pair between matches.
+    const teamA = await createTeam(court.session_id, decision.teamAPlayerIds, 'fixed', 'playing');
+    const teamB = await createTeam(court.session_id, decision.teamBPlayerIds, 'fixed', 'playing');
+
+    await assignCourt(courtId, teamA.id, teamB.id);
+    return { teamA, teamB, lane: 'pool' };
+  }
+
+  // ============================================================
+  // MANUAL QUEUE — host pre-builds the schedule, Manual/Hybrid modes
+  // ============================================================
+
+  /**
+   * Add a planned matchup to the back of a specific court's manual queue
+   * (or the general unassigned-court queue if courtId is null).
+   */
+  async function addManualQueueEntry(sessionId, courtId, teamAId, teamBId) {
+    const { data: existing } = await supabaseClient
+      .from('manual_queue').select('queue_position')
+      .eq('session_id', sessionId).eq('status', 'planned')
+      .eq('court_id', courtId);
+    const maxPos = existing && existing.length > 0 ? Math.max(...existing.map(r => r.queue_position ?? 0)) : 0;
+    const { data, error } = await supabaseClient.from('manual_queue').insert({
+      session_id: sessionId, court_id: courtId, team_a_id: teamAId, team_b_id: teamBId, queue_position: maxPos + 1,
+    }).select().single();
     if (error) throw error;
     return data;
   }
-  async function getRecentMatches(sessionId, limit = 8) {
+
+  async function getManualQueue(sessionId) {
     const { data, error } = await supabaseClient
-      .from('matches')
-      .select('*, team_a:team_a_id(*), team_b:team_b_id(*), winner:winner_team_id(*)')
+      .from('manual_queue')
+      .select('*, team_a:team_a_id(*), team_b:team_b_id(*), court:court_id(*)')
       .eq('session_id', sessionId)
-      .order('ended_at', { ascending: false })
-      .limit(limit);
+      .in('status', ['planned', 'active'])
+      .order('queue_position', { ascending: true })
+      .order('created_at', { ascending: true });
     if (error) throw error;
     return data;
   }
-  async function sendMessage(sessionId, playerName, message) {
-    const { error } = await supabaseClient.from('messages').insert({ session_id: sessionId, player_name: playerName, message });
+
+  async function getNextManualQueueEntry(sessionId, courtId) {
+    const { data, error } = await supabaseClient
+      .from('manual_queue')
+      .select('*')
+      .eq('session_id', sessionId)
+      .eq('court_id', courtId)
+      .eq('status', 'planned')
+      .order('queue_position', { ascending: true })
+      .order('created_at', { ascending: true })
+      .limit(1);
+    if (error) throw error;
+    return data && data.length > 0 ? data[0] : null;
+  }
+
+  async function removeManualQueueEntry(entryId) {
+    await supabaseClient.from('manual_queue').update({ status: 'cancelled' }).eq('id', entryId);
+  }
+
+  async function markManualQueueEntryCompleted(courtId) {
+    await supabaseClient.from('manual_queue').update({ status: 'completed' }).eq('court_id', courtId).eq('status', 'active');
+  }
+
+  async function getPendingRestRequests(sessionId) {
+    const { data, error } = await supabaseClient.from('rest_requests').select('*, player:player_id(*)').eq('session_id', sessionId).eq('status', 'pending');
+    if (error) throw error;
+    return data;
+  }
+  /**
+   * Confirm a rest request. If the player is currently mid-match, we
+   * don't pull them off court — we just mark the request confirmed and
+   * flag intent; the host should mark them resting via the Roster tab
+   * once their current match actually ends. If they're NOT mid-match
+   * (waiting/queued), we can safely rest them immediately: deactivate
+   * any waiting team they're part of so they don't get matched while
+   * resting, and set their status to 'resting' right away.
+   */
+  /**
+   * Core "put this player into resting state" logic — deactivates any
+   * waiting team they're part of so they don't get matched while resting.
+   * Shared by both the rest-REQUEST confirmation flow and a host directly
+   * resting someone manually (no request needed) from the Roster tab.
+   */
+  async function restPlayerNow(playerId, sessionId) {
+    const activeTeams = await getTeams(sessionId);
+    const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
+    if (theirTeam) {
+      await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
+    }
+    await supabaseClient.from('players').update({ status: 'resting' }).eq('id', playerId);
+  }
+
+  async function confirmRestRequest(requestId, playerId) {
+    const { data: player, error: playerErr } = await supabaseClient.from('players').select('*').eq('id', playerId).single();
+    if (playerErr || !player) throw new Error('Could not find this player.');
+
+    const { error: reqErr } = await supabaseClient.from('rest_requests').update({ status: 'confirmed', resolved_at: new Date().toISOString() }).eq('id', requestId);
+    if (reqErr) throw reqErr;
+
+    if (player.status === 'playing') {
+      // Mid-match — don't disrupt the live game. The host will mark them
+      // resting manually from the Roster tab once the match ends.
+      return { deferred: true };
+    }
+
+    await restPlayerNow(playerId, player.session_id);
+    return { deferred: false };
+  }
+  /**
+   * Host directly rests a player from the Roster tab — no rest request
+   * needed. Not allowed mid-match (same reasoning as the request flow):
+   * pulling someone off a live court would disrupt the game in progress.
+   */
+  async function restPlayerManually(playerId) {
+    const { data: player, error: playerErr } = await supabaseClient.from('players').select('*').eq('id', playerId).single();
+    if (playerErr || !player) throw new Error('Could not find this player.');
+    if (player.status === 'playing') {
+      throw new Error('This player is mid-match — mark them resting once their current game ends.');
+    }
+    await restPlayerNow(playerId, player.session_id);
+  }
+  async function declineRestRequest(requestId) {
+    const { error } = await supabaseClient.from('rest_requests').update({ status: 'declined', resolved_at: new Date().toISOString() }).eq('id', requestId);
     if (error) throw error;
   }
-  async function requestRest(sessionId, playerId) {
-    const { error } = await supabaseClient.from('rest_requests').insert({ session_id: sessionId, player_id: playerId, status: 'pending' });
+  async function getMessages(sessionId, statusFilter = null) {
+    let query = supabaseClient.from('messages').select('*').eq('session_id', sessionId).order('created_at', { ascending: false });
+    if (statusFilter) query = query.eq('status', statusFilter);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data;
+  }
+  async function markMessageStatus(messageId, status) {
+    const { error } = await supabaseClient.from('messages').update({ status }).eq('id', messageId);
     if (error) throw error;
   }
-  return { getCurrentUser, getSession, getSessionByReferenceCode, getPlayers, getTeams, getQueueLane, getCourts, getMatchups, getRecentMatches, sendMessage, requestRest };
+  return {
+    createSession, getMySessions, getSession, getSessionByReferenceCode, verifySessionPassword, finishSession, carryPlayersToNewSession,
+    startTournament, getMatchups, getTournamentTeams, assignMatchupToCourt, recordTournamentResult, isRoundComplete, advanceToNextRound,
+    addPlayer, getPlayers, getAllPlayersIncludingLeft, setPlayerStatus, removePlayer, createTeam, getTeams, getQueueLane, getUnpairedWaitingPlayers, getPlayerWaveEligibility, deactivateTeamsContainingPlayers,
+    getCourts, assignCourt, recordResult, logMatchResult, applyQueuePlacement, tryRefillCourt,
+    addManualQueueEntry, getManualQueue, getNextManualQueueEntry, removeManualQueueEntry,
+    getPendingRestRequests, confirmRestRequest, declineRestRequest, restPlayerManually, getMessages, markMessageStatus,
+  };
 })();
 window.SessionAPI = SessionAPI;
 
 // ============================================================
-// INDEX APP
+// HOST APP
 // ============================================================
-let currentSessionId = null;
+let activeSession = null;
+let activeTab = 'roster';
 let realtimeChannel = null;
-let timerInterval = null;
+// Presentation-only cache: previous court states, used purely to detect
+// genuine open->playing / playing->open transitions so the serve-in and
+// pulse animations trigger only on real changes, not on every render.
+// Does not affect any matching/queue logic — read-only snapshot for motion.
+let _prevHostCourtStates = {};
+// Form selection state — declared here (not where first used further
+// down) because renderSessionList() resets these on every render and
+// runs immediately on page load via init(); a `let` declared later in
+// the file is not yet initialized at that point (temporal dead zone),
+// which previously crashed the very first page load with
+// "Cannot access 'selectedSessionType' before initialization."
+let selectedSessionType = 'open_play';
+let selectedOpenPlayMode = 'automated';
 
-const urlParams = new URLSearchParams(window.location.search);
-const sessionFromUrl = urlParams.get('session');
-if (sessionFromUrl) loadSession(sessionFromUrl);
+init();
 
-function loadSessionFromInput() {
-  const raw = document.getElementById('sessionIdInput').value.trim();
-  if (!raw) return;
-
-  // 1. Pasted full URL with ?session=<uuid>
+async function init() {
+  document.getElementById('topbarRight').innerHTML = '';
   try {
-    const url = new URL(raw);
-    const idFromUrl = url.searchParams.get('session');
-    if (idFromUrl) { loadSession(idFromUrl); return; }
-  } catch (_) { /* not a URL, fall through */ }
-
-  // 2. Looks like a short reference code (e.g. STACK-A3F9 or just A3F9)
-  const looksLikeCode = /^(STACK-)?[A-Z2-9]{4}$/i.test(raw);
-  if (looksLikeCode) {
-    const code = raw.toUpperCase().startsWith('STACK-') ? raw.toUpperCase() : `STACK-${raw.toUpperCase()}`;
-    loadSessionByCode(code);
-    return;
-  }
-
-  // 3. Fall back to treating it as a raw session UUID
-  loadSession(raw);
-}
-
-async function loadSessionByCode(code) {
-  try {
-    const session = await SessionAPI.getSessionByReferenceCode(code);
-    await loadSession(session.id);
+    await renderSessionList();
   } catch (err) {
-    document.getElementById('mainContent').innerHTML = `
-      <div class="empty-state">
-        <div class="display">Session code not found</div>
-        <p>Double check the code your host gave you (e.g. STACK-A3F9).</p>
-      </div>`;
+    document.getElementById('appRoot').innerHTML = `
+      <div class="card"><h2>Couldn't load sessions</h2><p style="color:var(--loser-coral); font-size:13px;">${escapeHtml(err.message)}</p></div>
+    `;
   }
 }
 
-let currentSession = null;
+async function renderSessionList() {
+  // Reset form selection state every time this renders — otherwise a
+  // leftover selection from a PREVIOUS visit to this form (e.g. picking
+  // Tournament, going back, then opening "Start New Session" again) would
+  // silently submit the old selection while the UI visually shows the
+  // hardcoded default (Open Play), a real mismatch between what's shown
+  // and what's actually submitted.
+  selectedSessionType = 'open_play';
+  selectedOpenPlayMode = 'automated';
 
-async function loadSession(sessionId) {
-  try {
-    const session = await SessionAPI.getSession(sessionId);
-    currentSessionId = sessionId;
-    currentSession = session;
-    document.getElementById('sessionNameLabel').textContent = session.reference_code ? `${session.name} · ${session.reference_code}` : session.name;
-    document.getElementById('sessionPicker').style.display = 'none';
-    const newUrl = `${window.location.pathname}?session=${sessionId}`;
-    window.history.replaceState({}, '', newUrl);
+  const sessions = await SessionAPI.getMySessions();
+  const activeOnes = sessions.filter(s => s.status === 'active');
+  const completedOnes = sessions.filter(s => s.status === 'completed').slice(0, 10);
 
-    if (session.session_type === 'tournament') {
-      renderTournamentShell();
-      await refreshTournamentView();
-      subscribeTournamentRealtime();
-    } else {
-      renderShell();
-      await refreshAll();
-      subscribeRealtime();
-      startTimerLoop();
-    }
-  } catch (err) {
-    document.getElementById('mainContent').innerHTML = `
-      <div class="empty-state">
-        <div class="display">Session not found</div>
-        <p>Double check the link or ID your host gave you.</p>
-      </div>`;
-  }
-}
-
-function renderTournamentShell() {
-  document.getElementById('mainContent').innerHTML = `
-    <div class="find-me">
-      <input type="text" id="findMeInput" placeholder="Type your name to find your spot..." oninput="handleTournamentFindMe()">
-      <div id="findMeResult"></div>
-    </div>
-    <div class="tournament-round-banner" id="tournamentRoundBanner"></div>
-    <div class="matchup-list" id="tournamentMatchups"></div>
-    <div class="court-line-divider" role="separator"></div>
-    <div class="card standings-card">
-      <h2 class="standings-title">Standings</h2>
-      <div class="table-scroll">
-      <table class="roster-table" id="standingsTable"></table>
-      </div>
-    </div>
-    <div class="message-box">
-      <h3>Message the host</h3>
-      <div class="message-row">
-        <input type="text" name="from" id="msgFrom" placeholder="Your name">
-        <input type="text" name="msg" id="msgText" placeholder="e.g. Vince rest please" maxlength="280">
-        <button onclick="sendHostMessage()">Send</button>
-      </div>
-      <p class="message-hint">Optional — let the host know if you need to rest, swap, or have a question.</p>
-    </div>
-  `;
-}
-
-let _tournamentTeamsCache = [];
-let _tournamentPlayersCache = [];
-
-async function refreshTournamentView() {
-  if (!currentSessionId) return;
-  const [session, teams, players, matchups] = await Promise.all([
-    SessionAPI.getSession(currentSessionId),
-    SessionAPI.getTeams(currentSessionId),
-    SessionAPI.getPlayers(currentSessionId),
-    SessionAPI.getMatchups(currentSessionId),
-  ]);
-  currentSession = session;
-  _tournamentTeamsCache = teams;
-  _tournamentPlayersCache = players;
-
-  const currentRoundMatchups = matchups.filter(m => m.round_number === session.current_round);
-  const roundLabel = session.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin';
-  document.getElementById('tournamentRoundBanner').innerHTML = `
-    <span class="round-pill">Round ${session.current_round}${session.rounds_total ? ` of ${session.rounds_total}` : ''}</span>
-    <span class="format-pill">${roundLabel}</span>
-  `;
-
-  document.getElementById('tournamentMatchups').innerHTML = currentRoundMatchups.map(m => {
-    const namesA = playerNamesForTeam(m.team_a, players).join(' & ');
-    const namesB = playerNamesForTeam(m.team_b, players).join(' & ');
-    const statusLabel = m.status === 'completed' ? 'Final' : (m.status === 'in_progress' ? 'Playing' : 'Waiting');
-    const statusClass = m.status === 'completed' ? 'completed' : (m.status === 'in_progress' ? 'in-progress' : 'pending');
-    return `<div class="matchup-card ${statusClass}"><span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span><span class="status-pill status-${m.status === 'in_progress' ? 'playing' : 'waiting'}">${statusLabel}</span></div>`;
-  }).join('') || '<p style="color:var(--resting-slate); font-size:13px; text-align:center; padding:16px;">No matchups yet for this round.</p>';
-
-  const standings = computeStandings(teams);
-  document.getElementById('standingsTable').innerHTML = `
-    <thead><tr><th>#</th><th>Team</th><th>W-L</th><th>Diff</th></tr></thead>
-    <tbody>
-      ${standings.map((t, i) => `
-        <tr>
-          <td>${i + 1}</td>
-          <td>${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</td>
-          <td>${t.wins}-${t.losses}</td>
-          <td>${t.points_for - t.points_against >= 0 ? '+' : ''}${t.points_for - t.points_against}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  `;
-}
-
-function handleTournamentFindMe() {
-  const query = document.getElementById('findMeInput').value.trim().toLowerCase();
-  const resultEl = document.getElementById('findMeResult');
-  if (!query) { resultEl.textContent = ''; return; }
-  const player = _tournamentPlayersCache.find(p => p.name.toLowerCase().includes(query));
-  if (!player) { resultEl.textContent = 'Not found yet'; return; }
-  const team = _tournamentTeamsCache.find(t => t.player_ids.includes(player.id));
-  if (!team) { resultEl.textContent = 'Not on a team yet'; return; }
-  resultEl.textContent = `${team.wins}-${team.losses} record so far`;
-}
-
-function subscribeTournamentRealtime() {
-  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
-  realtimeChannel = supabaseClient
-    .channel(`session-${currentSessionId}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matchups', filter: `session_id=eq.${currentSessionId}` }, refreshTournamentView)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `session_id=eq.${currentSessionId}` }, refreshTournamentView)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `id=eq.${currentSessionId}` }, refreshTournamentView)
-    .subscribe();
-}
-
-function renderShell() {
-  document.getElementById('mainContent').innerHTML = `
-    <div class="find-me">
-      <input type="text" id="findMeInput" placeholder="Type your name to find your spot..." oninput="handleFindMe()">
-      <div id="findMeResult"></div>
-    </div>
-    <div class="courts-grid" id="courtsGrid"></div>
-    <div class="court-line-divider" role="separator"></div>
-    <div class="queues" id="queuesGrid"></div>
-    <div class="recent-results" id="recentResults"></div>
-    <div class="court-line-divider" role="separator"></div>
-    <div class="rest-request-box">
-      <h3>Need a break?</h3>
-      <div class="rest-request-row">
-        <select id="restPlayerSelect"><option value="">Select your name...</option></select>
-        <button onclick="handleRequestRest()" id="restRequestBtn">🧘 Request Rest</button>
-      </div>
-      <p class="message-hint" id="restRequestStatus">Lets the host know you'd like to sit out — they'll confirm it on their end.</p>
-    </div>
-    <div class="message-box">
-      <h3>Message the host</h3>
-      <div class="message-row">
-        <input type="text" name="from" id="msgFrom" placeholder="Your name">
-        <input type="text" name="msg" id="msgText" placeholder="e.g. Vince rest please" maxlength="280">
-        <button onclick="sendHostMessage()">Send</button>
-      </div>
-      <p class="message-hint">Optional — let the host know about a swap request or anything else.</p>
-    </div>
-  `;
-}
-
-async function handleRequestRest() {
-  const select = document.getElementById('restPlayerSelect');
-  const statusEl = document.getElementById('restRequestStatus');
-  const playerId = select.value;
-  if (!playerId) {
-    statusEl.textContent = 'Pick your name from the list first.';
-    return;
-  }
-  try {
-    await SessionAPI.requestRest(currentSessionId, playerId);
-    statusEl.textContent = '✅ Rest request sent — the host will see this in their inbox.';
-    statusEl.style.color = 'var(--winner-green)';
-  } catch (err) {
-    statusEl.textContent = 'Could not send request, please try again.';
-    statusEl.style.color = 'var(--loser-coral)';
-  }
-}
-
-let _playersCache = [];
-let _teamsCache = [];
-let _courtsCache = [];
-
-async function refreshAll() {
-  if (!currentSessionId) return;
-  const [players, teams, courts, recentMatches] = await Promise.all([
-    SessionAPI.getPlayers(currentSessionId),
-    SessionAPI.getTeams(currentSessionId),
-    SessionAPI.getCourts(currentSessionId),
-    SessionAPI.getRecentMatches(currentSessionId),
-  ]);
-  // Capture the PREVIOUS court state before overwriting the cache — this
-  // is what powers serve-in/pulse transition detection in renderCourts().
-  // Order matters here: the comparison must happen against what was on
-  // screen a moment ago, not against the data we're about to render.
-  const previousCourts = _courtsCache;
-  _playersCache = players;
-  _teamsCache = teams;
-  _courtsCache = courts;
-  renderCourts(courts, players, teams, previousCourts);
-  renderQueues(teams, players);
-  renderRecentResults(recentMatches, players);
-  syncRestPlayerDropdown(players);
-}
-
-function syncRestPlayerDropdown(players) {
-  const select = document.getElementById('restPlayerSelect');
-  if (!select) return;
-  const currentValue = select.value;
-  const activePlayers = players.filter(p => p.status !== 'resting');
-  select.innerHTML = `<option value="">Select your name...</option>` +
-    activePlayers.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-  // preserve the player's current selection across re-renders if they're
-  // still a valid option, so a realtime refresh doesn't reset their pick
-  if (activePlayers.some(p => p.id === currentValue)) {
-    select.value = currentValue;
-  }
-}
-
-function formatDuration(seconds) {
-  if (!seconds && seconds !== 0) return '—';
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${String(secs).padStart(2, '0')}`;
-}
-
-let _seenMatchIds = new Set();
-
-function renderRecentResults(matches, players) {
-  const el = document.getElementById('recentResults');
-  if (!el) return;
-  if (!matches || matches.length === 0) { el.innerHTML = ''; return; }
-
-  el.innerHTML = `
-    <h3 class="recent-results-title">Recent Results</h3>
-    <div class="recent-results-list">
-      ${matches.map((m, i) => {
-        const namesA = playerNamesForTeam(m.team_a, players).join(' & ');
-        const namesB = playerNamesForTeam(m.team_b, players).join(' & ');
-        const winnerIsA = m.winner_team_id === m.team_a_id;
-        const scoreText = m.score_visible && m.team_a_score != null
-          ? `${m.team_a_score}–${m.team_b_score}`
-          : 'Score not shared';
-        // Only the newest entry that wasn't in the previous render gets
-        // the entrance animation — re-rendering the whole list on every
-        // realtime tick would otherwise re-trigger it on rows that have
-        // been sitting there for minutes, which reads as broken, not alive.
-        const isNew = !_seenMatchIds.has(m.id);
-        return `
-          <div class="recent-result-row ${isNew ? 'drop-in' : ''}">
-            <span class="${winnerIsA ? 'winner-name' : ''}">${escapeHtml(namesA)}</span>
-            <span class="recent-result-score mono">${scoreText}</span>
-            <span class="${!winnerIsA ? 'winner-name' : ''}">${escapeHtml(namesB)}</span>
-            <span class="recent-result-duration mono">${formatDuration(m.duration_seconds)}</span>
+  document.getElementById('appRoot').innerHTML = `
+    <div class="card">
+      <h2>Active Sessions</h2>
+      ${activeOnes.length ? activeOnes.map(s => `
+        <div class="session-row">
+          <div>
+            <div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div>
+            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div>
           </div>
-        `;
-      }).join('')}
+          <button onclick="promptOpenSession('${s.id}')">Open</button>
+        </div>
+      `).join('') : '<p style="color:var(--resting-slate); font-size:13px;">No active sessions yet.</p>'}
+    </div>
+
+    ${completedOnes.length ? `
+    <div class="card">
+      <h2>Recently Finished</h2>
+      ${completedOnes.map(s => `
+        <div class="session-row">
+          <div>
+            <div style="font-weight:700;">${escapeHtml(s.name)} ${sessionTypeBadge(s)}</div>
+            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div>
+          </div>
+          <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--kitchen-gold); color:var(--ink);">Host Again</button>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+
+    <div class="card">
+      <h2>Start New Session</h2>
+
+      <div class="session-type-toggle">
+        <div class="type-option selected" id="typeOpenPlay" onclick="selectSessionType('open_play')">
+          <strong>Open Play</strong>
+          <span>Continuous queue — no fixed end</span>
+        </div>
+        <div class="type-option" id="typeTournament" onclick="selectSessionType('tournament')">
+          <strong>Tournament</strong>
+          <span>Fixed format, real standings</span>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="field"><label id="nameFieldLabel">Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
+        <div class="field tournament-only" id="tournamentDivisionField" style="display:none;">
+          <label>Format</label>
+          <select id="newDivision">
+            <option value="mens_doubles">Men's Doubles</option>
+            <option value="mixed_doubles">Mixed Doubles</option>
+            <option value="womens_doubles">Women's Doubles</option>
+            <option value="mens_singles">Men's Singles</option>
+            <option value="womens_singles">Women's Singles</option>
+            <option value="mixed_singles">Mixed Singles</option>
+          </select>
+        </div>
+        <div class="field open-play-only" id="formatField"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
+        <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
+
+        <!-- OPEN PLAY: stacking mode selector -->
+        <div class="field open-play-only" id="stackingModeField" style="grid-column: 1 / -1;">
+          <label>Stacking Mode</label>
+          <div class="stacking-mode-toggle">
+            <div class="mode-option selected" id="modeAutomated" onclick="selectOpenPlayMode('automated')">
+              <strong>Automated</strong>
+              <span>Random pairings, system handles everything</span>
+            </div>
+            <div class="mode-option" id="modeManual" onclick="selectOpenPlayMode('manual')">
+              <strong>Manual</strong>
+              <span>You set every matchup yourself, in advance</span>
+            </div>
+            <div class="mode-option" id="modeHybrid" onclick="selectOpenPlayMode('hybrid')">
+              <strong>Automated + Manual</strong>
+              <span>Random start, you can edit anytime</span>
+            </div>
+          </div>
+          <p class="mode-explainer" id="modeExplainer">Players are randomly paired, trying to give everyone a chance to play with and against as many different people as possible. Once everyone's played once, winner-vs-winner and loser-vs-loser matching takes over.</p>
+        </div>
+
+        <div class="field open-play-only" id="crossLaneFillField"><label>Uneven Numbers Fallback</label><select id="newAllowCrossLaneFill"><option value="true">Winner vs Loser is OK if queues are uneven (recommended)</option><option value="false">Court waits until a full winner-vs-winner or loser-vs-loser match is ready</option></select></div>
+
+        <div class="field tournament-only" id="tournamentFormatField" style="display:none;">
+          <label>Tournament Mode</label>
+          <select id="newTournamentFormat" onchange="toggleSwissRoundsField()">
+            <option value="round_robin">Round Robin (everyone plays everyone)</option>
+            <option value="swiss">Swiss (paired by similar record each round)</option>
+            <option value="single_elim" disabled>Single Elimination (coming soon)</option>
+            <option value="manual" disabled>Fully Custom / Manual Bracket (coming soon)</option>
+          </select>
+        </div>
+        <div class="field tournament-only" id="categoryField" style="display:none;">
+          <label>Category</label>
+          <select id="newCategory">
+            <option value="novice">Novice / Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
+          </select>
+        </div>
+        <div class="field tournament-only" id="swissRoundsField" style="display:none;">
+          <label>Number of Rounds</label>
+          <input type="number" id="newRoundsTotal" value="4" min="1" max="20">
+        </div>
+        <div class="field tournament-only" id="pointsToWinField" style="display:none;">
+          <label>Points to Win (per game)</label>
+          <input type="number" id="newPointsToWin" value="11" min="1" max="99">
+        </div>
+        <div class="field tournament-only" id="tournamentNoticeField" style="display:none; grid-column: 1 / -1;">
+          <p style="font-size:11px; color:var(--resting-slate); margin:0; padding:8px 12px; background:var(--surface-hover); border-radius:6px;">Tournament partners are fixed for the whole event — you'll pair players once during Bracket setup, and that pairing stays the same every round.</p>
+        </div>
+
+        <div class="field">
+          <label>Session Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('newPassword', this)">👁</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Confirm Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="newPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('newPasswordConfirm', this)">👁</button>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:11px; color:var(--resting-slate); margin:-6px 0 10px;">This password protects the host console for this session — anyone with the link will need it to make changes.</p>
+      <button class="btn-primary" onclick="handleCreateSession()">Create Session</button>
+      <div class="auth-error" id="createSessionError"></div>
     </div>
   `;
-  _seenMatchIds = new Set(matches.map(m => m.id));
+}
+
+function togglePasswordVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  btn.textContent = showing ? '👁' : '🙈';
+}
+
+const MODE_EXPLAINERS = {
+  automated: 'Players are randomly paired, trying to give everyone a chance to play with and against as many different people as possible. Once everyone has played once, winner-vs-winner and loser-vs-loser matching takes over.',
+  manual: 'You set every matchup yourself — Round 1 for every court, plus the next matchups queued in advance. Players who finish a match are automatically added to the back of the line for whatever you have already queued.',
+  hybrid: 'Starts the same as Automated (random pairings), but you can edit any upcoming matchup at any time — useful for last-minute requests like pairing two friends together.',
+};
+
+function selectOpenPlayMode(mode) {
+  selectedOpenPlayMode = mode;
+  document.getElementById('modeAutomated').classList.toggle('selected', mode === 'automated');
+  document.getElementById('modeManual').classList.toggle('selected', mode === 'manual');
+  document.getElementById('modeHybrid').classList.toggle('selected', mode === 'hybrid');
+  document.getElementById('modeExplainer').textContent = MODE_EXPLAINERS[mode];
+}
+
+function selectSessionType(type) {
+  selectedSessionType = type;
+  document.getElementById('typeOpenPlay').classList.toggle('selected', type === 'open_play');
+  document.getElementById('typeTournament').classList.toggle('selected', type === 'tournament');
+
+  document.querySelectorAll('.open-play-only').forEach(el => { el.style.display = type === 'open_play' ? '' : 'none'; });
+  document.querySelectorAll('.tournament-only').forEach(el => { el.style.display = type === 'tournament' ? '' : 'none'; });
+  document.getElementById('nameFieldLabel').textContent = type === 'tournament' ? 'Tournament Name' : 'Session Name';
+  if (type === 'tournament') toggleSwissRoundsField();
+}
+
+function toggleSwissRoundsField() {
+  const fmt = document.getElementById('newTournamentFormat').value;
+  document.getElementById('swissRoundsField').style.display = fmt === 'swiss' ? '' : 'none';
+}
+
+const DIVISION_LABELS = {
+  mixed_doubles: 'Mixed Doubles', mens_doubles: "Men's Doubles", womens_doubles: "Women's Doubles",
+  mens_singles: "Men's Singles", womens_singles: "Women's Singles", mixed_singles: 'Mixed Singles', open: 'Open / Any',
+};
+const CATEGORY_LABELS = { novice: 'Novice', intermediate: 'Intermediate', advanced: 'Advanced' };
+const OPEN_PLAY_MODE_LABELS = { automated: 'Automated', manual: 'Manual', hybrid: 'Auto + Manual' };
+
+// Divisions ending in "_singles" are 1v1; everything else is 2v2 doubles.
+function formatFromDivision(division) {
+  return division && division.endsWith('_singles') ? 'singles' : 'doubles';
+}
+
+function sessionTypeBadge(s) {
+  if (s.session_type === 'tournament') {
+    const fmt = s.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin';
+    const divisionLabel = s.division && DIVISION_LABELS[s.division] ? ` · ${DIVISION_LABELS[s.division]}` : '';
+    const categoryLabel = s.category && CATEGORY_LABELS[s.category] ? ` · ${CATEGORY_LABELS[s.category]}` : '';
+    return `<span style="font-size:10px; background:var(--kitchen-gold); color:var(--ink); padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">${fmt}${divisionLabel}${categoryLabel}</span>`;
+  }
+  const modeLabel = s.open_play_mode && OPEN_PLAY_MODE_LABELS[s.open_play_mode] ? ` · ${OPEN_PLAY_MODE_LABELS[s.open_play_mode]}` : '';
+  return `<span style="font-size:10px; background:var(--waiting-blue); color:white; padding:2px 7px; border-radius:999px; font-weight:700; margin-left:6px;">Open Play${modeLabel}</span>`;
+}
+
+async function handleCreateSession() {
+  const name = document.getElementById('newName').value.trim() || 'Open Play';
+  const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
+  const password = document.getElementById('newPassword').value;
+  const passwordConfirm = document.getElementById('newPasswordConfirm').value;
+  const errorEl = document.getElementById('createSessionError');
+  errorEl.textContent = '';
+
+  if (password !== passwordConfirm) {
+    errorEl.textContent = 'Passwords do not match.';
+    return;
+  }
+  if (!password || password.length < 4) {
+    errorEl.textContent = 'Password must be at least 4 characters.';
+    return;
+  }
+
+  const sessionType = selectedSessionType;
+
+  let format, openPlayMode, allowCrossLaneFill, tournamentFormat, division, category, roundsTotal, pointsToWin, scoringMode;
+
+  if (sessionType === 'tournament') {
+    division = document.getElementById('newDivision').value;
+    format = formatFromDivision(division);
+    tournamentFormat = document.getElementById('newTournamentFormat').value;
+    category = document.getElementById('newCategory').value;
+    roundsTotal = tournamentFormat === 'swiss' ? parseInt(document.getElementById('newRoundsTotal').value, 10) : null;
+    pointsToWin = parseInt(document.getElementById('newPointsToWin').value, 10) || 11;
+    scoringMode = 'point_diff';
+  } else {
+    format = document.getElementById('newFormat').value;
+    openPlayMode = selectedOpenPlayMode;
+    allowCrossLaneFill = document.getElementById('newAllowCrossLaneFill').value === 'true';
+    pointsToWin = 11;
+    scoringMode = 'win_loss';
+  }
+
+  // Tournament partners are always fixed for the whole event — no re-pairing mode applies there.
+  const pairingDefault = 'fixed';
+  // Stacking engine mode: Open Play's automated win/loss matching always
+  // uses 'win_loss_queue' under the hood, regardless of which of the 3
+  // open_play_mode options the host picked — manual/hybrid layer their
+  // own pre-queue on TOP of this, they don't replace it.
+  const stackingMode = 'win_loss_queue';
+
+  try {
+    const session = await SessionAPI.createSession({
+      name, format, courtCount, stackingMode, pairingDefault, allowCrossLaneFill, restPriorityEnabled: true, password,
+      sessionType, tournamentFormat, division, category, openPlayMode, roundsTotal, scoringMode, pointsToWin,
+    });
+    rememberSessionPassword(session.id, password);
+    await openSession(session.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+// ----------------------------
+// PASSWORD GATE
+// ----------------------------
+function sessionPasswordKey(sessionId) { return `istackyyy_pw_ok_${sessionId}`; }
+function rememberSessionPassword(sessionId, password) {
+  // localStorage (not sessionStorage) so the unlock survives closing the
+  // browser tab — hosts running live events shouldn't have to re-type a
+  // password every time a tab gets closed/reopened on their phone.
+  localStorage.setItem(sessionPasswordKey(sessionId), 'unlocked');
+}
+function isSessionUnlocked(sessionId) {
+  return localStorage.getItem(sessionPasswordKey(sessionId)) === 'unlocked';
+}
+
+async function promptOpenSession(sessionId) {
+  if (isSessionUnlocked(sessionId)) {
+    await openSession(sessionId);
+    return;
+  }
+  const session = await SessionAPI.getSession(sessionId);
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="pwModal">
+      <div class="modal-box">
+        <h2>Enter Password</h2>
+        <p class="modal-sub">"${escapeHtml(session.name)}" is password-protected.</p>
+        <div class="field"><input type="password" id="sessionPwInput" placeholder="Session password" autocomplete="off" onkeydown="if(event.key==='Enter') confirmSessionPassword('${sessionId}')"></div>
+        <div class="auth-error" id="pwModalError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('pwModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmSessionPassword('${sessionId}')">Unlock</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('sessionPwInput').focus();
+}
+
+async function confirmSessionPassword(sessionId) {
+  const input = document.getElementById('sessionPwInput').value;
+  const ok = await SessionAPI.verifySessionPassword(sessionId, input);
+  if (!ok) {
+    document.getElementById('pwModalError').textContent = 'Incorrect password.';
+    return;
+  }
+  rememberSessionPassword(sessionId, input);
+  document.getElementById('pwModal').remove();
+  await openSession(sessionId);
+}
+
+async function openSession(sessionId) {
+  activeSession = await SessionAPI.getSession(sessionId);
+  activeTab = 'roster';
+  // Reset all per-session in-memory UI state — otherwise partially-built
+  // tournament team formations (or other in-progress selections) from a
+  // PREVIOUSLY opened session could leak into this one, since these are
+  // plain module-level variables that don't know which session they
+  // belong to.
+  bracketSetupTeams = [];
+  bracketSetupSelectedPlayers = [];
+  renderConsole();
+  subscribeRealtime();
+  startHostTimerLoop();
+}
+
+function backToSessionList() {
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
+  activeSession = null;
+  renderSessionList();
+}
+
+async function renderConsole() {
+  const shareUrl = `${window.location.origin}/?session=${activeSession.id}`;
+  document.getElementById('appRoot').innerHTML = `
+    <div class="console-header">
+      <div>
+        <button class="btn-secondary" style="width:auto; padding:6px 12px; font-size:12px; margin-bottom:8px;" onclick="backToSessionList()">← All Sessions</button>
+        <h1>${escapeHtml(activeSession.name)} ${sessionTypeBadge(activeSession)}</h1>
+      </div>
+      <button onclick="confirmFinishSession()" class="finish-session-btn">Finish Session</button>
+    </div>
+
+    <div class="share-card">
+      <div class="share-card-code">
+        <span class="ref-code-label">Session Code</span>
+        <span class="ref-code-big mono">${activeSession.reference_code || '—'}</span>
+      </div>
+      <div class="share-card-link">
+        <span class="share-card-link-label">Player Link</span>
+        <span class="share-card-url mono">${shareUrl}</span>
+      </div>
+      <div class="share-card-actions">
+        <button class="share-btn" onclick="copyShareLink('${shareUrl}')">📋 Copy Link</button>
+        <button class="share-btn share-btn-primary" onclick="copyShareMessage('${shareUrl}', '${activeSession.reference_code || ''}')">💬 Copy for Chat</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
+      ${activeSession.session_type === 'tournament' ? `<button class="tab-btn ${activeTab === 'bracket' ? 'active' : ''}" onclick="switchTab('bracket')">Bracket</button>` : ''}
+      <button class="tab-btn ${activeTab === 'courts' ? 'active' : ''}" onclick="switchTab('courts')">Courts</button>
+      <button class="tab-btn ${activeTab === 'inbox' ? 'active' : ''}" onclick="switchTab('inbox')">Inbox <span class="inbox-badge" id="inboxBadge" style="display:none;"></span></button>
+    </div>
+    <div class="tab-panel active" id="tabPanel"></div>
+  `;
+  await renderActiveTab();
+}
+
+function confirmFinishSession() {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="finishModal">
+      <div class="modal-box">
+        <h2>Finish This Session?</h2>
+        <p class="modal-sub">This locks "${escapeHtml(activeSession.name)}" as completed. Players currently mid-match will stay recorded, but no new matches can start. You can still "Host Again" afterward to start a fresh session with the same players.</p>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('finishModal').remove()">Cancel</button>
+          <button class="btn-yes" style="background:var(--loser-coral);" onclick="handleFinishSession()">Yes, Finish It</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function handleFinishSession() {
+  await SessionAPI.finishSession(activeSession.id);
+  document.getElementById('finishModal').remove();
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
+  activeSession = null;
+  await renderSessionList();
+}
+
+async function startHostAgainFlow(oldSessionId) {
+  if (!isSessionUnlocked(oldSessionId)) {
+    // require the password of the old session before letting someone clone its roster
+    const password = prompt('Enter the password for this finished session to host it again:');
+    if (password === null) return;
+    const ok = await SessionAPI.verifySessionPassword(oldSessionId, password);
+    if (!ok) { alert('Incorrect password.'); return; }
+    rememberSessionPassword(oldSessionId, password);
+  }
+
+  const oldSession = await SessionAPI.getSession(oldSessionId);
+  const oldPlayers = await SessionAPI.getPlayers(oldSessionId);
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="hostAgainModal">
+      <div class="modal-box">
+        <h2>Host Again</h2>
+        <p class="modal-sub">Start a new session based on "${escapeHtml(oldSession.name)}". Select players to carry over.</p>
+        <div class="field"><label>New Session Name</label><input type="text" id="hostAgainName" value="${escapeHtml(oldSession.name)} (2)"></div>
+        <div class="field"><label>Number of Courts</label><input type="number" id="hostAgainCourts" value="${oldSession.court_count}" min="1" max="20"></div>
+        <div class="field"><label>New Session Password</label><input type="password" id="hostAgainPassword" placeholder="At least 4 characters"></div>
+        <p style="font-size:12px; font-weight:700; margin:14px 0 8px;">Players to carry over:</p>
+        <div class="player-checklist" id="hostAgainChecklist">
+          ${oldPlayers.map(p => `<div class="player-check selected" data-id="${p.id}" data-name="${escapeHtml(p.name)}" data-tier="${p.skill_tier}" onclick="this.classList.toggle('selected')">${escapeHtml(p.name)}</div>`).join('') || '<p style="font-size:12px;color:var(--resting-slate);">No players in that session.</p>'}
+        </div>
+        <div class="auth-error" id="hostAgainError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('hostAgainModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmHostAgain('${oldSessionId}')">Create & Open</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmHostAgain(oldSessionId) {
+  const name = document.getElementById('hostAgainName').value.trim() || 'Open Play';
+  const courtCount = parseInt(document.getElementById('hostAgainCourts').value, 10) || 1;
+  const password = document.getElementById('hostAgainPassword').value;
+  const errorEl = document.getElementById('hostAgainError');
+  const oldSession = await SessionAPI.getSession(oldSessionId);
+
+  const selectedChips = [...document.querySelectorAll('#hostAgainChecklist .player-check.selected')];
+  const carryPlayers = selectedChips.map(el => ({ name: el.dataset.name, skill_tier: el.dataset.tier }));
+
+  try {
+    // Carry over EVERY session setting, not just a subset — a Tournament's
+    // division/category/format must survive "Host Again," not silently
+    // fall back to a default Open Play session with that data dropped.
+    const newSession = await SessionAPI.createSession({
+      name, format: oldSession.format, courtCount,
+      stackingMode: oldSession.stacking_mode, pairingDefault: oldSession.pairing_default,
+      skillMatchMode: oldSession.skill_match_mode, restPriorityEnabled: oldSession.rest_priority_enabled,
+      allowCrossLaneFill: oldSession.allow_cross_lane_fill,
+      sessionType: oldSession.session_type, openPlayMode: oldSession.open_play_mode,
+      tournamentFormat: oldSession.tournament_format, division: oldSession.division, category: oldSession.category,
+      roundsTotal: null, // a fresh tournament needs a fresh round count, not the old one's CURRENT round
+      scoringMode: oldSession.scoring_mode, pointsToWin: oldSession.points_to_win,
+      password, parentSessionId: oldSessionId,
+    });
+    rememberSessionPassword(newSession.id, password);
+    if (carryPlayers.length > 0) {
+      await SessionAPI.carryPlayersToNewSession(newSession.id, carryPlayers);
+    }
+    document.getElementById('hostAgainModal').remove();
+    await openSession(newSession.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  // Use closest('.tab-btn') instead of assuming event.target IS the button —
+  // the Inbox tab now has a badge span as a child, so a click landing on
+  // the badge itself would otherwise make event.target the span, not the
+  // button, leaving the tab visually un-highlighted.
+  const btn = event.target.closest('.tab-btn');
+  if (btn) btn.classList.add('active');
+  renderActiveTab();
+  if (tab === 'inbox') updateInboxBadge();
+}
+
+async function renderActiveTab() {
+  const panel = document.getElementById('tabPanel');
+  if (activeTab === 'roster') panel.innerHTML = await rosterTabHtml();
+  if (activeTab === 'bracket') panel.innerHTML = await bracketTabHtml();
+  if (activeTab === 'courts') panel.innerHTML = await courtsTabHtml();
+  if (activeTab === 'inbox') panel.innerHTML = await inboxTabHtml();
+}
+
+function copyShareLink(url) {
+  navigator.clipboard.writeText(url);
+  event.target.textContent = 'Copied!';
+  setTimeout(() => { event.target.textContent = 'Copy Link'; }, 1500);
+}
+
+function copyShareMessage(url, referenceCode) {
+  const combined = referenceCode
+    ? `Session Code: ${referenceCode}\n${url}`
+    : url;
+  navigator.clipboard.writeText(combined);
+  event.target.textContent = 'Copied!';
+  setTimeout(() => { event.target.textContent = 'Copy for Chat'; }, 1500);
+}
+
+async function rosterTabHtml() {
+  // Use the include-left version here specifically — the Roster tab is
+  // the one place the host needs to actually SEE departed/resting
+  // players in order to bring them back. Every other part of the app
+  // still correctly uses the filtered getPlayers().
+  const players = await SessionAPI.getAllPlayersIncludingLeft(activeSession.id);
+  return `
+    <div class="card">
+      <h2>Add Player</h2>
+      <div class="add-player-row">
+        <input type="text" id="newPlayerName" placeholder="Player name">
+        <select id="newPlayerTier"><option value="open">No tier</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select>
+        <button onclick="handleAddPlayer()">Add</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Roster (${players.filter(p => p.status !== 'left').length})</h2>
+      ${players.length ? `
+        <div class="table-scroll">
+        <table class="roster-table">
+          <thead><tr><th>Name</th><th>Tier</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${players.map(p => `
+              <tr style="${p.status === 'left' ? 'opacity:0.45;' : ''}">
+                <td>${escapeHtml(p.name)}</td>
+                <td>${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
+                <td><span class="status-pill status-${p.status}">${p.status.replace('_', ' ')}</span></td>
+                <td class="roster-actions">
+                  ${rosterActionButtons(p)}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        </div>
+      ` : '<p style="color:var(--resting-slate); font-size:13px;">No players yet — add some above.</p>'}
+    </div>
+  `;
+}
+
+/**
+ * Action buttons per player status:
+ *  - playing: Leave only (can't manually rest someone mid-match —
+ *    pulling them off a live court would disrupt the game in progress)
+ *  - waiting / winners_queue / losers_queue (active, not on court):
+ *    Rest + Leave
+ *  - resting: Bring Back + Leave
+ *  - left: Bring Back only (already gone, nothing to "leave" further)
+ */
+function rosterActionButtons(player) {
+  const restBtn = `<button onclick="handleRestManually('${player.id}')" class="roster-action-btn roster-action-rest">Rest</button>`;
+  const bringBackBtn = `<button onclick="handleReturnToWaiting('${player.id}')" class="roster-action-btn roster-action-bring-back">Bring Back</button>`;
+  const leaveBtn = `<button onclick="handleRemovePlayer('${player.id}')" class="roster-action-btn roster-action-leave">Leave</button>`;
+
+  if (player.status === 'left') return bringBackBtn;
+  if (player.status === 'resting') return `${bringBackBtn}${leaveBtn}`;
+  if (player.status === 'playing') return leaveBtn;
+  return `${restBtn}${leaveBtn}`; // waiting / winners_queue / losers_queue
+}
+
+async function handleAddPlayer() {
+  const name = document.getElementById('newPlayerName').value.trim();
+  const tier = document.getElementById('newPlayerTier').value;
+  if (!name) return;
+  try {
+    await SessionAPI.addPlayer(activeSession.id, name, tier);
+    document.getElementById('newPlayerName').value = '';
+  } catch (err) {
+    alert(err.message || 'Could not add this player. Please try again.');
+  }
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+async function handleRemovePlayer(playerId) {
+  try {
+    await SessionAPI.removePlayer(playerId);
+  } catch (err) {
+    alert(err.message || 'Could not remove this player. Please try again.');
+  }
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+/**
+ * Brings a player back into 'waiting' status, regardless of whether they
+ * were previously resting OR had left — same re-pairing logic either way.
+ * Used by both "Bring Back" (resting -> waiting) and "Bring Back" (left ->
+ * waiting), since the actual mechanics are identical.
+ */
+async function handleReturnToWaiting(playerId) {
+  // Unified pool model: bringing someone back just means rejoining the
+  // single time-ordered pool with a FRESH became_free_at — this is what
+  // puts them at the back of the line, exactly as intended. No team
+  // pre-pairing needed; teams are formed fresh only when a court actually
+  // needs filling (see decideNextMatchFromPool).
+  await supabaseClient.from('players').update({ status: 'waiting', became_free_at: new Date().toISOString() }).eq('id', playerId);
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+async function handleRestManually(playerId) {
+  try {
+    await SessionAPI.restPlayerManually(playerId);
+  } catch (err) {
+    alert(err.message || 'Could not rest this player.');
+  }
+  document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+}
+
+// ----------------------------
+// BRACKET TAB (Tournament Mode)
+// ----------------------------
+let bracketSetupSelectedPlayers = [];
+let bracketSetupTeams = [];
+
+async function bracketTabHtml() {
+  const teams = await SessionAPI.getTournamentTeams(activeSession.id);
+
+  if (teams.length === 0) {
+    return await bracketSetupHtml();
+  }
+  return await bracketLiveHtml(teams);
+}
+
+async function bracketSetupHtml() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+
+  // Players already locked into a formed team can't be picked again —
+  // this is the core double-stacking prevention.
+  const assignedPlayerIds = new Set(bracketSetupTeams.flatMap(t => t.playerIds));
+  const availablePlayers = players.filter(p => !assignedPlayerIds.has(p.id));
+
+  return `
+    <div class="card">
+      <h2>Set Up ${activeSession.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin'} Tournament</h2>
+      <p style="font-size:13px; color:var(--resting-slate);">
+        ${teamSize === 2 ? 'Pick 2 players at a time to form each team.' : 'Each player competes individually.'}
+        Once all teams are formed, generate the schedule.
+        <strong style="color:var(--court-green);">${availablePlayers.length} unassigned</strong> of ${players.length} total.
+      </p>
+
+      <div class="player-checklist" id="bracketPlayerChecklist">
+        ${availablePlayers.length ? availablePlayers.map(p => `<div class="player-check" data-id="${p.id}" data-name="${escapeHtml(p.name)}" onclick="toggleBracketPlayerSelect('${p.id}')">${escapeHtml(p.name)}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No more unassigned players.</p>'}
+      </div>
+      ${teamSize === 2 ? `<button class="assign-btn" style="width:auto; padding:8px 16px;" onclick="formBracketTeam()">Form Team from Selected</button>` : `<button class="assign-btn" style="width:auto; padding:8px 16px;" onclick="formAllSinglesTeams()">Add All as Individual Entries</button>`}
+
+      <div style="margin-top:18px;">
+        <h3 style="font-size:13px; margin-bottom:8px;">Teams Formed (${bracketSetupTeams.length})</h3>
+        ${bracketSetupTeams.length ? bracketSetupTeams.map((t, i) => `
+          <div class="session-row"><span>${t.names.join(' & ')}</span><button class="remove-btn" onclick="removeBracketTeam(${i})">Remove</button></div>
+        `).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No teams formed yet.</p>'}
+      </div>
+
+      <button class="btn-primary" style="width:auto; padding:10px 24px; margin-top:16px;" onclick="handleGenerateSchedule()">Generate Schedule & Start Tournament</button>
+      <div class="auth-error" id="bracketSetupError"></div>
+    </div>
+  `;
+}
+
+function toggleBracketPlayerSelect(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const idx = bracketSetupSelectedPlayers.indexOf(playerId);
+  if (idx >= 0) {
+    bracketSetupSelectedPlayers.splice(idx, 1);
+  } else {
+    if (bracketSetupSelectedPlayers.length >= teamSize) return;
+    bracketSetupSelectedPlayers.push(playerId);
+  }
+  document.querySelectorAll('#bracketPlayerChecklist .player-check').forEach(el => {
+    el.classList.toggle('selected', bracketSetupSelectedPlayers.includes(el.dataset.id));
+  });
+}
+
+async function formBracketTeam() {
+  const teamSize = 2;
+  if (bracketSetupSelectedPlayers.length !== teamSize) {
+    alert(`Select exactly ${teamSize} players to form a team.`);
+    return;
+  }
+  const checklistEls = [...document.querySelectorAll('#bracketPlayerChecklist .player-check.selected')];
+  const names = checklistEls.map(el => el.dataset.name);
+  bracketSetupTeams.push({ playerIds: [...bracketSetupSelectedPlayers], names });
+  bracketSetupSelectedPlayers = [];
+  document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
+}
+
+async function formAllSinglesTeams() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const assignedPlayerIds = new Set(bracketSetupTeams.flatMap(t => t.playerIds));
+  const newEntries = players
+    .filter(p => !assignedPlayerIds.has(p.id))
+    .map(p => ({ playerIds: [p.id], names: [p.name] }));
+  bracketSetupTeams = [...bracketSetupTeams, ...newEntries];
+  document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
+}
+
+async function removeBracketTeam(index) {
+  bracketSetupTeams.splice(index, 1);
+  document.getElementById('tabPanel').innerHTML = await bracketSetupHtml();
+}
+
+async function handleGenerateSchedule() {
+  const errorEl = document.getElementById('bracketSetupError');
+  const minTeams = activeSession.tournament_format === 'swiss' ? 4 : 3;
+  if (bracketSetupTeams.length < minTeams) {
+    errorEl.textContent = `Need at least ${minTeams} teams for ${activeSession.tournament_format === 'swiss' ? 'Swiss' : 'Round Robin'} format.`;
+    return;
+  }
+  try {
+    const teamPlayerGroups = bracketSetupTeams.map(t => t.playerIds);
+    await SessionAPI.startTournament(activeSession.id, teamPlayerGroups, activeSession.tournament_format);
+    bracketSetupTeams = [];
+    bracketSetupSelectedPlayers = [];
+    document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+async function bracketLiveHtml(teams) {
+  const session = await SessionAPI.getSession(activeSession.id); // refresh for current_round
+  activeSession = session;
+  const currentRound = session.current_round;
+  const matchups = await SessionAPI.getMatchups(activeSession.id, currentRound);
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const standings = window.TournamentEngine.computeStandings(teams);
+
+  const roundLabel = session.tournament_format === 'round_robin'
+    ? `Round ${currentRound} of ${session.rounds_total || '?'}`
+    : `Round ${currentRound} of ${session.rounds_total || '?'} (Swiss)`;
+
+  const roundComplete = await SessionAPI.isRoundComplete(activeSession.id, currentRound);
+  const isFinalRound = session.rounds_total && currentRound >= session.rounds_total;
+
+  return `
+    <div class="card">
+      <h2>${roundLabel}</h2>
+      <div class="matchup-list">
+        ${matchups.map(m => bracketMatchupRow(m, players, courts)).join('')}
+      </div>
+      ${roundComplete && !isFinalRound ? `<button class="btn-primary" style="width:auto; padding:10px 20px; margin-top:14px;" onclick="handleAdvanceRound()">Advance to Round ${currentRound + 1}</button>` : ''}
+      ${roundComplete && isFinalRound ? `<p style="margin-top:14px; font-weight:700; color:var(--winner-green);">🏆 Final round complete! Check standings below for the winner.</p>` : ''}
+    </div>
+
+    <div class="card">
+      <h2>Standings</h2>
+      <div class="table-scroll">
+      <table class="roster-table">
+        <thead><tr><th>#</th><th>Team</th><th>W-L</th><th>Pts For</th><th>Pts Against</th><th>Diff</th></tr></thead>
+        <tbody>
+          ${standings.map((t, i) => `
+            <tr>
+              <td>${i + 1}</td>
+              <td>${escapeHtml(playerNamesForTeam(t, players).join(' & '))}</td>
+              <td>${t.wins}-${t.losses}</td>
+              <td>${t.points_for}</td>
+              <td>${t.points_against}</td>
+              <td>${t.points_for - t.points_against >= 0 ? '+' : ''}${t.points_for - t.points_against}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  `;
+}
+
+function bracketMatchupRow(m, players, courts) {
+  const namesA = playerNamesForTeam(m.team_a, players).join(' & ');
+  const namesB = playerNamesForTeam(m.team_b, players).join(' & ');
+  const openCourts = courts.filter(c => c.status === 'open');
+
+  if (m.status === 'completed') {
+    return `<div class="matchup-card completed"><span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span><span class="status-pill status-playing">Done</span></div>`;
+  }
+  if (m.status === 'in_progress') {
+    return `
+      <div class="matchup-card in-progress">
+        <span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span>
+        <button class="win-select-btn" onclick="openScoreEntry('${m.id}', '${m.court_id}', '${escapeHtml(namesA)}', '${escapeHtml(namesB)}')">Enter Score</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="matchup-card pending">
+      <span>${escapeHtml(namesA)} vs ${escapeHtml(namesB)}</span>
+      ${openCourts.length ? `
+        <select onchange="if(this.value) handleAssignMatchup('${m.id}', this.value)">
+          <option value="">Assign court...</option>
+          ${openCourts.map(c => `<option value="${c.id}">Court ${c.court_number}</option>`).join('')}
+        </select>
+      ` : '<span style="font-size:11px;color:var(--resting-slate);">No open courts</span>'}
+    </div>
+  `;
+}
+
+async function handleAssignMatchup(matchupId, courtId) {
+  try {
+    await SessionAPI.assignMatchupToCourt(matchupId, courtId);
+  } catch (err) {
+    alert(err.message || 'Could not assign this matchup — the court may already be in use.');
+  }
+  document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+}
+
+function openScoreEntry(matchupId, courtId, namesA, namesB) {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="scoreModal">
+      <div class="modal-box">
+        <h2>Enter Final Score</h2>
+        <p class="modal-sub">${namesA} vs ${namesB}</p>
+        <div class="form-grid">
+          <div class="field"><label>${namesA}</label><input type="number" id="scoreA" min="0" max="99" value="0"></div>
+          <div class="field"><label>${namesB}</label><input type="number" id="scoreB" min="0" max="99" value="0"></div>
+        </div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('scoreModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmScoreEntry('${matchupId}', '${courtId}')">Submit Score</button>
+        </div>
+        <div class="auth-error" id="scoreModalError"></div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmScoreEntry(matchupId, courtId) {
+  const scoreA = parseInt(document.getElementById('scoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('scoreB').value, 10);
+  const errorEl = document.getElementById('scoreModalError');
+
+  if (isNaN(scoreA) || isNaN(scoreB) || scoreA === scoreB) {
+    errorEl.textContent = 'Scores must be valid numbers and cannot be tied.';
+    return;
+  }
+
+  try {
+    await SessionAPI.recordTournamentResult(matchupId, courtId, scoreA, scoreB);
+  } catch (err) {
+    errorEl.textContent = err.message || 'Could not record this result. Please try again.';
+    return;
+  }
+  document.getElementById('scoreModal').remove();
+  document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+}
+
+async function handleAdvanceRound() {
+  try {
+    await SessionAPI.advanceToNextRound(activeSession.id);
+  } catch (err) {
+    alert(err.message || 'Could not advance to the next round. Please try again.');
+  }
+  document.getElementById('tabPanel').innerHTML = await bracketTabHtml();
+}
+
+async function courtsTabHtml() {
+  if (activeSession.open_play_mode === 'manual') {
+    return await manualModeCourtsHtml();
+  }
+  return await automatedModeCourtsHtml();
+}
+
+function paddleSvg() {
+  return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/><ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/></svg>`;
+}
+
+function paddleChipHost(name) {
+  return `<div class="court-host-paddle"><div class="court-host-paddle-shape">${paddleSvg()}<span class="court-host-paddle-name">${escapeHtml(name)}</span></div></div>`;
+}
+
+/**
+ * Shared visual court card — used by both Automated and Manual mode.
+ * Clicking the card opens the matchup picker for that court (works the
+ * same whether the court is open or already playing: if it's playing,
+ * the picker sets up that court's NEXT matchup instead).
+ */
+function renderCourtDiagramCard(court, players, queuedNote) {
+  const isActive = court.status === 'in_progress';
+  const sideA = isActive ? playerNamesForTeam(court.team_a, players).map(paddleChipHost).join('') : '';
+  const sideB = isActive ? playerNamesForTeam(court.team_b, players).map(paddleChipHost).join('') : '';
+
+  // Presentation-only: detect a genuine state transition since the last
+  // render so serve-in / pulse only fire on real changes, never on every
+  // refresh (which would look like constant flicker, not "alive").
+  const prev = _prevHostCourtStates[court.id];
+  const justStarted = isActive && (!prev || prev.status !== 'in_progress' || prev.team_a_id !== court.team_a_id);
+  const justFreed = !isActive && prev && prev.status === 'in_progress';
+  const motionClass = justStarted ? 'serve-in' : (justFreed ? 'pulse-update' : '');
+  _prevHostCourtStates[court.id] = { status: court.status, team_a_id: court.team_a_id };
+
+  let footer = '<span style="color:var(--resting-slate);">Tap to set matchup</span>';
+  let footerClass = '';
+  if (isActive) {
+    footer = 'Tap to mark finished or queue next';
+    footerClass = 'ongoing';
+  } else if (queuedNote) {
+    footer = queuedNote;
+    footerClass = 'queued';
+  }
+
+  return `
+    <div class="court-host-card ${motionClass}" onclick="handleCourtCardClick('${court.id}')">
+      <div class="court-host-label">
+        <span class="num">Court ${court.court_number}</span>
+        <span class="court-host-timer ${isActive ? '' : 'idle'}" data-start="${court.game_started_at || ''}" id="hostTimer-${court.id}">${isActive ? '00:00' : 'OPEN'}</span>
+      </div>
+      <div class="court-host-diagram">
+        <div class="court-host-side">${sideA}</div>
+        <div class="court-host-kitchen-top"></div>
+        <div class="court-host-centerline-top"></div>
+        <div class="court-host-net"></div>
+        <div class="court-host-kitchen-bottom"></div>
+        <div class="court-host-centerline-bottom"></div>
+        <div class="court-host-side">${sideB}</div>
+        ${!isActive ? '<div class="court-host-empty-msg">OPEN</div>' : ''}
+      </div>
+      <div class="court-host-footer ${footerClass}">${footer}</div>
+    </div>
+  `;
+}
+
+/**
+ * Single entry point for clicking ANY court card, in any mode.
+ * - Court is OPEN -> pick a matchup to start immediately
+ * - Court is PLAYING -> pick (or view/edit) the NEXT matchup queued for
+ *   when this court frees up, rather than disturbing the live match
+ */
+async function handleCourtCardClick(courtId) {
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+  if (!court) return;
+
+  if (court.status === 'in_progress') {
+    await openCourtPicker(courtId, true); // true = queuing the NEXT match
+  } else {
+    await openCourtPicker(courtId, false); // false = starting NOW
+  }
+}
+
+let courtPickerCourtId = null;
+let courtPickerIsQueueNext = false;
+let courtPickerSelectedPlayerIds = []; // step 1: 4 individuals
+let courtPickerTeamAPlayerIds = [];     // step 2: split assignment
+let courtPickerTeamBPlayerIds = [];
+let courtPickerStep = 1;
+
+async function openCourtPicker(courtId, isQueueNext) {
+  courtPickerCourtId = courtId;
+  courtPickerIsQueueNext = isQueueNext;
+  courtPickerSelectedPlayerIds = [];
+  courtPickerTeamAPlayerIds = [];
+  courtPickerTeamBPlayerIds = [];
+  courtPickerStep = 1;
+
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+
+  await renderCourtPickerModal(court);
+}
+
+async function renderCourtPickerModal(court) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const playersNeeded = teamSize * 2;
+
+  const [allPlayers, { eligiblePlayerIds, minPlayCount }] = await Promise.all([
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getPlayerWaveEligibility(activeSession.id),
+  ]);
+
+  // Only players who are actually free to play (not mid-match, not resting)
+  // and not already in some other team right now show up here at all.
+  const activeTeams = await SessionAPI.getTeams(activeSession.id);
+  const alreadyOnATeam = new Set(activeTeams.flatMap(t => t.player_ids));
+  const freePlayers = allPlayers.filter(p => p.status === 'waiting' && !alreadyOnATeam.has(p.id));
+
+  const eligible = freePlayers.filter(p => eligiblePlayerIds.has(p.id));
+  const ineligible = freePlayers.filter(p => !eligiblePlayerIds.has(p.id));
+
+  const headerNote = courtPickerIsQueueNext
+    ? `<p class="modal-sub">This court is currently playing. Set up what plays here next, or end the current match now.</p>
+       <button class="assign-btn" style="background:var(--loser-coral); color:white; margin-bottom:14px;" onclick="closeCourtPickerModal(); handleMarkFinished('${court.id}');">Current Match Is Finished Now</button>`
+    : `<p class="modal-sub">Step 1: select ${playersNeeded} players who will play this match.</p>`;
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="courtPickerModal">
+      <div class="modal-box">
+        <h2>Court ${court.court_number}${courtPickerIsQueueNext ? ' — Queue Next Match' : ''}</h2>
+        ${headerNote}
+
+        <p style="font-size:11px; font-weight:700; color:var(--court-green); margin:10px 0 6px;">Eligible this wave (played ${minPlayCount}x or fewer)</p>
+        <div class="player-checklist" id="courtPickerChecklist">
+          ${eligible.length ? eligible.map((p) => `<div class="player-check" data-id="${p.id}" data-name="${escapeHtml(p.name)}" onclick="toggleCourtPickerPlayer('${p.id}')">${escapeHtml(p.name)}</div>`).join('') : '<p style="font-size:12px;color:var(--resting-slate);">No eligible players free right now.</p>'}
+        </div>
+
+        ${ineligible.length ? `
+          <p style="font-size:11px; font-weight:700; color:var(--resting-slate); margin:14px 0 6px;">Already played this wave — must wait</p>
+          <div class="player-checklist">
+            ${ineligible.map(p => `<div class="player-check" style="opacity:0.35; cursor:not-allowed; text-decoration:line-through;" title="Already played this wave">${escapeHtml(p.name)}</div>`).join('')}
+          </div>
+        ` : ''}
+
+        <p style="font-size:12px; font-weight:700; margin:14px 0 0;" id="courtPickerSelectedCount">Selected: ${courtPickerSelectedPlayerIds.length} / ${playersNeeded}</p>
+
+        <div class="confirm-actions" style="margin-top:16px;">
+          <button class="btn-no" onclick="closeCourtPickerModal()">Cancel</button>
+          <button class="btn-yes" onclick="proceedToTeamSplit()">Next: Form Teams</button>
+        </div>
+        <div class="auth-error" id="courtPickerError"></div>
+      </div>
+    </div>
+  `);
+}
+
+function toggleCourtPickerPlayer(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const playersNeeded = teamSize * 2;
+  const idx = courtPickerSelectedPlayerIds.indexOf(playerId);
+  if (idx >= 0) {
+    courtPickerSelectedPlayerIds.splice(idx, 1);
+  } else {
+    if (courtPickerSelectedPlayerIds.length >= playersNeeded) return;
+    courtPickerSelectedPlayerIds.push(playerId);
+  }
+  document.querySelectorAll('#courtPickerChecklist .player-check').forEach(el => {
+    el.classList.toggle('selected', courtPickerSelectedPlayerIds.includes(el.dataset.id));
+  });
+  document.getElementById('courtPickerSelectedCount').textContent = `Selected: ${courtPickerSelectedPlayerIds.length} / ${playersNeeded}`;
+}
+
+async function proceedToTeamSplit() {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const playersNeeded = teamSize * 2;
+  const errorEl = document.getElementById('courtPickerError');
+
+  if (courtPickerSelectedPlayerIds.length !== playersNeeded) {
+    errorEl.textContent = `Select exactly ${playersNeeded} players first.`;
+    return;
+  }
+
+  if (teamSize === 1) {
+    // Singles: no split step needed, the 2 selected players ARE the 2 teams.
+    courtPickerTeamAPlayerIds = [courtPickerSelectedPlayerIds[0]];
+    courtPickerTeamBPlayerIds = [courtPickerSelectedPlayerIds[1]];
+    await finalizeCourtPickerTeams();
+    return;
+  }
+
+  courtPickerStep = 2;
+  courtPickerTeamAPlayerIds = [];
+  courtPickerTeamBPlayerIds = [];
+  renderTeamSplitModal();
+}
+
+function renderTeamSplitModal() {
+  const checklistEls = [...document.querySelectorAll('#courtPickerChecklist .player-check.selected')];
+  const selectedNames = courtPickerSelectedPlayerIds.map(id => {
+    const el = checklistEls.find(e => e.dataset.id === id);
+    return { id, name: el ? el.dataset.name : '—' };
+  });
+
+  document.getElementById('courtPickerModal').querySelector('.modal-box').innerHTML = `
+    <h2>Form the Teams</h2>
+    <p class="modal-sub">Step 2: tap names to assign each player to Team A or Team B.</p>
+
+    <div class="regroup-lanes">
+      <div class="regroup-lane winners-lane">
+        <h4>Team A</h4>
+        <div id="teamAChips">
+          ${courtPickerTeamAPlayerIds.map(pid => {
+            const p = selectedNames.find(n => n.id === pid);
+            return `<span class="regroup-chip" onclick="moveToUnassigned('${pid}')">${escapeHtml(p.name)}</span>`;
+          }).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— tap a name below —</span>'}
+        </div>
+      </div>
+      <div class="regroup-lane losers-lane">
+        <h4>Team B</h4>
+        <div id="teamBChips">
+          ${courtPickerTeamBPlayerIds.map(pid => {
+            const p = selectedNames.find(n => n.id === pid);
+            return `<span class="regroup-chip" onclick="moveToUnassigned('${pid}')">${escapeHtml(p.name)}</span>`;
+          }).join('') || '<span style="font-size:11px;color:var(--resting-slate);">— tap a name below —</span>'}
+        </div>
+      </div>
+    </div>
+
+    <p style="font-size:11px; font-weight:700; margin:14px 0 6px;">Unassigned — tap to add to a team</p>
+    <div class="player-checklist" id="unassignedChecklist">
+      ${selectedNames.filter(p => !courtPickerTeamAPlayerIds.includes(p.id) && !courtPickerTeamBPlayerIds.includes(p.id))
+        .map(p => `<div class="player-check" onclick="assignToTeam('${p.id}')">${escapeHtml(p.name)}</div>`).join('') || '<p style="font-size:12px;color:var(--resting-slate);">All assigned.</p>'}
+    </div>
+
+    <div class="confirm-actions" style="margin-top:16px;">
+      <button class="btn-no" onclick="closeCourtPickerModal()">Cancel</button>
+      <button class="btn-yes" onclick="finalizeCourtPickerTeams()">${courtPickerIsQueueNext ? 'Queue This Matchup' : 'Start Match'}</button>
+    </div>
+    <div class="auth-error" id="courtPickerError"></div>
+  `;
+}
+
+function assignToTeam(playerId) {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  if (courtPickerTeamAPlayerIds.length < teamSize) {
+    courtPickerTeamAPlayerIds.push(playerId);
+  } else if (courtPickerTeamBPlayerIds.length < teamSize) {
+    courtPickerTeamBPlayerIds.push(playerId);
+  }
+  renderTeamSplitModal();
+}
+
+function moveToUnassigned(playerId) {
+  courtPickerTeamAPlayerIds = courtPickerTeamAPlayerIds.filter(id => id !== playerId);
+  courtPickerTeamBPlayerIds = courtPickerTeamBPlayerIds.filter(id => id !== playerId);
+  renderTeamSplitModal();
+}
+
+async function finalizeCourtPickerTeams() {
+  const teamSize = activeSession.format === 'doubles' ? 2 : 1;
+  const errorEl = document.getElementById('courtPickerError');
+  if (courtPickerTeamAPlayerIds.length !== teamSize || courtPickerTeamBPlayerIds.length !== teamSize) {
+    if (errorEl) errorEl.textContent = `Each team needs exactly ${teamSize} player${teamSize > 1 ? 's' : ''}.`;
+    return;
+  }
+
+  // Create both teams directly in the 'playing' lane, not 'waiting' — these
+  // were just hand-picked by the host for THIS specific match, they must
+  // never be visible to the automated engine's queue scan in the brief
+  // window before assignCourt() runs (a real, if narrow, race condition:
+  // a realtime-triggered re-render of another court could otherwise pull
+  // one of these teams into a different match before it's actually assigned).
+  const teamA = await SessionAPI.createTeam(activeSession.id, courtPickerTeamAPlayerIds, activeSession.pairing_default, 'playing');
+  const teamB = await SessionAPI.createTeam(activeSession.id, courtPickerTeamBPlayerIds, activeSession.pairing_default, 'playing');
+
+  if (courtPickerIsQueueNext) {
+    // Manual queue entries reference the team rows directly by ID, so
+    // 'playing' lane is harmless here too — manual_queue doesn't scan the
+    // teams table by queue_lane, it stores explicit team_a_id/team_b_id.
+    // NOTE: this team is technically QUEUED, not actually playing yet —
+    // 'playing' is used here only to keep it out of the automated engine's
+    // waiting-queue scan, not as a literal status claim. The schema's
+    // queue_lane CHECK constraint doesn't include a "queued" value, so
+    // this is the safest existing option without a migration.
+    await SessionAPI.addManualQueueEntry(activeSession.id, courtPickerCourtId, teamA.id, teamB.id);
+  } else {
+    try {
+      await SessionAPI.assignCourt(courtPickerCourtId, teamA.id, teamB.id);
+    } catch (err) {
+      // Court got taken by something else between opening this modal and
+      // confirming. Clean up the two teams we just created so they don't
+      // sit as orphaned rows, then surface the error clearly.
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', [teamA.id, teamB.id]);
+      const errorEl = document.getElementById('courtPickerError');
+      if (errorEl) errorEl.textContent = err.message || 'This court was just taken. Close and try a different court.';
+      return;
+    }
+  }
+
+  closeCourtPickerModal();
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
+
+function closeCourtPickerModal() {
+  const modal = document.getElementById('courtPickerModal');
+  if (modal) modal.remove();
+  courtPickerCourtId = null;
+  courtPickerIsQueueNext = false;
+  courtPickerSelectedPlayerIds = [];
+  courtPickerTeamAPlayerIds = [];
+  courtPickerTeamBPlayerIds = [];
+  courtPickerStep = 1;
+}
+
+async function automatedModeCourtsHtml() {
+  const [courts, players] = await Promise.all([
+    SessionAPI.getCourts(activeSession.id),
+    SessionAPI.getPlayers(activeSession.id),
+  ]);
+
+  // Automated / Hybrid: the moment a court is open, immediately try to
+  // auto-fill it from the queue (Hybrid checks the manual_queue first,
+  // then falls back to the automated engine — see tryRefillCourt).
+  for (const court of courts) {
+    if (court.status === 'open') {
+      try {
+        await SessionAPI.tryRefillCourt(court.id);
+      } catch (err) {
+        // One court's race-condition failure must not prevent the OTHER
+        // courts in this loop from getting their own refill attempt.
+        console.error(`Refill failed for court ${court.court_number}:`, err.message);
+      }
+    }
+  }
+  const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
+  const manualQueue = activeSession.open_play_mode === 'hybrid' ? await SessionAPI.getManualQueue(activeSession.id) : [];
+
+  const courtCards = freshCourts.map(court => {
+    const queuedCount = manualQueue.filter(m => m.court_id === court.id && m.status === 'planned').length;
+    const queuedNote = queuedCount > 0 ? `${queuedCount} match${queuedCount > 1 ? 'es' : ''} queued next` : null;
+    return renderCourtDiagramCard(court, players, queuedNote);
+  }).join('');
+
+  const hybridHint = activeSession.open_play_mode === 'hybrid'
+    ? `<div class="card" style="background:color-mix(in srgb, var(--waiting-blue) 15%, var(--surface));"><p style="font-size:12px;margin:0;">💡 Hybrid mode — matches auto-pair by default. Tap any court (playing or open) to set or override its matchup.</p></div>`
+    : '';
+
+  // Unified pool: everyone with status 'waiting' is in the single
+  // time-ordered line, regardless of count parity — no "needs a partner"
+  // concept anymore since teams are formed fresh per match, not pre-paired.
+  const waitingCount = players.filter(p => p.status === 'waiting').length;
+
+  return `
+    ${hybridHint}
+    ${waitingCount > 0 ? `<div class="card" style="background:color-mix(in srgb, var(--accent) 15%, var(--surface));"><p style="font-size:12px;margin:0;">🎾 <strong>${waitingCount}</strong> player${waitingCount === 1 ? '' : 's'} in the queue, waiting for a court.</p></div>` : ''}
+    <div class="courts-host-grid">${courtCards}</div>
+  `;
+}
+
+async function manualModeCourtsHtml() {
+  const [courts, players, unpaired] = await Promise.all([
+    SessionAPI.getCourts(activeSession.id),
+    SessionAPI.getPlayers(activeSession.id),
+    SessionAPI.getUnpairedWaitingPlayers(activeSession.id),
+  ]);
+
+  // Manual mode still auto-PULLS from the host's pre-built schedule the
+  // instant a court frees up — what's manual is deciding the schedule
+  // itself, via tapping each court card.
+  for (const court of courts) {
+    if (court.status === 'open') {
+      try {
+        await SessionAPI.tryRefillCourt(court.id);
+      } catch (err) {
+        console.error(`Refill failed for court ${court.court_number}:`, err.message);
+      }
+    }
+  }
+  const freshCourts = courts.some(c => c.status === 'open') ? await SessionAPI.getCourts(activeSession.id) : courts;
+  const manualQueue = await SessionAPI.getManualQueue(activeSession.id);
+
+  const courtCards = freshCourts.map(court => {
+    const queuedCount = manualQueue.filter(m => m.court_id === court.id && m.status === 'planned').length;
+    const queuedNote = queuedCount > 0 ? `${queuedCount} match${queuedCount > 1 ? 'es' : ''} queued next` : null;
+    return renderCourtDiagramCard(court, players, queuedNote);
+  }).join('');
+
+  return `
+    ${unpaired.length > 0 ? `<div class="card" style="background:color-mix(in srgb, var(--accent) 15%, var(--surface));"><p style="font-size:12px;margin:0;">⏳ <strong>${unpaired.map(p => escapeHtml(p.name)).join(', ')}</strong> still waiting for a partner to be added.</p></div>` : ''}
+    <p style="font-size:12px;color:var(--resting-slate);margin:0 0 10px;">Tap an open court to start a match, or tap a playing court to queue what plays there next.</p>
+    <div class="courts-host-grid">${courtCards}</div>
+  `;
+}
+
+// ============================================================
+// MATCH RESULT FLOW: Mark Finished -> Confirm -> Pick Winner -> Done (automatic)
+// ============================================================
+let resultFlowCourt = null; // holds court object mid-flow
+let resultFlowWinnerTeamId = null;
+
+async function handleMarkFinished(courtId) {
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+  if (!court) return;
+  resultFlowCourt = court;
+  showConfirmFinishedModal();
+}
+
+function showConfirmFinishedModal() {
+  const modal = document.createElement('div');
+  modal.className = 'modal-backdrop';
+  modal.id = 'resultModal';
+  modal.innerHTML = `
+    <div class="modal-box">
+      <h2>Match Finished?</h2>
+      <p class="modal-sub">Confirm Court ${resultFlowCourt.court_number}'s match has ended.</p>
+      <div class="confirm-actions">
+        <button class="btn-no" onclick="closeResultModal()">No, still playing</button>
+        <button class="btn-yes" onclick="showPickWinnerModal()">Yes, finished</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+async function showPickWinnerModal() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const namesA = playerNamesForTeam(resultFlowCourt.team_a, players).join(' & ');
+  const namesB = playerNamesForTeam(resultFlowCourt.team_b, players).join(' & ');
+
+  document.getElementById('resultModal').innerHTML = `
+    <div class="modal-box">
+      <h2>Who Won?</h2>
+      <p class="modal-sub">Court ${resultFlowCourt.court_number} — select the winning side.</p>
+      <div class="winner-pick-row">
+        <div class="winner-pick-option" onclick="selectWinner('${resultFlowCourt.team_a_id}')">${escapeHtml(namesA)}</div>
+        <div class="winner-pick-option" onclick="selectWinner('${resultFlowCourt.team_b_id}')">${escapeHtml(namesB)}</div>
+      </div>
+      <button class="btn-secondary" style="width:auto;padding:8px 16px;" onclick="closeResultModal()">Cancel</button>
+    </div>
+  `;
+}
+
+let resultFlowScoreData = null;
+
+async function selectWinner(winnerTeamId) {
+  resultFlowWinnerTeamId = winnerTeamId;
+  resultFlowScoreData = null;
+  await showScoreConsentModal();
+}
+
+async function showScoreConsentModal() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const teamA = resultFlowCourt.team_a;
+  const teamB = resultFlowCourt.team_b;
+  const namesA = playerNamesForTeam(teamA, players).join(' & ');
+  const namesB = playerNamesForTeam(teamB, players).join(' & ');
+
+  document.getElementById('resultModal').innerHTML = `
+    <div class="modal-box">
+      <h2>Record the Score?</h2>
+      <p class="modal-sub">Optional — only show it if all 4 players agree. Match duration is tracked either way.</p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; margin:14px 0; cursor:pointer;">
+        <input type="checkbox" id="scoreConsentCheckbox" style="width:18px; height:18px; min-height:0;" onchange="toggleScoreFields()">
+        All 4 players agreed to show this score
+      </label>
+      <div id="scoreFieldsArea" style="display:none;">
+        <div class="form-grid">
+          <div class="field"><label>${escapeHtml(namesA)}</label><input type="number" id="consentScoreA" min="0" max="99" value="0"></div>
+          <div class="field"><label>${escapeHtml(namesB)}</label><input type="number" id="consentScoreB" min="0" max="99" value="0"></div>
+        </div>
+      </div>
+      <div class="confirm-actions">
+        <button class="btn-no" onclick="skipScoreAndContinue()">Skip Score</button>
+        <button class="btn-yes" onclick="confirmScoreAndContinue()">Continue</button>
+      </div>
+      <div class="auth-error" id="scoreConsentError"></div>
+    </div>
+  `;
+}
+
+function toggleScoreFields() {
+  const checked = document.getElementById('scoreConsentCheckbox').checked;
+  document.getElementById('scoreFieldsArea').style.display = checked ? '' : 'none';
+}
+
+async function skipScoreAndContinue() {
+  resultFlowScoreData = null;
+  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, null);
+  await finalizeAutomaticPlacement();
+}
+
+async function confirmScoreAndContinue() {
+  const consented = document.getElementById('scoreConsentCheckbox').checked;
+  if (!consented) {
+    await skipScoreAndContinue();
+    return;
+  }
+  const scoreA = parseInt(document.getElementById('consentScoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('consentScoreB').value, 10);
+  const errorEl = document.getElementById('scoreConsentError');
+  if (isNaN(scoreA) || isNaN(scoreB) || scoreA === scoreB) {
+    errorEl.textContent = 'Scores must be valid numbers and cannot be tied.';
+    return;
+  }
+  resultFlowScoreData = { teamAScore: scoreA, teamBScore: scoreB };
+  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, resultFlowScoreData);
+  await finalizeAutomaticPlacement();
+}
+
+/**
+ * Open Play is fully automatic — no host editing of who goes where.
+ * Winning pair goes straight to the back of the winners queue, losing
+ * pair to the back of the losers queue, exactly as recorded. This is
+ * what keeps the FIFO/win-loss sequence provably correct: there's no
+ * manual step where a host click could break the queue order.
+ */
+async function finalizeAutomaticPlacement() {
+  const teamA = resultFlowCourt.team_a;
+  const teamB = resultFlowCourt.team_b;
+  const winningTeam = teamA.id === resultFlowWinnerTeamId ? teamA : teamB;
+  const losingTeam = teamA.id === resultFlowWinnerTeamId ? teamB : teamA;
+
+  await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, activeSession.pairing_default, winningTeam.player_ids, losingTeam.player_ids);
+  closeResultModal();
+  document.getElementById('tabPanel').innerHTML = await courtsTabHtml();
+}
+
+function closeResultModal() {
+  const modal = document.getElementById('resultModal');
+  if (modal) modal.remove();
+  resultFlowCourt = null;
+  resultFlowWinnerTeamId = null;
+  resultFlowScoreData = null;
 }
 
 function playerNamesForTeam(team, players) {
@@ -869,210 +2974,117 @@ function playerNamesForTeam(team, players) {
   return team.player_ids.map(pid => players.find(p => p.id === pid)?.name || '—');
 }
 
-function paddleChip(name) {
+async function inboxTabHtml() {
+  const [messages, restRequests] = await Promise.all([
+    SessionAPI.getMessages(activeSession.id, 'pending'),
+    SessionAPI.getPendingRestRequests(activeSession.id),
+  ]);
   return `
-    <div class="paddle-chip">
-      <div class="paddle-chip-shape">
-        <svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/>
-          <ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/>
-        </svg>
-        <span class="paddle-chip-name">${escapeHtml(name)}</span>
-      </div>
+    <div class="card">
+      <h2>Rest Requests</h2>
+      ${restRequests.length ? restRequests.map(r => `
+        <div class="inbox-item">
+          <div><div class="who">${escapeHtml(r.player?.name || 'Unknown player')}</div><div class="what">Asked to sit out</div><div class="when">${new Date(r.requested_at).toLocaleTimeString()}</div></div>
+          <div class="inbox-actions">
+            <button class="btn-dismiss" onclick="handleDeclineRest('${r.id}')">Decline</button>
+            <button class="btn-confirm-rest" onclick="handleConfirmRest('${r.id}', '${r.player_id}')">Confirm Rest</button>
+          </div>
+        </div>
+      `).join('') : '<div class="empty-inbox">No rest requests</div>'}
+    </div>
+    <div class="card">
+      <h2>Player Messages</h2>
+      ${messages.length ? messages.map(m => `
+        <div class="inbox-item">
+          <div><div class="who">${escapeHtml(m.player_name)}</div><div class="what">${escapeHtml(m.message)}</div><div class="when">${new Date(m.created_at).toLocaleTimeString()}</div></div>
+          <div class="inbox-actions"><button class="btn-dismiss" onclick="handleDismissMessage('${m.id}')">Dismiss</button></div>
+        </div>
+      `).join('') : '<div class="empty-inbox">No messages</div>'}
     </div>
   `;
 }
 
-function renderCourts(courts, players, teams, previousCourts) {
-  const grid = document.getElementById('courtsGrid');
-  if (!grid) return;
-
-  // Detect which courts just CHANGED since the last render (status flip,
-  // or a new team assigned) — only these get the serve-in / pulse motion.
-  // Without this check, every realtime tick would re-trigger the entrance
-  // animation on every card, which reads as glitchy rather than alive.
-  const prevById = Object.fromEntries((previousCourts || []).map(c => [c.id, c]));
-
-  grid.innerHTML = courts.map(court => {
-    const teamA = court.team_a;
-    const teamB = court.team_b;
-    const isActive = court.status === 'in_progress';
-    const sideA = isActive ? playerNamesForTeam(teamA, players).map(paddleChip).join('') : '';
-    const sideB = isActive ? playerNamesForTeam(teamB, players).map(paddleChip).join('') : '';
-
-    const prev = prevById[court.id];
-    const justStarted = isActive && (!prev || prev.status !== 'in_progress' || prev.team_a_id !== court.team_a_id);
-    const justFinished = !isActive && prev && prev.status === 'in_progress';
-    const motionClass = justStarted ? 'serve-in' : (justFinished ? 'pulse-update' : '');
-
-    return `
-      <div class="court-card ${motionClass}">
-        <div class="court-label">
-          <span class="num">Court ${court.court_number}</span>
-          <span class="court-timer ${isActive ? '' : 'idle'}" data-start="${court.game_started_at || ''}" id="timer-${court.id}">${isActive ? '00:00' : 'OPEN'}</span>
-        </div>
-        <div class="court-diagram">
-          <div class="court-side">${isActive ? sideA : ''}</div>
-          <div class="kitchen-line-top"></div>
-          <div class="centerline-top"></div>
-          <div class="net-line">${isActive ? '<svg class="net-ball" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="currentColor"/><circle cx="10" cy="9" r="1.3" fill="white" opacity="0.5"/><circle cx="18" cy="7" r="1.3" fill="white" opacity="0.5"/><circle cx="24" cy="12" r="1.3" fill="white" opacity="0.5"/><circle cx="25" cy="19" r="1.3" fill="white" opacity="0.5"/><circle cx="19" cy="25" r="1.3" fill="white" opacity="0.5"/><circle cx="11" cy="24" r="1.3" fill="white" opacity="0.5"/><circle cx="6" cy="17" r="1.3" fill="white" opacity="0.5"/><circle cx="7" cy="10" r="1.3" fill="white" opacity="0.5"/></svg>' : ''}</div>
-          <div class="kitchen-line-bottom"></div>
-          <div class="centerline-bottom"></div>
-          <div class="court-side">${isActive ? sideB : ''}</div>
-          ${!isActive ? '<div class="empty-court-msg">Waiting for next match</div>' : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-function renderQueues(teams, players) {
-  const grid = document.getElementById('queuesGrid');
-  if (!grid) return;
-
-  // FLIP technique: capture each item's CURRENT on-screen position (by
-  // player id, stable across renders) before touching the DOM — this is
-  // what makes a queue reshuffle read as "these people swapped" instead
-  // of an unreadable instant re-render.
-  const firstRects = {};
-  grid.querySelectorAll('[data-player-id]').forEach(el => {
-    firstRects[el.dataset.playerId] = el.getBoundingClientRect();
-  });
-
-  // Unified pool: everyone with status 'waiting' is in ONE single
-  // time-ordered line — there is no separate winners/losers lane that
-  // could let someone skip ahead of a longer-waiting player. Order is
-  // strictly by became_free_at, exactly matching the actual matching
-  // engine's own ordering, so what players see IS what determines who
-  // plays next.
-  const waitingPlayers = players
-    .filter(p => p.status === 'waiting')
-    .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
-
-  const resultBadge = (player) => {
-    if (player.last_match_result === 'won') return '<span class="result-badge won">W</span>';
-    if (player.last_match_result === 'lost') return '<span class="result-badge lost">L</span>';
-    return '';
-  };
-
-  const items = waitingPlayers.length
-    ? waitingPlayers.map((p, i) => `<li class="lane-item" data-player-id="${p.id}"><span>${escapeHtml(p.name)} ${resultBadge(p)}</span><span class="lane-pos">#${i + 1}</span></li>`).join('')
-    : `<div class="lane-empty">No one waiting right now</div>`;
-
-  const restingPlayers = players.filter(p => p.status === 'resting');
-
-  grid.innerHTML = `
-    <div class="lane waiting">
-      <div class="lane-header"><span>Up Next</span><span class="count">${waitingPlayers.length}</span></div>
-      <ul class="lane-list">${items}</ul>
-    </div>
-    <div class="lane resting">
-      <div class="lane-header"><span>Resting</span><span class="count">${restingPlayers.length}</span></div>
-      <ul class="lane-list">
-        ${restingPlayers.length ? restingPlayers.map(p => `<li class="lane-item"><span>${escapeHtml(p.name)}</span></li>`).join('') : `<div class="lane-empty">Nobody resting</div>`}
-      </ul>
-    </div>
-  `;
-
-  playQueueFlipAnimation(grid, firstRects);
-}
-
-/**
- * Plays the actual FLIP animation: for every item that existed before
- * AND still exists now, measure the distance between its old and new
- * position and animate that delta away. Brand-new items (no previous
- * position recorded) get the drop-in entrance instead, since there's no
- * "shuffle" to show for something that just appeared.
- */
-function playQueueFlipAnimation(grid, firstRects) {
-  grid.querySelectorAll('[data-player-id]').forEach(el => {
-    const playerId = el.dataset.playerId;
-    const first = firstRects[playerId];
-    if (!first) {
-      // Wasn't on screen before — this is a genuinely new arrival, not a
-      // reshuffle. Give it the drop-in entrance instead of a FLIP.
-      el.classList.add('drop-in');
-      return;
-    }
-    const last = el.getBoundingClientRect();
-    const deltaY = first.top - last.top;
-    const deltaX = first.left - last.left;
-    if (Math.abs(deltaY) < 1 && Math.abs(deltaX) < 1) return; // didn't actually move
-
-    // Invert: jump it back to where it used to be (no visible jump,
-    // since we do this before the browser paints), then animate to 0,0
-    // (its real new position) on the next frame.
-    el.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-    el.style.transition = 'none';
-    requestAnimationFrame(() => {
-      el.style.transition = `transform var(--dur-shuffle) var(--ease-bounce)`;
-      el.style.transform = 'translate(0, 0)';
-    });
-    el.addEventListener('transitionend', () => {
-      el.style.transition = '';
-      el.style.transform = '';
-    }, { once: true });
-  });
-}
-
-function handleFindMe() {
-  const query = document.getElementById('findMeInput').value.trim().toLowerCase();
-  const resultEl = document.getElementById('findMeResult');
-  if (!query) { resultEl.textContent = ''; return; }
-  const player = _playersCache.find(p => p.name.toLowerCase().includes(query));
-  if (!player) { resultEl.textContent = 'Not found yet'; return; }
-  if (player.status === 'playing') {
-    const court = _courtsCache.find(c => {
-      const team = _teamsCache.find(t => t.id === c.team_a_id || t.id === c.team_b_id);
-      return team && team.player_ids.includes(player.id);
-    });
-    resultEl.textContent = court ? `Playing now — Court ${court.court_number}` : 'Playing now';
-  } else if (player.status === 'resting') {
-    resultEl.textContent = 'You are resting';
-  } else if (player.status === 'waiting') {
-    // Unified pool: position is simply this player's rank by became_free_at
-    // among everyone else currently waiting — matches exactly what the
-    // matching engine itself uses, so this is always accurate.
-    const waitingSorted = _playersCache
-      .filter(p => p.status === 'waiting')
-      .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
-    const idx = waitingSorted.findIndex(p => p.id === player.id);
-    resultEl.textContent = idx >= 0 ? `#${idx + 1} in the queue` : 'Waiting to be added to a game';
-  } else {
-    resultEl.textContent = 'Waiting to be added to a game';
-  }
-}
-
-async function sendHostMessage() {
-  const from = document.getElementById('msgFrom').value.trim();
-  const msg = document.getElementById('msgText').value.trim();
-  if (!from || !msg) return;
+async function handleConfirmRest(requestId, playerId) {
   try {
-    await SessionAPI.sendMessage(currentSessionId, from, msg);
-    document.getElementById('msgText').value = '';
-    const btn = document.querySelector('.message-row button');
-    const original = btn.textContent;
-    btn.textContent = 'Sent ✓';
-    setTimeout(() => { btn.textContent = original; }, 1500);
+    const result = await SessionAPI.confirmRestRequest(requestId, playerId);
+    if (result?.deferred) {
+      alert('This player is still mid-match — they\'ll need to be marked "resting" from the Roster tab once their current game ends.');
+    }
   } catch (err) {
-    alert('Could not send message, please try again.');
+    alert(err.message || 'Could not confirm this rest request.');
   }
+  document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+  updateInboxBadge();
+}
+
+async function handleDeclineRest(requestId) {
+  try {
+    await SessionAPI.declineRestRequest(requestId);
+  } catch (err) {
+    alert(err.message || 'Could not decline this rest request.');
+  }
+  document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+  updateInboxBadge();
+}
+
+async function handleDismissMessage(messageId) {
+  await SessionAPI.markMessageStatus(messageId, 'seen');
+  document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
+  updateInboxBadge();
 }
 
 function subscribeRealtime() {
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
   realtimeChannel = supabaseClient
-    .channel(`session-${currentSessionId}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'courts', filter: `session_id=eq.${currentSessionId}` }, refreshAll)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `session_id=eq.${currentSessionId}` }, refreshAll)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `session_id=eq.${currentSessionId}` }, refreshAll)
+    .channel(`host-${activeSession.id}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${activeSession.id}` }, () => {
+      updateInboxBadge();
+      if (activeTab === 'inbox') renderActiveTab();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => {
+      updateInboxBadge();
+      if (activeTab === 'inbox') renderActiveTab();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matchups', filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'bracket') renderActiveTab(); })
     .subscribe();
+  updateInboxBadge();
 }
 
-function startTimerLoop() {
-  if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    document.querySelectorAll('.court-timer[data-start]').forEach(el => {
+/**
+ * Updates the red pulsing count on the Inbox tab — this runs on EVERY
+ * realtime event for messages/rest_requests regardless of which tab the
+ * host currently has open. Without this, a rest request arriving while
+ * the host is on the Courts tab (the most likely place for them to be)
+ * was previously invisible until they happened to click into Inbox —
+ * not a real notification, just a tab that updates if you're already
+ * looking at it.
+ */
+async function updateInboxBadge() {
+  if (!activeSession) return;
+  const badge = document.getElementById('inboxBadge');
+  if (!badge) return;
+  try {
+    const [messages, restRequests] = await Promise.all([
+      SessionAPI.getMessages(activeSession.id, 'pending'),
+      SessionAPI.getPendingRestRequests(activeSession.id),
+    ]);
+    const total = messages.length + restRequests.length;
+    if (total > 0) {
+      badge.textContent = total > 9 ? '9+' : String(total);
+      badge.style.display = 'inline-flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (err) {
+    // badge is a non-critical nicety — fail silently rather than disrupt anything else
+  }
+}
+
+let hostTimerInterval = null;
+function startHostTimerLoop() {
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
+  hostTimerInterval = setInterval(() => {
+    document.querySelectorAll('.court-host-timer[data-start]').forEach(el => {
       const start = el.getAttribute('data-start');
       if (!start) return;
       const elapsed = Math.max(0, Math.floor((Date.now() - new Date(start).getTime()) / 1000));
