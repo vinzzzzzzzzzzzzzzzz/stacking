@@ -1778,17 +1778,20 @@ async function handleToggleLeaderboard(currentlyPublic) {
 }
 
 /**
- * Full match editor modal.
- * Shows all 4 players clearly in two columns (Won / Lost).
- * Host can:
- *   • Swap which team won (flip result)
- *   • Correct the losing score (winner recalculated automatically with deuce rule)
- *   • Do both at once
+ * Full match editor — correct winner, loser score, or both.
+ *
+ * Design:
+ *  • Shows all 4 players in two clear columns (Winner / Loser).
+ *  • A single "Loser's score" input drives both the score and the
+ *    winner's auto-calculated score (deuce rule applied live).
+ *  • A "Swap winner" checkbox flips which team is labelled Winner/Loser,
+ *    which also flips what the score input means.
+ *  • A live "Result preview" line shows exactly what will be saved.
+ *  • Apply Correction submits winner + score in one atomic write.
  */
 async function openMatchEditor(matchId) {
   if (document.getElementById('matchEditModal')) return;
 
-  // Load the full match row fresh.
   const { data: match, error } = await supabaseClient
     .from('matches')
     .select('*, team_a:team_a_id(*), team_b:team_b_id(*)')
@@ -1796,80 +1799,90 @@ async function openMatchEditor(matchId) {
     .single();
   if (error || !match) { alert('Could not load match data.'); return; }
 
-  const players = await SessionAPI.getPlayers(activeSession.id);
+  const players    = await SessionAPI.getPlayers(activeSession.id);
   const playerById = Object.fromEntries(players.map(p => [p.id, p]));
 
-  const winnerTeam = match.winner_team_id === match.team_a_id ? match.team_a : match.team_b;
-  const loserTeam  = match.winner_team_id === match.team_a_id ? match.team_b : match.team_a;
-  const loserTeamId = match.winner_team_id === match.team_a_id ? match.team_b_id : match.team_a_id;
+  // Derive winner/loser from the DB record.
+  const origWinnerTeam = match.winner_team_id === match.team_a_id ? match.team_a : match.team_b;
+  const origLoserTeam  = match.winner_team_id === match.team_a_id ? match.team_b : match.team_a;
+  const origLoserTeamId = match.winner_team_id === match.team_a_id ? match.team_b_id : match.team_a_id;
 
-  const oldWinnerScore = match.winner_team_id === match.team_a_id ? match.team_a_score : match.team_b_score;
-  const oldLoserScore  = match.winner_team_id === match.team_a_id ? match.team_b_score : match.team_a_score;
+  const origWinnerScore = match.winner_team_id === match.team_a_id ? match.team_a_score : match.team_b_score;
+  const origLoserScore  = match.winner_team_id === match.team_a_id ? match.team_b_score : match.team_a_score;
 
-  function playerChip(pid) {
-    const name = playerById[pid]?.name || '—';
-    return `<div style="font-size:13px;font-weight:700;padding:3px 0;">${escapeHtml(name)}</div>`;
+  function nameList(team) {
+    return (team?.player_ids || []).map(pid => playerById[pid]?.name || '—').join(' & ');
+  }
+  function playerRows(team) {
+    return (team?.player_ids || [])
+      .map(pid => `<div style="font-size:13px;font-weight:700;padding:2px 0;">${escapeHtml(playerById[pid]?.name || '—')}</div>`)
+      .join('');
   }
 
-  const winnerNames = (winnerTeam?.player_ids || []).map(pid => playerById[pid]?.name || '—').join(' & ');
-  const loserNames  = (loserTeam?.player_ids  || []).map(pid => playerById[pid]?.name || '—').join(' & ');
+  const origWinnerNames = nameList(origWinnerTeam);
+  const origLoserNames  = nameList(origLoserTeam);
 
   document.body.insertAdjacentHTML('beforeend', `
-    <div class="modal-backdrop" id="matchEditModal">
-      <div class="modal-box" style="max-width:520px;">
+    <div class="modal-backdrop" id="matchEditModal"
+      data-orig-winner="${escapeHtml(origWinnerNames)}"
+      data-orig-loser="${escapeHtml(origLoserNames)}">
+      <div class="modal-box" style="max-width:500px;">
         <h2 style="margin:0 0 4px;">Edit Match Result</h2>
-        <p class="modal-sub">Correct the winner, the score, or both. All player stats update automatically.</p>
+        <p class="modal-sub">Change the winner, the score, or both. Every affected stat updates automatically.</p>
 
-        <!-- Current result display -->
-        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0;margin:16px 0;border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;">
-          <div style="padding:12px;background:rgba(78,203,126,0.08);">
-            <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--winner-green);letter-spacing:0.06em;margin-bottom:6px;">🏆 Won</div>
-            ${(winnerTeam?.player_ids || []).map(pid => playerChip(pid)).join('')}
+        <!-- ── Current recorded result ── -->
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--ink-muted);letter-spacing:0.04em;margin-bottom:6px;">Recorded result</div>
+        <div style="display:grid;grid-template-columns:1fr 56px 1fr;border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:18px;">
+          <div style="padding:10px 12px;background:rgba(78,203,126,0.07);">
+            <div style="font-size:9px;font-weight:800;text-transform:uppercase;color:var(--winner-green);letter-spacing:0.06em;margin-bottom:5px;">🏆 Won</div>
+            ${playerRows(origWinnerTeam)}
           </div>
-          <div style="display:flex;align-items:center;justify-content:center;padding:0 10px;background:var(--surface-hover);font-size:15px;font-family:var(--font-mono);font-weight:800;color:var(--ink);min-width:60px;text-align:center;">${oldWinnerScore}–${oldLoserScore}</div>
-          <div style="padding:12px;background:rgba(255,122,92,0.08);border-left:1px solid var(--border-soft);">
-            <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--loser-coral);letter-spacing:0.06em;margin-bottom:6px;">Lost</div>
-            ${(loserTeam?.player_ids || []).map(pid => playerChip(pid)).join('')}
-          </div>
-        </div>
-
-        <!-- Score correction -->
-        <div style="margin-bottom:16px;">
-          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:8px;color:var(--ink-muted);">Correct the score</div>
-          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:center;border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;">
-            <div style="padding:10px 12px;text-align:center;">
-              <div style="font-size:10px;color:var(--winner-green);font-weight:700;text-transform:uppercase;margin-bottom:4px;" id="editWinnerLabel">${escapeHtml(winnerNames)}</div>
-              <div id="editWinnerScore" style="font-family:var(--font-mono);font-size:28px;font-weight:800;color:var(--winner-green);">${oldWinnerScore}</div>
-              <div style="font-size:9px;color:var(--resting-slate);margin-top:2px;" id="editDeuceNote"></div>
-            </div>
-            <div style="background:var(--surface-hover);padding:10px;font-weight:800;font-size:14px;color:var(--ink-muted);text-align:center;">vs</div>
-            <div style="padding:10px 12px;text-align:center;border-left:1px solid var(--border-soft);">
-              <div style="font-size:10px;color:var(--loser-coral);font-weight:700;text-transform:uppercase;margin-bottom:4px;" id="editLoserLabel">${escapeHtml(loserNames)}</div>
-              <input type="number" id="editLoserScore" min="0" value="${oldLoserScore}"
-                style="font-family:var(--font-mono);font-size:28px;font-weight:800;width:100%;text-align:center;border:none;background:transparent;color:var(--ink);padding:0;min-height:0;"
-                oninput="updateEditScoreDisplay()" onchange="updateEditScoreDisplay()">
-              <div style="font-size:9px;color:var(--resting-slate);margin-top:2px;">loser's score · 10+ = deuce</div>
-            </div>
+          <div style="display:flex;align-items:center;justify-content:center;background:var(--surface-hover);font-family:var(--font-mono);font-size:13px;font-weight:800;color:var(--ink);text-align:center;line-height:1.2;">${origWinnerScore}<br>–<br>${origLoserScore}</div>
+          <div style="padding:10px 12px;background:rgba(255,122,92,0.07);border-left:1px solid var(--border-soft);">
+            <div style="font-size:9px;font-weight:800;text-transform:uppercase;color:var(--loser-coral);letter-spacing:0.06em;margin-bottom:5px;">Lost</div>
+            ${playerRows(origLoserTeam)}
           </div>
         </div>
 
-        <!-- Winner swap -->
-        <div style="margin-bottom:16px;">
-          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:8px;color:var(--ink-muted);">Swap who won?</div>
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-hover);">
-            <input type="checkbox" id="swapWinnerCheckbox" style="width:18px;height:18px;min-height:0;cursor:pointer;"
-              onchange="updateEditWinnerLabels('${escapeHtml(winnerNames)}','${escapeHtml(loserNames)}')">
-            <span style="font-size:13px;font-weight:600;">
-              Make <span id="swapLabel" style="color:var(--winner-green);">${escapeHtml(loserNames)}</span> the winner instead
-            </span>
-          </label>
+        <!-- ── Swap winner ── -->
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--ink-muted);letter-spacing:0.04em;margin-bottom:6px;">Correct the winner?</div>
+        <label id="swapRow" style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid var(--border-soft);border-radius:var(--radius-sm);margin-bottom:18px;user-select:none;">
+          <input type="checkbox" id="swapWinnerCheckbox"
+            style="width:18px;height:18px;min-height:0;cursor:pointer;flex-shrink:0;"
+            onchange="refreshMatchEditPreview()">
+          <span style="font-size:13px;font-weight:600;line-height:1.4;">
+            Swap — make <span id="swapTargetLabel" style="color:var(--winner-green);font-weight:800;">${escapeHtml(origLoserNames)}</span> the winner
+          </span>
+        </label>
+
+        <!-- ── Score correction ── -->
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--ink-muted);letter-spacing:0.04em;margin-bottom:6px;">Correct the loser's score?</div>
+        <div style="display:grid;grid-template-columns:1fr 40px 1fr;align-items:center;border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:18px;">
+          <div style="padding:10px 12px;text-align:center;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:4px;color:var(--winner-green);" id="scoreWinnerLabel">${escapeHtml(origWinnerNames)}</div>
+            <div id="scoreWinnerNum" style="font-family:var(--font-mono);font-size:30px;font-weight:800;color:var(--winner-green);line-height:1;">${origWinnerScore}</div>
+            <div id="scoreDeuceTag" style="font-size:9px;color:var(--accent);font-weight:700;margin-top:2px;min-height:12px;"></div>
+          </div>
+          <div style="background:var(--surface-hover);text-align:center;padding:8px 4px;font-weight:800;color:var(--ink-muted);font-size:13px;align-self:stretch;display:flex;align-items:center;justify-content:center;">vs</div>
+          <div style="padding:10px 12px;text-align:center;border-left:1px solid var(--border-soft);">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:4px;color:var(--loser-coral);" id="scoreLoserLabel">${escapeHtml(origLoserNames)}</div>
+            <input type="number" id="editLoserScore" min="0" value="${origLoserScore}"
+              style="font-family:var(--font-mono);font-size:30px;font-weight:800;width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:6px;background:var(--surface-raised);color:var(--ink);padding:4px 0;min-height:0;"
+              oninput="refreshMatchEditPreview()" onchange="refreshMatchEditPreview()">
+            <div style="font-size:9px;color:var(--resting-slate);margin-top:3px;">type new score · 10+ = deuce</div>
+          </div>
         </div>
 
-        <div id="matchEditError" class="auth-error"></div>
-        <div class="confirm-actions">
+        <!-- ── Live preview ── -->
+        <div id="matchEditPreview"
+          style="background:var(--surface-hover);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--ink);margin-bottom:14px;line-height:1.6;">
+        </div>
+
+        <div id="matchEditError" class="auth-error" style="margin-bottom:8px;"></div>
+        <div class="confirm-actions" style="margin-top:0;">
           <button class="btn-no" onclick="document.getElementById('matchEditModal').remove()">Cancel</button>
           <button class="btn-yes" id="matchEditConfirmBtn"
-            onclick="confirmMatchEdit('${matchId}','${match.winner_team_id}','${loserTeamId}')">
+            onclick="confirmMatchEdit('${matchId}','${match.winner_team_id}','${origLoserTeamId}','${origLoserScore}')">
             Apply Correction
           </button>
         </div>
@@ -1877,36 +1890,65 @@ async function openMatchEditor(matchId) {
     </div>
   `);
 
-  // Initialise the display.
-  updateEditScoreDisplay();
+  // Render the initial preview.
+  refreshMatchEditPreview();
 }
 
-function updateEditScoreDisplay() {
-  const raw = parseInt(document.getElementById('editLoserScore')?.value, 10);
-  const loserScore = isNaN(raw) || raw < 0 ? 0 : raw;
-  const isDeuce = loserScore >= 10;
+/**
+ * Recomputes the live preview and score display whenever the swap
+ * checkbox or the loser score input changes.
+ */
+function refreshMatchEditPreview() {
+  const modal = document.getElementById('matchEditModal');
+  if (!modal) return;
+
+  // Names stored as data attributes when the modal was built.
+  const origWinnerNames = modal.dataset.origWinner || '';
+  const origLoserNames  = modal.dataset.origLoser  || '';
+
+  const raw        = parseInt(document.getElementById('editLoserScore')?.value, 10);
+  const loserScore = (isNaN(raw) || raw < 0) ? 0 : raw;
+  const isDeuce    = loserScore >= 10;
   const winnerScore = isDeuce ? loserScore + 2 : 11;
-  const scoreEl = document.getElementById('editWinnerScore');
-  const noteEl  = document.getElementById('editDeuceNote');
-  if (scoreEl) scoreEl.textContent = winnerScore;
-  if (noteEl)  noteEl.textContent  = isDeuce ? `Deuce +2` : '';
-}
 
-function updateEditWinnerLabels(currentWinnerNames, currentLoserNames) {
   const swapped = document.getElementById('swapWinnerCheckbox')?.checked;
-  const winLabel  = document.getElementById('editWinnerLabel');
-  const losLabel  = document.getElementById('editLoserLabel');
-  const swapLabel = document.getElementById('swapLabel');
 
-  if (winLabel)  winLabel.textContent  = swapped ? currentLoserNames  : currentWinnerNames;
-  if (losLabel)  losLabel.textContent  = swapped ? currentWinnerNames : currentLoserNames;
-  if (swapLabel) {
-    swapLabel.textContent = swapped ? currentWinnerNames : currentLoserNames;
-    swapLabel.style.color = swapped ? 'var(--loser-coral)' : 'var(--winner-green)';
+  // After swap: original loser becomes winner, original winner becomes loser.
+  const currentWinnerNames = swapped ? origLoserNames  : origWinnerNames;
+  const currentLoserNames  = swapped ? origWinnerNames : origLoserNames;
+
+  // Update swap label.
+  const swapTargetEl = document.getElementById('swapTargetLabel');
+  if (swapTargetEl) {
+    swapTargetEl.textContent = swapped ? origWinnerNames : origLoserNames;
+    swapTargetEl.style.color = swapped ? 'var(--loser-coral)' : 'var(--winner-green)';
+  }
+
+  // Update score panel labels.
+  const wLabelEl = document.getElementById('scoreWinnerLabel');
+  const lLabelEl = document.getElementById('scoreLoserLabel');
+  if (wLabelEl) wLabelEl.textContent = currentWinnerNames;
+  if (lLabelEl) lLabelEl.textContent = currentLoserNames;
+
+  // Update live winner score number.
+  const winNumEl = document.getElementById('scoreWinnerNum');
+  const deuceEl  = document.getElementById('scoreDeuceTag');
+  if (winNumEl) winNumEl.textContent = winnerScore;
+  if (deuceEl)  deuceEl.textContent  = isDeuce ? 'Deuce +2 rule' : '';
+
+  // Build the plain-English preview.
+  const previewEl = document.getElementById('matchEditPreview');
+  if (previewEl) {
+    previewEl.innerHTML =
+      `<span style="color:var(--resting-slate);">Will save as:</span> ` +
+      `<strong style="color:var(--winner-green);">${escapeHtml(currentWinnerNames)}</strong> wins ` +
+      `<strong style="font-family:var(--font-mono);">${winnerScore}–${loserScore}</strong> ` +
+      `vs <strong style="color:var(--loser-coral);">${escapeHtml(currentLoserNames)}</strong>` +
+      (isDeuce ? ` <span style="color:var(--accent);font-size:11px;font-weight:700;">· deuce</span>` : '');
   }
 }
 
-async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeamId) {
+async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeamId, origLoserScore) {
   const btn   = document.getElementById('matchEditConfirmBtn');
   const errEl = document.getElementById('matchEditError');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -1918,11 +1960,14 @@ async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeam
     return;
   }
 
-  const swapped = document.getElementById('swapWinnerCheckbox')?.checked;
+  const swapped         = document.getElementById('swapWinnerCheckbox')?.checked;
   const newWinnerTeamId = swapped ? originalLoserTeamId : null; // null = keep same winner
+  // Only pass newLoserScore if it actually changed, to avoid false "no change" errors.
+  const scoreChanged    = raw !== parseInt(origLoserScore, 10);
+  const newLoserScore   = scoreChanged ? raw : null;
 
   try {
-    await SessionAPI.correctMatchResult(matchId, newWinnerTeamId, raw);
+    await SessionAPI.correctMatchResult(matchId, newWinnerTeamId, newLoserScore);
     document.getElementById('matchEditModal').remove();
     document.getElementById('tabPanel').innerHTML = await leaderboardTabHtml();
   } catch (err) {
