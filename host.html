@@ -327,102 +327,114 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
-// SKILL-BALANCED PAIRING ENGINE
+// STACKING / PAIRING ENGINE
 // ============================================================
-// Tier numeric ranks — higher = stronger.
 const TIER_RANK = { beginner: 0, intermediate: 1, advanced: 2, open: -1 };
 
 /**
- * Given exactly 4 players (the longest-waiting per FIFO), split them
- * into two balanced teams for doubles. Skill balance is a SOFT preference
- * applied within these 4 only — FIFO is never violated by reaching past them.
+ * Fisher-Yates shuffle — returns a NEW shuffled array, does not mutate.
+ */
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * Core doubles pairing — given exactly 4 players, returns the best 2v2 split.
  *
- * Balancing priority (tried in order, first that achieves a valid split wins):
+ * PRIORITY ORDER (hard, not soft):
+ *   1. SKILL BALANCE — always wins. Finds the split where the rank-sum
+ *      difference between teams is smallest. If same-tier players exist,
+ *      prefers them on OPPOSING sides (intermediate+beginner vs
+ *      intermediate+beginner beats intermediate+intermediate vs beginner+beginner).
  *
- * 1. WIN/LOSS SPLIT — winners face losers when possible, keeping
- *    competitive matches fresh. Applied AFTER tier balancing if it aligns.
+ *   2. RANDOMIZATION — when multiple splits tie on skill balance (including
+ *      all-equal or all-open tiers), the group is shuffled before splitting
+ *      so partners are random, not always the first two in queue order.
+ *      This is the fix for "player1 always pairs with player6".
  *
- * 2. TIER-BALANCED SPLIT — tries every possible 2v2 partition and picks
- *    the one where |sum(rankA) - sum(rankB)| is minimised. Among ties,
- *    the split that keeps same-tier players on opposing sides wins
- *    (beginner+intermediate vs beginner+intermediate beats
- *     two beginners vs two intermediates).
+ *   3. WIN/LOSS cosmetic — ONLY applies as a label (which side is "Team A")
+ *      when 2 winners and 2 losers happen to fall cleanly into the already-
+ *      chosen split. It NEVER changes which 2 players are teamed together.
+ *      If the best skill split puts a winner and a loser together, that's final.
  *
- * 3. If all 4 have identical ranks (or 'open'), apply win/loss split
- *    if available, else first-2 vs last-2 by FIFO order.
- *
- * Explicit documented examples from the brief:
- *  [intermediate, intermediate, beginner, beginner]
- *    → intermediate vs intermediate is WRONG (same team)
- *    → one intermediate + one beginner vs one intermediate + one beginner ✓
- *
- *  [advanced, beginner, intermediate, intermediate]
- *    → advanced+beginner vs intermediate+intermediate ✓
- *    (the extreme tiers cancel each other out, making an even matchup)
- *
- * Returns { teamAPlayerIds, teamBPlayerIds }
+ * Documented examples:
+ *   [inter, inter, beg, beg]  → inter+beg vs inter+beg  (never inter+inter vs beg+beg)
+ *   [adv, beg, inter, inter]  → adv+beg vs inter+inter  (extremes cancel out)
+ *   [open, open, open, open]  → random 2v2 every time
  */
 function decideSkillBalancedTeams(group) {
   if (group.length !== 4) return null;
 
-  const ranks = group.map(p => TIER_RANK[p.skill_tier] >= 0 ? TIER_RANK[p.skill_tier] : 1); // treat 'open' as intermediate
+  // Treat 'open' as intermediate (rank 1) for balancing purposes.
+  const ranks = group.map(p => TIER_RANK[p.skill_tier] >= 0 ? TIER_RANK[p.skill_tier] : 1);
 
-  // Generate all 3 unique ways to split 4 into 2 pairs:
-  // [0,1] vs [2,3] | [0,2] vs [1,3] | [0,3] vs [1,2]
+  // All 3 unique 2v2 partitions of indices 0-3.
   const splits = [
     { a: [0,1], b: [2,3] },
     { a: [0,2], b: [1,3] },
     { a: [0,3], b: [1,2] },
   ];
 
-  // Score each split: lower = more balanced.
-  // Primary: absolute rank-sum difference (lower = better).
-  // Tiebreak: number of same-tier pairs on the SAME team (lower = better,
-  // we prefer identical tiers on OPPOSING sides).
-  function scoreSplit(split) {
-    const sumA = split.a.reduce((s, i) => s + ranks[i], 0);
-    const sumB = split.b.reduce((s, i) => s + ranks[i], 0);
+  // Score each split — LOWER is better.
+  // Primary:  absolute rank-sum difference between the two teams.
+  // Secondary: number of same-tier pairs on the SAME team (0 = spread out = better).
+  function scoreSplit(s) {
+    const sumA = s.a.reduce((acc, i) => acc + ranks[i], 0);
+    const sumB = s.b.reduce((acc, i) => acc + ranks[i], 0);
     const diff = Math.abs(sumA - sumB);
-    const sameTierSameTeam =
-      (ranks[split.a[0]] === ranks[split.a[1]] ? 1 : 0) +
-      (ranks[split.b[0]] === ranks[split.b[1]] ? 1 : 0);
-    return diff * 10 + sameTierSameTeam;
+    const clumped =
+      (ranks[s.a[0]] === ranks[s.a[1]] ? 1 : 0) +
+      (ranks[s.b[0]] === ranks[s.b[1]] ? 1 : 0);
+    return diff * 10 + clumped;
   }
 
-  splits.sort((a, b) => scoreSplit(a) - scoreSplit(b));
-  const best = splits[0];
+  const scores = splits.map(s => scoreSplit(s));
+  const best   = Math.min(...scores);
 
-  // Within the winning split, apply win/loss sub-ordering if both teams
-  // happen to line up (all of team A won, all of team B lost).
-  // This is a cosmetic preference; it does not change who plays, only which
-  // side is labelled A vs B.
-  const winners = group.filter(p => p.last_match_result === 'won').map(p => p.id);
-  const losers  = group.filter(p => p.last_match_result === 'lost').map(p => p.id);
+  // Collect ALL splits that tie for best score.
+  const bestSplits = splits.filter((_, i) => scores[i] === best);
 
-  let teamAIds = best.a.map(i => group[i].id);
-  let teamBIds = best.b.map(i => group[i].id);
+  // When multiple splits tie (common when all tiers are equal/open),
+  // shuffle the group and re-pick so partners are random.
+  // We shuffle the GROUP itself (not the splits array), then re-evaluate
+  // with the same split shapes on the shuffled order — this randomises
+  // which physical players land in which positions of each split.
+  let chosen;
+  if (bestSplits.length > 1) {
+    // Shuffle then always take the first split shape — the shuffle makes
+    // it random without needing to pick a random split index.
+    const shuffled = shuffleArray(group);
+    chosen = { a: [0,1], b: [2,3], group: shuffled };
+  } else {
+    chosen = { ...bestSplits[0], group };
+  }
 
-  // Prefer winners on same side (cosmetic only, valid only when 2W+2L).
-  if (winners.length === 2 && losers.length === 2) {
-    const aHasWinners = teamAIds.every(id => winners.includes(id));
-    const bHasWinners = teamBIds.every(id => winners.includes(id));
-    if (bHasWinners && !aHasWinners) {
-      // Flip so winners are on "Team A" side consistently.
-      [teamAIds, teamBIds] = [teamBIds, teamAIds];
-    }
+  let teamAIds = chosen.a.map(i => chosen.group[i].id);
+  let teamBIds = chosen.b.map(i => chosen.group[i].id);
+
+  // Win/loss cosmetic label only — swap A/B if the losers landed on A side
+  // and winners on B, so winners consistently appear as "Team A" in the UI.
+  // This NEVER changes the composition of either team, only the A/B label.
+  const winnerIds = group.filter(p => p.last_match_result === 'won').map(p => p.id);
+  const loserIds  = group.filter(p => p.last_match_result === 'lost').map(p => p.id);
+  if (winnerIds.length === 2 && loserIds.length === 2) {
+    const aIsLosers = teamAIds.every(id => loserIds.includes(id));
+    if (aIsLosers) [teamAIds, teamBIds] = [teamBIds, teamAIds];
   }
 
   return { teamAPlayerIds: teamAIds, teamBPlayerIds: teamBIds };
 }
 
-/**
- * Singles: no skill-balancing split needed (1v1), just FIFO first-two.
- */
 function decideNextMatchFromPool(players, teamSize) {
   const needed = teamSize * 2;
   if (!players || players.length < needed) return null;
-  const group = players.slice(0, needed); // strict FIFO — always these N people
-
+  // Always strict FIFO for WHO plays — only the next `needed` players.
+  const group = players.slice(0, needed);
   if (teamSize === 1) {
     return { teamAPlayerIds: [group[0].id], teamBPlayerIds: [group[1].id] };
   }
@@ -802,73 +814,85 @@ const SessionAPI = (() => {
   }
 
   /**
-   * Correct a previously recorded match result.
+   * Correct a previously recorded match result — winner, score, or both.
    *
-   * How the reversal works:
-   *   - Old winner(s): subtract 1 win + old winner score from total_points,
-   *     add 1 loss + old loser score instead.
-   *   - Old loser(s): subtract 1 loss + old loser score from total_points,
-   *     add 1 win + old winner score instead.
-   * total_games_played is unchanged — the game still happened, the outcome changed.
+   * @param {string}      matchId         matches.id to correct
+   * @param {string|null} newWinnerTeamId teams.id that should now be the winner,
+   *                                      or null to keep the same winner
+   * @param {number|null} newLoserScore   the corrected losing score (0+),
+   *                                      or null to keep the existing score
    *
-   * @param {string} matchId        - matches.id to correct
-   * @param {string} newWinnerTeamId - teams.id that should now be the winner
+   * Stat reversal logic:
+   *   Each affected player gets the old delta subtracted and the new delta added.
+   *   total_games_played never changes — the game still happened.
+   *   Stats are floored at 0 (Math.max) to guard against any prior data inconsistencies.
    */
-  async function correctMatchResult(matchId, newWinnerTeamId) {
-    // 1. Load the original match row.
+  async function correctMatchResult(matchId, newWinnerTeamId, newLoserScore = null) {
     const { data: match, error: matchErr } = await supabaseClient
       .from('matches').select('*').eq('id', matchId).single();
     if (matchErr || !match) throw new Error('Match record not found.');
 
-    if (match.winner_team_id === newWinnerTeamId) {
-      throw new Error('That team is already recorded as the winner — no change needed.');
+    // Resolve final winner team ID.
+    const finalWinnerTeamId = newWinnerTeamId || match.winner_team_id;
+    const finalLoserTeamId  = finalWinnerTeamId === match.team_a_id ? match.team_b_id : match.team_a_id;
+
+    // Old scores as recorded.
+    const oldWinnerScore = match.winner_team_id === match.team_a_id ? match.team_a_score : match.team_b_score;
+    const oldLoserScore  = match.winner_team_id === match.team_a_id ? match.team_b_score : match.team_a_score;
+
+    // New scores — apply deuce rule to the corrected loser score if provided.
+    const resolvedLoserScore  = newLoserScore !== null ? newLoserScore : oldLoserScore;
+    const resolvedWinnerScore = resolvedLoserScore >= 10 ? resolvedLoserScore + 2 : 11;
+
+    const noWinnerChange = match.winner_team_id === finalWinnerTeamId;
+    const noScoreChange  = resolvedLoserScore === oldLoserScore;
+    if (noWinnerChange && noScoreChange) {
+      throw new Error('No changes detected — winner and score are already as recorded.');
     }
 
-    // The team that WAS the winner becomes the loser, and vice versa.
-    const oldWinnerTeamId = match.winner_team_id;
-    const oldLoserTeamId  = oldWinnerTeamId === match.team_a_id ? match.team_b_id : match.team_a_id;
-
-    // Derive which score belonged to each team from the original row.
-    const oldWinnerScore = oldWinnerTeamId === match.team_a_id ? match.team_a_score : match.team_b_score;
-    const oldLoserScore  = oldWinnerTeamId === match.team_a_id ? match.team_b_score : match.team_a_score;
-
-    // 2. Load player_ids for both teams.
+    // Load player_ids for BOTH original teams (by original team_a/b, not winner/loser,
+    // so we can find the right rows regardless of which direction the flip goes).
     const { data: teamRows, error: teamsErr } = await supabaseClient
-      .from('teams').select('id, player_ids').in('id', [oldWinnerTeamId, oldLoserTeamId]);
+      .from('teams').select('id, player_ids').in('id', [match.team_a_id, match.team_b_id]);
     if (teamsErr || !teamRows) throw new Error('Could not load team data.');
 
-    const oldWinnerRow = teamRows.find(t => t.id === oldWinnerTeamId);
-    const oldLoserRow  = teamRows.find(t => t.id === oldLoserTeamId);
+    const teamARow = teamRows.find(t => t.id === match.team_a_id);
+    const teamBRow = teamRows.find(t => t.id === match.team_b_id);
 
-    // 3. Reverse stats on old winners (they actually lost).
-    if (oldWinnerRow?.player_ids?.length) {
-      const { data: players } = await supabaseClient.from('players')
-        .select('id, wins, losses, total_points').in('id', oldWinnerRow.player_ids);
-      for (const p of players || []) {
-        await supabaseClient.from('players').update({
-          wins:         Math.max(0, (p.wins || 0) - 1),
-          losses:       (p.losses || 0) + 1,
-          total_points: Math.max(0, (p.total_points || 0) - (oldWinnerScore || 0) + (oldLoserScore || 0)),
-        }).eq('id', p.id);
-      }
+    // For each player, figure out their OLD role (winner/loser) and their NEW role,
+    // then apply the delta: subtract old contribution, add new contribution.
+    const oldWinnerIds = (match.winner_team_id === match.team_a_id ? teamARow : teamBRow)?.player_ids || [];
+    const oldLoserIds  = (match.winner_team_id === match.team_a_id ? teamBRow : teamARow)?.player_ids || [];
+    const newWinnerIds = (finalWinnerTeamId     === match.team_a_id ? teamARow : teamBRow)?.player_ids || [];
+    const newLoserIds  = (finalWinnerTeamId     === match.team_a_id ? teamBRow : teamARow)?.player_ids || [];
+
+    // Collect every unique player involved.
+    const allIds = [...new Set([...oldWinnerIds, ...oldLoserIds])];
+    const { data: allPlayers } = await supabaseClient.from('players')
+      .select('id, wins, losses, total_points').in('id', allIds);
+
+    for (const p of allPlayers || []) {
+      const wasWinner = oldWinnerIds.includes(p.id);
+      const isWinner  = newWinnerIds.includes(p.id);
+
+      const oldPts = wasWinner ? (oldWinnerScore || 0) : (oldLoserScore || 0);
+      const newPts = isWinner  ? resolvedWinnerScore   : resolvedLoserScore;
+
+      await supabaseClient.from('players').update({
+        wins:         Math.max(0, (p.wins   || 0) - (wasWinner ? 1 : 0) + (isWinner  ? 1 : 0)),
+        losses:       Math.max(0, (p.losses || 0) - (wasWinner ? 0 : 1) + (isWinner  ? 0 : 1)),
+        total_points: Math.max(0, (p.total_points || 0) - oldPts + newPts),
+      }).eq('id', p.id);
     }
 
-    // 4. Reverse stats on old losers (they actually won).
-    if (oldLoserRow?.player_ids?.length) {
-      const { data: players } = await supabaseClient.from('players')
-        .select('id, wins, losses, total_points').in('id', oldLoserRow.player_ids);
-      for (const p of players || []) {
-        await supabaseClient.from('players').update({
-          wins:         (p.wins || 0) + 1,
-          losses:       Math.max(0, (p.losses || 0) - 1),
-          total_points: Math.max(0, (p.total_points || 0) - (oldLoserScore || 0) + (oldWinnerScore || 0)),
-        }).eq('id', p.id);
-      }
-    }
-
-    // 5. Update the match row itself.
-    const { error: updateErr } = await supabaseClient.from('matches')
-      .update({ winner_team_id: newWinnerTeamId }).eq('id', matchId);
+    // Update the match row.
+    const newTeamAScore = finalWinnerTeamId === match.team_a_id ? resolvedWinnerScore : resolvedLoserScore;
+    const newTeamBScore = finalWinnerTeamId === match.team_a_id ? resolvedLoserScore  : resolvedWinnerScore;
+    const { error: updateErr } = await supabaseClient.from('matches').update({
+      winner_team_id: finalWinnerTeamId,
+      team_a_score:   newTeamAScore,
+      team_b_score:   newTeamBScore,
+    }).eq('id', matchId);
     if (updateErr) throw updateErr;
   }
 
@@ -1732,7 +1756,7 @@ async function leaderboardTabHtml() {
             </div>
             <div style="padding:8px 12px;border-top:1px solid var(--border-soft);text-align:right;">
               <button
-                onclick="openMatchEditor('${m.id}','${loserTeamId}','${escapeHtml(wNames)}','${escapeHtml(lNames)}')"
+                onclick="openMatchEditor('${m.id}')"
                 style="background:transparent;color:var(--accent);border:1.5px solid var(--accent);padding:5px 14px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:0;">
                 Edit Result
               </button>
@@ -1754,67 +1778,156 @@ async function handleToggleLeaderboard(currentlyPublic) {
 }
 
 /**
- * Match editor modal — shows all 4 players in the match clearly,
- * labelled Won / Lost. A single "Swap — make [loser] the winner"
- * button does the correction. No ambiguity about who is being changed.
- *
- * @param {string} matchId
- * @param {string} loserTeamId  — the team that is currently the LOSER
- *                                (making them the new winner is the correction)
- * @param {string} winnerNames  — display label for current winner
- * @param {string} loserNames   — display label for current loser
+ * Full match editor modal.
+ * Shows all 4 players clearly in two columns (Won / Lost).
+ * Host can:
+ *   • Swap which team won (flip result)
+ *   • Correct the losing score (winner recalculated automatically with deuce rule)
+ *   • Do both at once
  */
-async function openMatchEditor(matchId, loserTeamId, winnerNames, loserNames) {
-  // Prevent stacking if already open.
+async function openMatchEditor(matchId) {
   if (document.getElementById('matchEditModal')) return;
+
+  // Load the full match row fresh.
+  const { data: match, error } = await supabaseClient
+    .from('matches')
+    .select('*, team_a:team_a_id(*), team_b:team_b_id(*)')
+    .eq('id', matchId)
+    .single();
+  if (error || !match) { alert('Could not load match data.'); return; }
+
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const playerById = Object.fromEntries(players.map(p => [p.id, p]));
+
+  const winnerTeam = match.winner_team_id === match.team_a_id ? match.team_a : match.team_b;
+  const loserTeam  = match.winner_team_id === match.team_a_id ? match.team_b : match.team_a;
+  const loserTeamId = match.winner_team_id === match.team_a_id ? match.team_b_id : match.team_a_id;
+
+  const oldWinnerScore = match.winner_team_id === match.team_a_id ? match.team_a_score : match.team_b_score;
+  const oldLoserScore  = match.winner_team_id === match.team_a_id ? match.team_b_score : match.team_a_score;
+
+  function playerChip(pid) {
+    const name = playerById[pid]?.name || '—';
+    return `<div style="font-size:13px;font-weight:700;padding:3px 0;">${escapeHtml(name)}</div>`;
+  }
+
+  const winnerNames = (winnerTeam?.player_ids || []).map(pid => playerById[pid]?.name || '—').join(' & ');
+  const loserNames  = (loserTeam?.player_ids  || []).map(pid => playerById[pid]?.name || '—').join(' & ');
 
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="matchEditModal">
-      <div class="modal-box">
-        <h2>Edit Match Result</h2>
-        <p class="modal-sub">Review who won and who lost. Tap "Swap Result" to correct it — all four players' stats update automatically.</p>
+      <div class="modal-box" style="max-width:520px;">
+        <h2 style="margin:0 0 4px;">Edit Match Result</h2>
+        <p class="modal-sub">Correct the winner, the score, or both. All player stats update automatically.</p>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0;">
-          <div style="background:rgba(78,203,126,0.1);border:2px solid var(--winner-green);border-radius:var(--radius-sm);padding:12px;text-align:center;">
-            <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--winner-green);margin-bottom:8px;">🏆 Currently Won</div>
-            <div style="font-size:13px;font-weight:700;line-height:1.5;">${escapeHtml(winnerNames.replace(' & ', '\n')).replace('\n','<br>')}</div>
+        <!-- Current result display -->
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0;margin:16px 0;border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;">
+          <div style="padding:12px;background:rgba(78,203,126,0.08);">
+            <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--winner-green);letter-spacing:0.06em;margin-bottom:6px;">🏆 Won</div>
+            ${(winnerTeam?.player_ids || []).map(pid => playerChip(pid)).join('')}
           </div>
-          <div style="background:rgba(255,122,92,0.1);border:2px solid var(--loser-coral);border-radius:var(--radius-sm);padding:12px;text-align:center;">
-            <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--loser-coral);margin-bottom:8px;">Currently Lost</div>
-            <div style="font-size:13px;font-weight:700;line-height:1.5;">${escapeHtml(loserNames.replace(' & ', '\n')).replace('\n','<br>')}</div>
+          <div style="display:flex;align-items:center;justify-content:center;padding:0 10px;background:var(--surface-hover);font-size:15px;font-family:var(--font-mono);font-weight:800;color:var(--ink);min-width:60px;text-align:center;">${oldWinnerScore}–${oldLoserScore}</div>
+          <div style="padding:12px;background:rgba(255,122,92,0.08);border-left:1px solid var(--border-soft);">
+            <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--loser-coral);letter-spacing:0.06em;margin-bottom:6px;">Lost</div>
+            ${(loserTeam?.player_ids || []).map(pid => playerChip(pid)).join('')}
           </div>
         </div>
 
-        <div style="background:var(--surface-hover);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--resting-slate);margin-bottom:16px;">
-          After swapping: <strong style="color:var(--winner-green);">${escapeHtml(loserNames)}</strong> becomes the winner · <strong style="color:var(--loser-coral);">${escapeHtml(winnerNames)}</strong> becomes the loser. Scores stay the same.
+        <!-- Score correction -->
+        <div style="margin-bottom:16px;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:8px;color:var(--ink-muted);">Correct the score</div>
+          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:center;border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;">
+            <div style="padding:10px 12px;text-align:center;">
+              <div style="font-size:10px;color:var(--winner-green);font-weight:700;text-transform:uppercase;margin-bottom:4px;" id="editWinnerLabel">${escapeHtml(winnerNames)}</div>
+              <div id="editWinnerScore" style="font-family:var(--font-mono);font-size:28px;font-weight:800;color:var(--winner-green);">${oldWinnerScore}</div>
+              <div style="font-size:9px;color:var(--resting-slate);margin-top:2px;" id="editDeuceNote"></div>
+            </div>
+            <div style="background:var(--surface-hover);padding:10px;font-weight:800;font-size:14px;color:var(--ink-muted);text-align:center;">vs</div>
+            <div style="padding:10px 12px;text-align:center;border-left:1px solid var(--border-soft);">
+              <div style="font-size:10px;color:var(--loser-coral);font-weight:700;text-transform:uppercase;margin-bottom:4px;" id="editLoserLabel">${escapeHtml(loserNames)}</div>
+              <input type="number" id="editLoserScore" min="0" value="${oldLoserScore}"
+                style="font-family:var(--font-mono);font-size:28px;font-weight:800;width:100%;text-align:center;border:none;background:transparent;color:var(--ink);padding:0;min-height:0;"
+                oninput="updateEditScoreDisplay()" onchange="updateEditScoreDisplay()">
+              <div style="font-size:9px;color:var(--resting-slate);margin-top:2px;">loser's score · 10+ = deuce</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Winner swap -->
+        <div style="margin-bottom:16px;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;margin-bottom:8px;color:var(--ink-muted);">Swap who won?</div>
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-hover);">
+            <input type="checkbox" id="swapWinnerCheckbox" style="width:18px;height:18px;min-height:0;cursor:pointer;"
+              onchange="updateEditWinnerLabels('${escapeHtml(winnerNames)}','${escapeHtml(loserNames)}')">
+            <span style="font-size:13px;font-weight:600;">
+              Make <span id="swapLabel" style="color:var(--winner-green);">${escapeHtml(loserNames)}</span> the winner instead
+            </span>
+          </label>
         </div>
 
         <div id="matchEditError" class="auth-error"></div>
-
         <div class="confirm-actions">
-          <button class="btn-no" onclick="document.getElementById('matchEditModal').remove()">Cancel — Keep As Is</button>
+          <button class="btn-no" onclick="document.getElementById('matchEditModal').remove()">Cancel</button>
           <button class="btn-yes" id="matchEditConfirmBtn"
-            style="background:var(--loser-coral);"
-            onclick="confirmMatchEdit('${matchId}','${loserTeamId}')">
-            Swap Result
+            onclick="confirmMatchEdit('${matchId}','${match.winner_team_id}','${loserTeamId}')">
+            Apply Correction
           </button>
         </div>
       </div>
     </div>
   `);
+
+  // Initialise the display.
+  updateEditScoreDisplay();
 }
 
-async function confirmMatchEdit(matchId, newWinnerTeamId) {
-  const btn    = document.getElementById('matchEditConfirmBtn');
-  const errEl  = document.getElementById('matchEditError');
-  if (btn) { btn.disabled = true; btn.textContent = 'Correcting…'; }
+function updateEditScoreDisplay() {
+  const raw = parseInt(document.getElementById('editLoserScore')?.value, 10);
+  const loserScore = isNaN(raw) || raw < 0 ? 0 : raw;
+  const isDeuce = loserScore >= 10;
+  const winnerScore = isDeuce ? loserScore + 2 : 11;
+  const scoreEl = document.getElementById('editWinnerScore');
+  const noteEl  = document.getElementById('editDeuceNote');
+  if (scoreEl) scoreEl.textContent = winnerScore;
+  if (noteEl)  noteEl.textContent  = isDeuce ? `Deuce +2` : '';
+}
+
+function updateEditWinnerLabels(currentWinnerNames, currentLoserNames) {
+  const swapped = document.getElementById('swapWinnerCheckbox')?.checked;
+  const winLabel  = document.getElementById('editWinnerLabel');
+  const losLabel  = document.getElementById('editLoserLabel');
+  const swapLabel = document.getElementById('swapLabel');
+
+  if (winLabel)  winLabel.textContent  = swapped ? currentLoserNames  : currentWinnerNames;
+  if (losLabel)  losLabel.textContent  = swapped ? currentWinnerNames : currentLoserNames;
+  if (swapLabel) {
+    swapLabel.textContent = swapped ? currentWinnerNames : currentLoserNames;
+    swapLabel.style.color = swapped ? 'var(--loser-coral)' : 'var(--winner-green)';
+  }
+}
+
+async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeamId) {
+  const btn   = document.getElementById('matchEditConfirmBtn');
+  const errEl = document.getElementById('matchEditError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const raw = parseInt(document.getElementById('editLoserScore').value, 10);
+  if (isNaN(raw) || raw < 0) {
+    if (errEl) errEl.textContent = 'Enter a valid score (0 or higher).';
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply Correction'; }
+    return;
+  }
+
+  const swapped = document.getElementById('swapWinnerCheckbox')?.checked;
+  const newWinnerTeamId = swapped ? originalLoserTeamId : null; // null = keep same winner
+
   try {
-    await SessionAPI.correctMatchResult(matchId, newWinnerTeamId);
+    await SessionAPI.correctMatchResult(matchId, newWinnerTeamId, raw);
     document.getElementById('matchEditModal').remove();
     document.getElementById('tabPanel').innerHTML = await leaderboardTabHtml();
   } catch (err) {
-    if (errEl) errEl.textContent = err.message || 'Could not correct this result — please try again.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Swap Result'; }
+    if (errEl) errEl.textContent = err.message || 'Could not apply correction.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply Correction'; }
   }
 }
 
