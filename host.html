@@ -527,10 +527,20 @@ const SessionAPI = (() => {
   /**
    * Pre-register a player as 'expected' — they're on the list but haven't
    * physically arrived yet. No queue placement, no became_free_at.
+   * Rejects duplicate names (case-insensitive) within the same session.
    */
   async function preRegisterPlayer(sessionId, name, skillTier = 'open') {
+    // Check for an existing player with the same name in this session.
+    // We do this client-side because Supabase doesn't expose a
+    // case-insensitive unique constraint easily without a migration.
+    const { data: existing } = await supabaseClient.from('players')
+      .select('id, name').eq('session_id', sessionId).neq('status', 'left');
+    const nameLower = name.trim().toLowerCase();
+    const clash = (existing || []).find(p => p.name.trim().toLowerCase() === nameLower);
+    if (clash) throw new Error(`"${clash.name}" is already on the list.`);
+
     const { data, error } = await supabaseClient.from('players')
-      .insert({ session_id: sessionId, name, skill_tier: skillTier, status: 'expected' })
+      .insert({ session_id: sessionId, name: name.trim(), skill_tier: skillTier, status: 'expected' })
       .select().single();
     if (error) throw error;
     return data;
@@ -628,19 +638,28 @@ const SessionAPI = (() => {
     }
   }
 
-  async function logMatchResult(courtId, winnerTeamId, scoreData = null) {
+  async function logMatchResult(courtId, winnerTeamId, loserScore) {
+    // loserScore: integer the losing team scored. Winner always gets 11,
+    // unless loserScore >= 10 (deuce territory) in which case winner gets
+    // loserScore + 2 (standard pickleball deuce rule).
+    const winnerScore = loserScore >= 10 ? loserScore + 2 : 11;
+
     const { data: court, error } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (error) throw error;
 
-    // Update individual player stats (wins/losses/points).
+    const loserTeamId = court.team_a_id === winnerTeamId ? court.team_b_id : court.team_a_id;
+
+    // Determine which score belongs to team_a vs team_b for the DB row.
+    const teamAScore = court.team_a_id === winnerTeamId ? winnerScore : loserScore;
+    const teamBScore = court.team_b_id === winnerTeamId ? winnerScore : loserScore;
+
+    // Update individual player stats.
     const { data: teamRows } = await supabaseClient.from('teams')
       .select('id, player_ids').in('id', [court.team_a_id, court.team_b_id]);
 
     if (teamRows) {
       const winnerRow = teamRows.find(t => t.id === winnerTeamId);
-      const loserRow  = teamRows.find(t => t.id !== winnerTeamId);
-      const pointsForWinner = scoreData ? Math.max(scoreData.teamAScore, scoreData.teamBScore) : 0;
-      const pointsForLoser  = scoreData ? Math.min(scoreData.teamAScore, scoreData.teamBScore) : 0;
+      const loserRow  = teamRows.find(t => t.id === loserTeamId);
 
       if (winnerRow) {
         const { data: winPlayers } = await supabaseClient.from('players')
@@ -649,7 +668,7 @@ const SessionAPI = (() => {
           await supabaseClient.from('players').update({
             wins: (p.wins || 0) + 1,
             total_games_played: (p.total_games_played || 0) + 1,
-            total_points: (p.total_points || 0) + pointsForWinner,
+            total_points: (p.total_points || 0) + winnerScore,
           }).eq('id', p.id);
         }
       }
@@ -660,36 +679,46 @@ const SessionAPI = (() => {
           await supabaseClient.from('players').update({
             losses: (p.losses || 0) + 1,
             total_games_played: (p.total_games_played || 0) + 1,
-            total_points: (p.total_points || 0) + pointsForLoser,
+            total_points: (p.total_points || 0) + loserScore,
           }).eq('id', p.id);
         }
       }
     }
 
-    const insertRow = {
+    await supabaseClient.from('matches').insert({
       session_id: court.session_id, court_id: courtId,
       team_a_id: court.team_a_id, team_b_id: court.team_b_id,
-      winner_team_id: winnerTeamId, started_at: court.game_started_at,
+      winner_team_id: winnerTeamId,
+      team_a_score: teamAScore, team_b_score: teamBScore,
+      score_visible: true,
+      started_at: court.game_started_at,
       ended_at: new Date().toISOString(),
       duration_seconds: court.game_started_at
         ? Math.round((Date.now() - new Date(court.game_started_at).getTime()) / 1000) : null,
-      score_visible: !!scoreData,
-    };
-    if (scoreData) { insertRow.team_a_score = scoreData.teamAScore; insertRow.team_b_score = scoreData.teamBScore; }
-    await supabaseClient.from('matches').insert(insertRow);
+    });
     return court;
   }
 
   async function applyQueuePlacement(courtId, sessionId, winnerIds, loserIds) {
-    const now = new Date().toISOString();
+    // Winners and losers from the same match MUST get different became_free_at
+    // timestamps, otherwise they all tie and FIFO within the returning group
+    // is non-deterministic (DB sort order is undefined on ties).
+    // Convention: winners re-enter 1 ms ahead of losers — they "finished first"
+    // in the sense that the result was confirmed in their favour. Both are still
+    // behind any player who was already waiting before this match ended, because
+    // those players' became_free_at timestamps predate this moment entirely.
+    const nowMs = Date.now();
+    const winnerTs = new Date(nowMs).toISOString();
+    const loserTs  = new Date(nowMs + 1).toISOString();
+
     if (winnerIds.length > 0) {
       await supabaseClient.from('players')
-        .update({ status: 'waiting', became_free_at: now, last_match_result: 'won' })
+        .update({ status: 'waiting', became_free_at: winnerTs, last_match_result: 'won' })
         .in('id', winnerIds);
     }
     if (loserIds.length > 0) {
       await supabaseClient.from('players')
-        .update({ status: 'waiting', became_free_at: now, last_match_result: 'lost' })
+        .update({ status: 'waiting', became_free_at: loserTs, last_match_result: 'lost' })
         .in('id', loserIds);
     }
     const { data: court } = await supabaseClient.from('courts').select('team_a_id, team_b_id').eq('id', courtId).single();
@@ -1364,64 +1393,81 @@ async function showPickWinnerModal() {
 
 async function selectWinner(winnerTeamId) {
   resultFlowWinnerTeamId = winnerTeamId;
-  await showScoreConsentModal();
+  await showLoserScoreModal();
 }
 
-async function showScoreConsentModal() {
+/**
+ * Score entry — winner always gets 11 (auto-filled, read-only).
+ * Host only enters the LOSING team's score (0–10).
+ * Deuce rule: if loser reached 10, winner actually wins 12–10
+ * (i.e. loserScore + 2). The UI shows this dynamically.
+ */
+async function showLoserScoreModal() {
   const players = await SessionAPI.getPlayers(activeSession.id);
-  const namesA = playerNamesForTeam(resultFlowCourt.team_a, players).join(' & ');
-  const namesB = playerNamesForTeam(resultFlowCourt.team_b, players).join(' & ');
+  const winnerTeam = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_a : resultFlowCourt.team_b;
+  const loserTeam  = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_b : resultFlowCourt.team_a;
+  const winnerNames = playerNamesForTeam(winnerTeam, players).join(' & ');
+  const loserNames  = playerNamesForTeam(loserTeam,  players).join(' & ');
+
   document.getElementById('resultModal').innerHTML = `
     <div class="modal-box">
-      <h2>Record the Score?</h2>
-      <p class="modal-sub">Optional — only show if all players agree. Match duration is tracked either way.</p>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;margin:14px 0;cursor:pointer;">
-        <input type="checkbox" id="scoreConsentCheckbox" style="width:18px;height:18px;min-height:0;" onchange="toggleScoreFields()">
-        All players agreed to share this score
-      </label>
-      <div id="scoreFieldsArea" style="display:none;">
-        <div class="form-grid">
-          <div class="field"><label>${escapeHtml(namesA)}</label><input type="number" id="consentScoreA" min="0" max="99" value="0"></div>
-          <div class="field"><label>${escapeHtml(namesB)}</label><input type="number" id="consentScoreB" min="0" max="99" value="0"></div>
+      <h2>Enter Score</h2>
+      <p class="modal-sub">Court ${resultFlowCourt.court_number} — winner is fixed at 11 (or +2 if deuce).</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0;">
+        <div style="text-align:center;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--winner-green);margin-bottom:6px;">🏆 Winner</div>
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;min-height:36px;">${escapeHtml(winnerNames)}</div>
+          <div id="winnerScoreDisplay" style="font-family:var(--font-mono);font-size:40px;font-weight:800;color:var(--winner-green);line-height:1;">11</div>
+          <div style="font-size:10px;color:var(--resting-slate);margin-top:4px;" id="deuceNote"></div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--loser-coral);margin-bottom:6px;">Losing score</div>
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;min-height:36px;">${escapeHtml(loserNames)}</div>
+          <input type="number" id="loserScoreInput" min="0" max="10" value="0"
+            style="font-size:40px;font-weight:800;font-family:var(--font-mono);width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--ink);padding:6px 0;min-height:0;"
+            oninput="updateWinnerDisplay()" onchange="updateWinnerDisplay()">
+          <div style="font-size:10px;color:var(--resting-slate);margin-top:4px;">0 – 10</div>
         </div>
       </div>
-      <div class="confirm-actions">
-        <button class="btn-no" onclick="skipScoreAndContinue()">Skip Score</button>
-        <button class="btn-yes" onclick="confirmScoreAndContinue()">Continue</button>
+
+      <div class="auth-error" id="scoreEntryError"></div>
+      <div class="confirm-actions" style="margin-top:8px;">
+        <button class="btn-no" onclick="showPickWinnerModal()">← Back</button>
+        <button class="btn-yes" onclick="confirmLoserScore()">Save &amp; Continue</button>
       </div>
-      <div class="auth-error" id="scoreConsentError"></div>
     </div>
   `;
+  document.getElementById('loserScoreInput').focus();
 }
 
-function toggleScoreFields() {
-  document.getElementById('scoreFieldsArea').style.display =
-    document.getElementById('scoreConsentCheckbox').checked ? '' : 'none';
+function updateWinnerDisplay() {
+  const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
+  const loserScore = isNaN(raw) ? 0 : Math.min(Math.max(raw, 0), 10);
+  const isDeuce = loserScore >= 10;
+  const winnerScore = isDeuce ? loserScore + 2 : 11;
+  document.getElementById('winnerScoreDisplay').textContent = winnerScore;
+  document.getElementById('deuceNote').textContent = isDeuce ? `Deuce — ${winnerScore}–${loserScore}` : '';
 }
 
-async function skipScoreAndContinue() {
-  await finalizeResult(null);
-}
-
-async function confirmScoreAndContinue() {
-  const consented = document.getElementById('scoreConsentCheckbox').checked;
-  if (!consented) { await finalizeResult(null); return; }
-  const scoreA = parseInt(document.getElementById('consentScoreA').value, 10);
-  const scoreB = parseInt(document.getElementById('consentScoreB').value, 10);
-  if (isNaN(scoreA) || isNaN(scoreB) || scoreA === scoreB) {
-    document.getElementById('scoreConsentError').textContent = 'Scores must be valid and cannot be tied.';
+async function confirmLoserScore() {
+  const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
+  if (isNaN(raw) || raw < 0 || raw > 10) {
+    document.getElementById('scoreEntryError').textContent = 'Enter the losing team\'s score (0–10).';
     return;
   }
-  await finalizeResult({ teamAScore: scoreA, teamBScore: scoreB });
+  await finalizeResult(raw);
 }
 
-async function finalizeResult(scoreData) {
+async function finalizeResult(loserScore) {
   const teamA = resultFlowCourt.team_a;
   const teamB = resultFlowCourt.team_b;
   const winnerTeam = teamA.id === resultFlowWinnerTeamId ? teamA : teamB;
   const loserTeam  = teamA.id === resultFlowWinnerTeamId ? teamB : teamA;
 
-  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, scoreData);
+  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, loserScore);
   await SessionAPI.applyQueuePlacement(
     resultFlowCourt.id, activeSession.id,
     winnerTeam.player_ids, loserTeam.player_ids
