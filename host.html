@@ -1337,9 +1337,54 @@ const SessionAPI = (() => {
     return inserted;
   }
 
+  /**
+   * Permanently delete a completed session and all its data.
+   * Child tables are deleted in dependency order before the session row.
+   * Only completed sessions can be deleted — active sessions must be
+   * finished first.
+   */
+  async function deleteSession(sessionId) {
+    const session = await getSession(sessionId);
+    if (session.status === 'active') {
+      throw new Error('This session is still active. Finish it first before deleting.');
+    }
+
+    // Delete children in safe order (most-dependent first).
+    const tables = [
+      'matches',
+      'tournament_matchups',
+      'manual_queue',
+      'rest_requests',
+      'messages',
+      'teams',
+      'players',
+      'courts',
+    ];
+    for (const table of tables) {
+      const { error } = await supabaseClient.from(table)
+        .delete().eq('session_id', sessionId);
+      // Some tables may not have session_id (unlikely but guard anyway).
+      if (error && error.code !== 'PGRST116') throw error;
+    }
+
+    const { error } = await supabaseClient.from('sessions').delete().eq('id', sessionId);
+    if (error) throw error;
+  }
+
+  /**
+   * Count matches played in a session — shown in the delete confirmation
+   * so the host knows exactly what they're about to lose.
+   */
+  async function getMatchCount(sessionId) {
+    const { count, error } = await supabaseClient.from('matches')
+      .select('id', { count: 'exact', head: true }).eq('session_id', sessionId);
+    if (error) return 0;
+    return count || 0;
+  }
+
   return {
     createSession, getSession, getSessionByReferenceCode, getMySessions,
-    verifySessionPassword, finishSession,
+    verifySessionPassword, finishSession, deleteSession, getMatchCount,
     preRegisterPlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
     createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt,
@@ -1402,7 +1447,10 @@ async function renderSessionList() {
             <div style="font-weight:700;">${escapeHtml(s.name)}</div>
             <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div>
           </div>
-          <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--kitchen-gold);color:var(--ink);border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;">Host Again</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--kitchen-gold);color:var(--ink);border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;">Host Again</button>
+            <button onclick="promptDeleteSession('${s.id}','${escapeHtml(s.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Delete this session permanently">🗑</button>
+          </div>
         </div>
       `).join('')}
     </div>` : ''}
@@ -1440,6 +1488,111 @@ function togglePasswordVisibility(inputId, btn) {
   const showing = input.type === 'text';
   input.type = showing ? 'password' : 'text';
   btn.textContent = showing ? '👁' : '🙈';
+}
+
+/**
+ * Entry point for the delete flow.
+ * If the session's password is already saved in localStorage (host used
+ * it recently), skip straight to the confirmation modal.
+ * Otherwise ask for the password first, verify it, then show confirmation.
+ */
+async function promptDeleteSession(sessionId, sessionName) {
+  if (isSessionUnlocked(sessionId)) {
+    await showDeleteConfirmModal(sessionId, sessionName);
+    return;
+  }
+
+  // Password not cached — ask for it before letting anyone delete.
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="deleteAuthModal">
+      <div class="modal-box" style="max-width:400px;">
+        <h2>Verify Password</h2>
+        <p class="modal-sub">Enter the password for <strong>"${escapeHtml(sessionName)}"</strong> to delete it.</p>
+        <div class="field">
+          <div class="password-field-wrap">
+            <input type="password" id="deleteAuthInput" placeholder="Session password" autocomplete="off"
+              onkeydown="if(event.key==='Enter') verifyDeletePassword('${sessionId}','${escapeHtml(sessionName)}')">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('deleteAuthInput', this)">👁</button>
+          </div>
+        </div>
+        <div class="auth-error" id="deleteAuthError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('deleteAuthModal').remove()">Cancel</button>
+          <button class="btn-yes" style="background:var(--fault-coral);"
+            onclick="verifyDeletePassword('${sessionId}','${escapeHtml(sessionName)}')">Verify</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('deleteAuthInput').focus();
+}
+
+async function verifyDeletePassword(sessionId, sessionName) {
+  const input  = document.getElementById('deleteAuthInput');
+  const errEl  = document.getElementById('deleteAuthError');
+  const btn    = document.querySelector('#deleteAuthModal .btn-yes');
+  if (!input || !errEl) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  const ok = await SessionAPI.verifySessionPassword(sessionId, input.value);
+  if (!ok) {
+    errEl.textContent = 'Incorrect password.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
+    return;
+  }
+
+  // Password correct — cache it and proceed to confirmation.
+  rememberSessionPassword(sessionId, input.value);
+  document.getElementById('deleteAuthModal').remove();
+  await showDeleteConfirmModal(sessionId, sessionName);
+}
+
+/**
+ * Confirmation modal — shows how many matches will be lost so the host
+ * knows exactly what they're deleting before committing.
+ */
+async function showDeleteConfirmModal(sessionId, sessionName) {
+  if (document.getElementById('deleteConfirmModal')) return;
+
+  // Fetch match count so we can warn the host what they're losing.
+  const matchCount = await SessionAPI.getMatchCount(sessionId);
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="deleteConfirmModal">
+      <div class="modal-box" style="max-width:420px;">
+        <h2>Delete This Session?</h2>
+        <p class="modal-sub">
+          <strong>"${escapeHtml(sessionName)}"</strong> will be permanently deleted —
+          all ${matchCount} match${matchCount !== 1 ? 'es' : ''}, player records, and stats for this session.
+          <br><br>
+          <span style="color:var(--fault-coral);font-weight:700;">This cannot be undone.</span>
+        </p>
+        <div class="auth-error" id="deleteConfirmError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('deleteConfirmModal').remove()">Cancel</button>
+          <button class="btn-yes" id="deleteConfirmBtn" style="background:var(--fault-coral);"
+            onclick="confirmDeleteSession('${sessionId}')">Delete Forever</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmDeleteSession(sessionId) {
+  const btn   = document.getElementById('deleteConfirmBtn');
+  const errEl = document.getElementById('deleteConfirmError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+  try {
+    await SessionAPI.deleteSession(sessionId);
+    // Clear the cached unlock so it doesn't linger for a session that no longer exists.
+    localStorage.removeItem(`istackyyy_pw_ok_${sessionId}`);
+    document.getElementById('deleteConfirmModal').remove();
+    await renderSessionList();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not delete — please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete Forever'; }
+  }
 }
 
 async function handleCreateSession() {
