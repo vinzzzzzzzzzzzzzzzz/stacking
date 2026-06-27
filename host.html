@@ -918,6 +918,23 @@ const SessionAPI = (() => {
   }
 
   async function removePlayer(playerId) {
+    // Guard: can't remove someone mid-match — would leave a live court
+    // with a ghost player. Host must wait for the match to end first,
+    // then mark them left from the Roster tab.
+    const { data: player } = await supabaseClient.from('players').select('status').eq('id', playerId).single();
+    if (player?.status === 'playing') {
+      throw new Error('This player is mid-match. Wait for their game to end, then mark them as Left.');
+    }
+    // Deactivate any waiting team they were part of so the pairing engine
+    // doesn't try to send a departed player to a court.
+    const { data: sessionRow } = await supabaseClient.from('players').select('session_id').eq('id', playerId).single();
+    if (sessionRow) {
+      const activeTeams = await getTeams(sessionRow.session_id);
+      const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
+      if (theirTeam) {
+        await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
+      }
+    }
     const { error } = await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
     if (error) throw error;
   }
@@ -940,7 +957,20 @@ const SessionAPI = (() => {
   }
 
   async function returnToQueue(playerId) {
-    await supabaseClient.from('players').update({ status: 'waiting', became_free_at: new Date().toISOString() }).eq('id', playerId);
+    const { data: player } = await supabaseClient.from('players').select('status, session_id').eq('id', playerId).single();
+    if (!player) throw new Error('Player not found.');
+    if (player.status === 'playing') throw new Error('Player is mid-match — they rejoin the queue automatically when their game ends.');
+
+    // Stats (wins, losses, total_games_played, total_points) are NEVER wiped
+    // by rest or leave — they stay on the row the whole time. Setting status
+    // back to 'waiting' is enough to make them reappear in getPlayers(),
+    // the leaderboard, and the queue. No stat restoration needed.
+    //
+    // became_free_at = now puts them at the BACK of the FIFO queue (fair —
+    // they stepped out voluntarily, others have been waiting).
+    await supabaseClient.from('players')
+      .update({ status: 'waiting', became_free_at: new Date().toISOString() })
+      .eq('id', playerId);
   }
 
   // ---------- TEAM / COURT ----------
@@ -1614,9 +1644,11 @@ function copyShareMessage(url, referenceCode) {
 // ============================================================
 async function rosterTabHtml() {
   const players = await SessionAPI.getAllPlayersIncludingLeft(activeSession.id);
-  const active   = players.filter(p => p.status !== 'left');
-  const expected = active.filter(p => p.status === 'expected');
-  const arrived  = active.filter(p => p.status !== 'expected');
+  const expected = players.filter(p => p.status === 'expected');
+  // Arrived = everyone who has physically shown up, including those who
+  // later left — they still show greyed-out so the host can bring them back.
+  const arrived  = players.filter(p => p.status !== 'expected');
+  const activeCount = arrived.filter(p => p.status !== 'left').length;
 
   return `
     <div class="card">
@@ -1657,17 +1689,19 @@ async function rosterTabHtml() {
     </div>` : ''}
 
     <div class="card">
-      <h2>Arrived (${arrived.filter(p=>p.status!=='left').length})</h2>
+      <h2>Arrived (${activeCount} active${arrived.filter(p=>p.status==='left').length ? ` · ${arrived.filter(p=>p.status==='left').length} left` : ''})</h2>
       ${arrived.length ? `
         <div class="table-scroll">
           <table class="roster-table">
-            <thead><tr><th>Name</th><th>Tier</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Tier</th><th>W</th><th>L</th><th>Status</th><th></th></tr></thead>
             <tbody>
               ${arrived.map(p => `
-                <tr style="${p.status === 'left' ? 'opacity:0.4' : ''}">
-                  <td>${escapeHtml(p.name)}</td>
-                  <td>${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
-                  <td><span class="status-pill status-${p.status}">${p.status.replace('_', ' ')}</span></td>
+                <tr style="${p.status === 'left' ? 'opacity:0.38' : ''}">
+                  <td style="font-weight:600;">${escapeHtml(p.name)}</td>
+                  <td style="font-size:11px;color:var(--resting-slate);">${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
+                  <td style="font-family:var(--font-mono);font-size:12px;color:var(--winner-green);font-weight:700;">${p.wins || 0}</td>
+                  <td style="font-family:var(--font-mono);font-size:12px;color:var(--loser-coral);">${p.losses || 0}</td>
+                  <td><span class="status-pill status-${p.status}">${p.status === 'left' ? 'Left' : p.status.replace('_', ' ')}</span></td>
                   <td class="roster-actions">${rosterActionButtons(p)}</td>
                 </tr>
               `).join('')}
@@ -1680,12 +1714,16 @@ async function rosterTabHtml() {
 }
 
 function rosterActionButtons(p) {
-  const restBtn    = `<button class="rest-btn" onclick="handleRestManually('${p.id}')">Rest</button>`;
-  const backBtn    = `<button class="back-btn" onclick="handleReturnToQueue('${p.id}')">Back to Queue</button>`;
-  const leaveBtn   = `<button class="remove-btn" onclick="handleRemovePlayer('${p.id}')">Leave</button>`;
-  if (p.status === 'left')    return backBtn;
+  // "Back to Queue" works from ANY non-playing state — resting, left, expected.
+  // It stamps a fresh became_free_at so they enter the pool at the back of the line.
+  const backBtn  = `<button class="back-btn" onclick="handleReturnToQueue('${p.id}')">↩ Back to Queue</button>`;
+  const restBtn  = `<button class="rest-btn" onclick="handleRestManually('${p.id}')">Rest</button>`;
+  const leaveBtn = `<button class="remove-btn" onclick="handleRemovePlayer('${p.id}')">Mark Left</button>`;
+
+  if (p.status === 'left')    return backBtn; // greyed row — only action is returning
   if (p.status === 'resting') return `${backBtn}${leaveBtn}`;
-  if (p.status === 'playing') return leaveBtn;
+  if (p.status === 'playing') return leaveBtn; // can't rest mid-match, but CAN mark left (guarded in API)
+  // waiting / expected-but-arrived
   return `${restBtn}${leaveBtn}`;
 }
 
