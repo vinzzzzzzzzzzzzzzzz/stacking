@@ -918,22 +918,25 @@ const SessionAPI = (() => {
   }
 
   async function removePlayer(playerId) {
-    // Guard: can't remove someone mid-match — would leave a live court
-    // with a ghost player. Host must wait for the match to end first,
-    // then mark them left from the Roster tab.
-    const { data: player } = await supabaseClient.from('players').select('status').eq('id', playerId).single();
-    if (player?.status === 'playing') {
-      throw new Error('This player is mid-match. Wait for their game to end, then mark them as Left.');
+    const { data: player } = await supabaseClient.from('players')
+      .select('status, session_id').eq('id', playerId).single();
+    if (!player) throw new Error('Player not found.');
+
+    if (player.status === 'playing') {
+      // Mid-match leave: flag them as 'left' now. The court keeps running —
+      // we don't pull anyone off a live game. When the match ends and
+      // applyQueuePlacement runs, it checks each player's current status;
+      // anyone already 'left' is skipped and stays left instead of being
+      // pushed back to the queue.
+      await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
+      return;
     }
-    // Deactivate any waiting team they were part of so the pairing engine
-    // doesn't try to send a departed player to a court.
-    const { data: sessionRow } = await supabaseClient.from('players').select('session_id').eq('id', playerId).single();
-    if (sessionRow) {
-      const activeTeams = await getTeams(sessionRow.session_id);
-      const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
-      if (theirTeam) {
-        await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
-      }
+
+    // Not mid-match — deactivate any waiting team they were part of.
+    const activeTeams = await getTeams(player.session_id);
+    const theirTeam = activeTeams.find(t => t.player_ids.includes(playerId) && t.queue_lane !== 'playing');
+    if (theirTeam) {
+      await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
     }
     const { error } = await supabaseClient.from('players').update({ status: 'left' }).eq('id', playerId);
     if (error) throw error;
@@ -1073,31 +1076,56 @@ const SessionAPI = (() => {
     return court;
   }
 
-  async function applyQueuePlacement(courtId, sessionId, winnerIds, loserIds) {
-    // Winners and losers from the same match MUST get different became_free_at
-    // timestamps, otherwise they all tie and FIFO within the returning group
-    // is non-deterministic (DB sort order is undefined on ties).
-    // Convention: winners re-enter 1 ms ahead of losers — they "finished first"
-    // in the sense that the result was confirmed in their favour. Both are still
-    // behind any player who was already waiting before this match ended, because
-    // those players' became_free_at timestamps predate this moment entirely.
+  /**
+   * Apply individual post-match disposition for all players on this court.
+   *
+   * @param {string} courtId
+   * @param {string} sessionId
+   * @param {Array}  decisions  — [{ playerId, outcome, wasWinner }]
+   *                  outcome: 'queue' | 'rest' | 'left'
+   *                  wasWinner: boolean — determines FIFO timestamp offset
+   *
+   * Players pre-flagged as 'left' mid-match (via removePlayer while playing)
+   * keep their 'left' status regardless of the decision passed here — the
+   * decision modal initialises them as 'left' and locks that choice.
+   */
+  async function applyQueuePlacement(courtId, sessionId, decisions) {
     const nowMs = Date.now();
-    const winnerTs = new Date(nowMs).toISOString();
-    const loserTs  = new Date(nowMs + 1).toISOString();
+    // Winners rejoin 1ms ahead of losers — preserves FIFO ordering within
+    // the returning group (see original comment in this function).
+    const tsWinner = new Date(nowMs).toISOString();
+    const tsLoser  = new Date(nowMs + 1).toISOString();
 
-    if (winnerIds.length > 0) {
-      await supabaseClient.from('players')
-        .update({ status: 'waiting', became_free_at: winnerTs, last_match_result: 'won' })
-        .in('id', winnerIds);
+    for (const { playerId, outcome, wasWinner } of decisions) {
+      // Re-fetch to check if they were pre-flagged left mid-match.
+      const { data: current } = await supabaseClient.from('players')
+        .select('status').eq('id', playerId).single();
+      if (current?.status === 'left') continue; // respect pre-flagged leave
+
+      const ts = wasWinner ? tsWinner : tsLoser;
+      const lastResult = wasWinner ? 'won' : 'lost';
+
+      if (outcome === 'queue') {
+        await supabaseClient.from('players').update({
+          status: 'waiting', became_free_at: ts, last_match_result: lastResult,
+        }).eq('id', playerId);
+      } else if (outcome === 'rest') {
+        await supabaseClient.from('players').update({
+          status: 'resting', last_match_result: lastResult,
+        }).eq('id', playerId);
+      } else if (outcome === 'left') {
+        await supabaseClient.from('players').update({
+          status: 'left', last_match_result: lastResult,
+        }).eq('id', playerId);
+      }
     }
-    if (loserIds.length > 0) {
-      await supabaseClient.from('players')
-        .update({ status: 'waiting', became_free_at: loserTs, last_match_result: 'lost' })
-        .in('id', loserIds);
-    }
-    const { data: court } = await supabaseClient.from('courts').select('team_a_id, team_b_id').eq('id', courtId).single();
+
+    // Deactivate the teams and free the court.
+    const { data: court } = await supabaseClient.from('courts')
+      .select('team_a_id, team_b_id').eq('id', courtId).single();
     if (court) {
-      await supabaseClient.from('teams').update({ is_active: false }).in('id', [court.team_a_id, court.team_b_id]);
+      await supabaseClient.from('teams').update({ is_active: false })
+        .in('id', [court.team_a_id, court.team_b_id]);
     }
     await supabaseClient.from('courts')
       .update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null })
@@ -1986,31 +2014,171 @@ async function confirmLoserScore() {
 }
 
 async function finalizeResult(loserScore) {
-  const teamA = resultFlowCourt.team_a;
-  const teamB = resultFlowCourt.team_b;
-  const winnerTeam = teamA.id === resultFlowWinnerTeamId ? teamA : teamB;
-  const loserTeam  = teamA.id === resultFlowWinnerTeamId ? teamB : teamA;
-
+  // Save the match result first (stats written, match row inserted).
   await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, loserScore);
-  await SessionAPI.applyQueuePlacement(
-    resultFlowCourt.id, activeSession.id,
-    winnerTeam.player_ids, loserTeam.player_ids
-  );
-  // Only clear the modal and flag after both DB writes succeed.
-  _resultInFlight = false;
-  closeResultModal();
-  if (activeTab === 'courts') {
-    const panel = document.getElementById('tabPanel');
-    if (panel) await renderCourtsTab(panel);
+
+  // Now show the per-player disposition step.
+  // Court stays in_progress until the host confirms everyone's fate —
+  // this prevents the next match from auto-filling before decisions are made.
+  _resultInFlight = false; // release the score-entry guard; disposition has its own
+  await showPlayerDispositionModal(loserScore);
+}
+
+// Per-player outcomes: keyed by player ID.
+// Populated by the disposition modal, submitted by confirmDispositions().
+let _dispositions = {};
+
+/**
+ * Show the disposition modal — one card per player, each with
+ * Queue / Rest / Leave toggle. Default is Queue.
+ * Players pre-flagged as 'left' (mid-match leave) start locked on Leave.
+ */
+async function showPlayerDispositionModal(loserScore) {
+  if (document.getElementById('dispositionModal')) return;
+
+  const winnerTeam = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_a : resultFlowCourt.team_b;
+  const loserTeam  = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_b : resultFlowCourt.team_a;
+
+  const allPlayers = await SessionAPI.getPlayers(activeSession.id);
+  // Also fetch left players so we can show pre-flagged ones.
+  const allIncLeft = await SessionAPI.getAllPlayersIncludingLeft(activeSession.id);
+  const playerById = Object.fromEntries(allIncLeft.map(p => [p.id, p]));
+
+  // Build full player list: winners first, then losers.
+  const winnerIds = winnerTeam?.player_ids || [];
+  const loserIds  = loserTeam?.player_ids  || [];
+
+  // Initialise decisions: Queue by default, Left if pre-flagged.
+  _dispositions = {};
+  [...winnerIds, ...loserIds].forEach(pid => {
+    const p = playerById[pid];
+    _dispositions[pid] = p?.status === 'left' ? 'left' : 'queue';
+  });
+
+  function playerCard(pid, isWinner) {
+    const p = playerById[pid];
+    const name = p?.name || '—';
+    const preLeft = p?.status === 'left';
+    const roleLabel = isWinner
+      ? `<span style="font-size:10px;font-weight:800;color:var(--winner-green);letter-spacing:0.05em;text-transform:uppercase;">Won</span>`
+      : `<span style="font-size:10px;font-weight:800;color:var(--loser-coral);letter-spacing:0.05em;text-transform:uppercase;">Lost</span>`;
+
+    if (preLeft) {
+      // Already marked left mid-match — locked, can't change here.
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:var(--radius-sm);background:var(--surface-hover);border:1px solid var(--border-card);margin-bottom:8px;gap:10px;">
+          <div>
+            ${roleLabel}
+            <div style="font-weight:700;font-size:14px;margin-top:2px;">${escapeHtml(name)}</div>
+          </div>
+          <span style="font-size:11px;font-weight:700;color:var(--bench-slate);background:var(--surface-raised);padding:5px 12px;border-radius:999px;border:1px solid var(--border-soft);">Left (flagged)</span>
+        </div>`;
+    }
+
+    return `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:var(--radius-sm);background:var(--surface-hover);border:1px solid var(--border-card);margin-bottom:8px;gap:10px;flex-wrap:wrap;">
+        <div style="flex-shrink:0;">
+          ${roleLabel}
+          <div style="font-weight:700;font-size:14px;margin-top:2px;">${escapeHtml(name)}</div>
+        </div>
+        <div style="display:flex;gap:6px;" id="disp-btns-${pid}">
+          ${['queue','rest','left'].map(opt => {
+            const labels = { queue: '↩ Queue', rest: '☕ Rest', left: '🚪 Leave' };
+            const colors = { queue: 'var(--waiting-blue)', rest: 'var(--bench-slate)', left: 'var(--fault-coral)' };
+            const isActive = _dispositions[pid] === opt;
+            return `<button
+              id="disp-${pid}-${opt}"
+              onclick="setDisposition('${pid}','${opt}')"
+              style="
+                font-size:12px;font-weight:700;padding:7px 12px;border-radius:var(--radius-sm);
+                border:2px solid ${isActive ? colors[opt] : 'var(--border-soft)'};
+                background:${isActive ? colors[opt] : 'transparent'};
+                color:${isActive ? 'white' : 'var(--ink-muted)'};
+                min-height:0;cursor:pointer;transition:all 0.15s;
+              ">${labels[opt]}</button>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  const winnerCards = winnerIds.map(pid => playerCard(pid, true)).join('');
+  const loserCards  = loserIds.map(pid  => playerCard(pid, false)).join('');
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="dispositionModal">
+      <div class="modal-box" style="max-width:520px;">
+        <h2>What's next for each player?</h2>
+        <p class="modal-sub">Court ${resultFlowCourt.court_number} — choose Queue, Rest, or Leave for each player. They don't all have to do the same thing.</p>
+        ${winnerCards}
+        ${loserCards}
+        <div class="auth-error" id="dispositionError"></div>
+        <div class="confirm-actions" style="margin-top:4px;">
+          <button class="btn-yes" id="dispositionConfirmBtn" onclick="confirmDispositions()">Confirm &amp; Free Court</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+function setDisposition(playerId, outcome) {
+  _dispositions[playerId] = outcome;
+
+  const colors = { queue: 'var(--waiting-blue)', rest: 'var(--bench-slate)', left: 'var(--fault-coral)' };
+  const container = document.getElementById(`disp-btns-${playerId}`);
+  if (!container) return;
+
+  container.querySelectorAll('button').forEach(btn => {
+    const btnOutcome = btn.id.split('-').pop(); // disp-{pid}-{outcome}
+    const active = btnOutcome === outcome;
+    btn.style.background    = active ? colors[btnOutcome] : 'transparent';
+    btn.style.borderColor   = active ? colors[btnOutcome] : 'var(--border-soft)';
+    btn.style.color         = active ? 'white' : 'var(--ink-muted)';
+  });
+}
+
+async function confirmDispositions() {
+  const btn   = document.getElementById('dispositionConfirmBtn');
+  const errEl = document.getElementById('dispositionError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const winnerTeam = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_a : resultFlowCourt.team_b;
+  const loserTeam  = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_b : resultFlowCourt.team_a;
+  const winnerIds = winnerTeam?.player_ids || [];
+  const loserIds  = loserTeam?.player_ids  || [];
+
+  const decisions = [
+    ...winnerIds.map(pid => ({ playerId: pid, outcome: _dispositions[pid] || 'queue', wasWinner: true  })),
+    ...loserIds.map( pid => ({ playerId: pid, outcome: _dispositions[pid] || 'queue', wasWinner: false })),
+  ];
+
+  try {
+    await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, decisions);
+    document.getElementById('dispositionModal').remove();
+    closeResultModal();
+    _dispositions = {};
+    if (activeTab === 'courts') {
+      const panel = document.getElementById('tabPanel');
+      if (panel) await renderCourtsTab(panel);
+    }
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Something went wrong — please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirm & Free Court'; }
   }
 }
 
 function closeResultModal() {
   const modal = document.getElementById('resultModal');
   if (modal) modal.remove();
+  const dispModal = document.getElementById('dispositionModal');
+  if (dispModal) dispModal.remove();
   resultFlowCourt = null;
   resultFlowWinnerTeamId = null;
   _resultInFlight = false;
+  _dispositions = {};
 }
 
 // ============================================================
