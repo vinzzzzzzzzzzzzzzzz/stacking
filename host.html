@@ -1614,7 +1614,11 @@ async function renderSessionList() {
               · ${new Date(s.created_at).toLocaleDateString()}
             </div>
           </div>
-          <button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;" onclick="openSession('${s.id}')">Open</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            ${s.session_type === 'tournament'
+              ? `<a href="tournament.html?session=${s.id}" style="background:rgba(215,242,61,0.15);color:var(--optic-yellow);border:1px solid rgba(215,242,61,0.3);padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;min-height:40px;">🏆 Manage</a>`
+              : `<button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;" onclick="openSession('${s.id}')">Open</button>`}
+          </div>
         </div>
       `).join('') : '<p style="color:var(--resting-slate);font-size:13px;">No active sessions yet.</p>'}
     </div>
