@@ -659,6 +659,42 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
+// HOST ACCOUNT API
+// Manages login/logout for host accounts created by the superadmin.
+// Credentials are stored in the host_accounts table with SHA-256 hashed passwords.
+// ============================================================
+const CURRENT_HOST_KEY = 'istackyyy_host_session';
+
+function getSavedHost() {
+  try { return JSON.parse(localStorage.getItem(CURRENT_HOST_KEY)); } catch { return null; }
+}
+function saveHostSession(host) {
+  localStorage.setItem(CURRENT_HOST_KEY, JSON.stringify({ id: host.id, name: host.name, username: host.username }));
+}
+function clearHostSession() {
+  localStorage.removeItem(CURRENT_HOST_KEY);
+}
+
+const AccountAPI = (() => {
+  async function loginHost(username, password) {
+    const hash = await hashPassword(password);
+    const { data, error } = await supabaseClient
+      .from('host_accounts')
+      .select('id, name, username, is_active')
+      .eq('username', username.trim())
+      .eq('password_hash', hash)
+      .single();
+    if (error || !data) throw new Error('Incorrect username or password.');
+    if (!data.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
+    return data;
+  }
+  return { loginHost };
+})();
+
+// Current logged-in host — populated after login, null otherwise.
+let currentHost = getSavedHost() || null;
+
+// ============================================================
 // STACKING / PAIRING ENGINE
 // ============================================================
 const TIER_RANK = { beginner: 0, intermediate: 1, advanced: 2, open: -1 };
@@ -818,6 +854,7 @@ const SessionAPI = (() => {
           scoring_mode: 'win_loss',
           points_to_win: 11,
           reference_code: referenceCode,
+          host_id: currentHost?.id || null,
         })
         .select().single();
       session = result.data;
@@ -849,7 +886,11 @@ const SessionAPI = (() => {
   }
 
   async function getMySessions() {
-    const { data, error } = await supabaseClient.from('sessions').select('*').order('created_at', { ascending: false });
+    if (!currentHost?.id) return [];
+    const { data, error } = await supabaseClient
+      .from('sessions').select('*')
+      .eq('host_id', currentHost.id)
+      .order('created_at', { ascending: false });
     if (error) throw error;
     return data;
   }
@@ -1408,12 +1449,86 @@ let _prevHostCourtStates = {};
 init();
 
 async function init() {
-  document.getElementById('topbarRight').innerHTML = '';
+  applyThemeIcon();
+  if (!currentHost) {
+    renderLoginScreen();
+    return;
+  }
+  // Show host name and logout button in topbar.
+  renderTopbarHost();
   try { await renderSessionList(); }
   catch (err) {
     document.getElementById('appRoot').innerHTML =
-      `<div class="card"><h2>Couldn't load sessions</h2><p style="color:var(--loser-coral);font-size:13px;">${escapeHtml(err.message)}</p></div>`;
+      `<div class="card"><h2>Couldn't load sessions</h2><p style="color:var(--fault-coral);font-size:13px;">${escapeHtml(err.message)}</p></div>`;
   }
+}
+
+function renderTopbarHost() {
+  const el = document.getElementById('topbarRight');
+  if (!el || !currentHost) return;
+  el.innerHTML = `
+    <span style="font-size:12px;color:rgba(242,244,240,0.65);font-weight:600;">
+      ${escapeHtml(currentHost.name)}
+    </span>
+    <button onclick="hostLogout()" style="background:rgba(255,122,92,0.18);border:1px solid rgba(255,122,92,0.4);color:var(--fault-coral);padding:6px 12px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:34px;">
+      Log Out
+    </button>
+  `;
+}
+
+function renderLoginScreen() {
+  document.getElementById('topbarRight').innerHTML = '';
+  document.getElementById('appRoot').innerHTML = `
+    <div class="auth-box" style="margin-top:96px;">
+      <h1 style="font-size:18px;margin-bottom:4px;">Host Login</h1>
+      <p class="sub">Sign in with your iStackyyy host account.</p>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="loginUsername" placeholder="your username" autocomplete="username"
+          onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="loginPassword" placeholder="password" autocomplete="current-password"
+            onkeydown="if(event.key==='Enter')handleHostLogin()">
+          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('loginPassword',this)">👁</button>
+        </div>
+      </div>
+      <div class="auth-error" id="loginError"></div>
+      <button class="btn-primary" onclick="handleHostLogin()">Sign In</button>
+    </div>
+  `;
+  document.getElementById('loginUsername')?.focus();
+}
+
+async function handleHostLogin() {
+  const username = document.getElementById('loginUsername')?.value?.trim();
+  const password = document.getElementById('loginPassword')?.value;
+  const errEl    = document.getElementById('loginError');
+  const btn      = document.querySelector('.auth-box .btn-primary');
+  if (!username || !password) { if(errEl) errEl.textContent = 'Enter your username and password.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+  try {
+    const host = await AccountAPI.loginHost(username, password);
+    currentHost = host;
+    saveHostSession(host);
+    renderTopbarHost();
+    await renderSessionList();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Login failed.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Sign In'; }
+  }
+}
+
+function hostLogout() {
+  currentHost = null;
+  clearHostSession();
+  // Also clear all session unlocks — they belong to this host's session.
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  if (hostTimerInterval) clearInterval(hostTimerInterval);
+  activeSession = null;
+  renderLoginScreen();
 }
 
 // ============================================================
