@@ -832,10 +832,7 @@ function generateReferenceCode() {
 // ============================================================
 const SessionAPI = (() => {
 
-  async function createSession({ name, format, courtCount, password, restPriorityEnabled }) {
-    if (!password || password.length < 4) throw new Error('Password must be at least 4 characters.');
-    const passwordHash = await hashPassword(password);
-
+  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled }) {
     let session, error;
     for (let attempt = 0; attempt < 5; attempt++) {
       const referenceCode = generateReferenceCode();
@@ -848,9 +845,12 @@ const SessionAPI = (() => {
           skill_match_mode: 'open',
           rest_priority_enabled: restPriorityEnabled !== false,
           allow_cross_lane_fill: true,
-          password_hash: passwordHash,
-          session_type: 'open_play',
-          open_play_mode: 'automated',
+          password_hash: null,
+          session_type: sessionType || 'open_play',
+          open_play_mode: sessionType === 'open_play' ? 'automated' : null,
+          tournament_format: sessionType === 'tournament' ? 'round_robin' : null,
+          division: sessionType === 'tournament' ? (division || null) : null,
+          category: sessionType === 'tournament' ? (category || null) : null,
           scoring_mode: 'win_loss',
           points_to_win: 11,
           reference_code: referenceCode,
@@ -1534,10 +1534,32 @@ function hostLogout() {
 // ============================================================
 // SESSION LIST
 // ============================================================
+const SESSION_TYPE_LABELS = {
+  open_play: 'Open Play',
+  tournament: 'Tournament',
+};
+const DIVISION_SHORT = {
+  mixed_doubles: 'Mixed Doubles', womens_doubles: "Women's Doubles",
+  mens_doubles: "Men's Doubles", mixed_singles: 'Mixed Singles',
+  mens_singles: "Men's Singles", womens_singles: "Women's Singles",
+};
+const CATEGORY_LABELS = { novice: 'Novice', beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced' };
+
+function sessionTypeBadge(s) {
+  if (s.session_type === 'tournament') {
+    const parts = [s.category ? CATEGORY_LABELS[s.category] : null, s.division ? DIVISION_SHORT[s.division] : null].filter(Boolean);
+    return `<span style="font-size:10px;background:rgba(215,242,61,0.18);color:var(--optic-yellow);padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;letter-spacing:0.04em;">TOURNAMENT${parts.length ? ' · ' + parts.join(' · ') : ''}</span>`;
+  }
+  return `<span style="font-size:10px;background:rgba(111,168,224,0.18);color:var(--waiting-blue);padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;letter-spacing:0.04em;">OPEN PLAY</span>`;
+}
+
+let _newSessionType = 'open_play'; // tracks selected type in create form
+
 async function renderSessionList() {
+  _newSessionType = 'open_play';
   const sessions = await SessionAPI.getMySessions();
   const active    = sessions.filter(s => s.status === 'active');
-  const completed = sessions.filter(s => s.status === 'completed').slice(0, 10);
+  const completed = sessions.filter(s => s.status === 'completed').slice(0, 15);
 
   document.getElementById('appRoot').innerHTML = `
     <div class="card">
@@ -1545,10 +1567,14 @@ async function renderSessionList() {
       ${active.length ? active.map(s => `
         <div class="session-row">
           <div>
-            <div style="font-weight:700;">${escapeHtml(s.name)}</div>
-            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''} · ${new Date(s.created_at).toLocaleDateString()}</div>
+            <div style="font-weight:700;">${escapeHtml(s.name)}${sessionTypeBadge(s)}</div>
+            <div class="meta">
+              <span class="ref-code-pill mono">${s.reference_code || '—'}</span>
+              · ${s.format} · ${s.court_count} court${s.court_count > 1 ? 's' : ''}
+              · ${new Date(s.created_at).toLocaleDateString()}
+            </div>
           </div>
-          <button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;" onclick="promptOpenSession('${s.id}')">Open</button>
+          <button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;" onclick="openSession('${s.id}')">Open</button>
         </div>
       `).join('') : '<p style="color:var(--resting-slate);font-size:13px;">No active sessions yet.</p>'}
     </div>
@@ -1559,106 +1585,156 @@ async function renderSessionList() {
       ${completed.map(s => `
         <div class="session-row">
           <div>
-            <div style="font-weight:700;">${escapeHtml(s.name)}</div>
-            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · ${s.format} · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div>
+            <div style="font-weight:700;">${escapeHtml(s.name)}${sessionTypeBadge(s)}</div>
+            <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
-            <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--kitchen-gold);color:var(--ink);border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;">Host Again</button>
-            <button onclick="promptDeleteSession('${s.id}','${escapeHtml(s.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Delete this session permanently">🗑</button>
+            <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--surface-raised);color:var(--ink);border:1px solid var(--border-soft);padding:8px 14px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;">Host Again</button>
+            <button onclick="promptDeleteSession('${s.id}','${escapeHtml(s.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Delete permanently">🗑</button>
           </div>
         </div>
       `).join('')}
     </div>` : ''}
 
     <div class="card">
-      <h2>Start New Session</h2>
+      <h2>New Session</h2>
+
+      <!-- Session type toggle -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px;">
+        <button id="typeOpenPlayBtn" onclick="selectNewSessionType('open_play')"
+          style="padding:13px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:2px solid var(--court-paint);background:var(--court-paint);color:white;transition:all 0.15s;">
+          🎾 Open Play
+        </button>
+        <button id="typeTournamentBtn" onclick="selectNewSessionType('tournament')"
+          style="padding:13px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:2px solid var(--border-soft);background:transparent;color:var(--ink-muted);transition:all 0.15s;">
+          🏆 Tournament
+        </button>
+      </div>
+
+      <!-- Common fields -->
       <div class="form-grid">
         <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
-        <div class="field"><label>Format</label><select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select></div>
         <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
-        <div class="field">
-          <label>Session Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="newPassword" placeholder="At least 4 characters" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('newPassword', this)">👁</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Confirm Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="newPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('newPasswordConfirm', this)">👁</button>
+      </div>
+
+      <!-- Open Play only -->
+      <div id="openPlayFields">
+        <div class="form-grid">
+          <div class="field"><label>Format</label>
+            <select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select>
           </div>
         </div>
       </div>
-      <p style="font-size:11px;color:var(--resting-slate);margin:-6px 0 10px;">Protects the host console — anyone with the link will need it.</p>
+
+      <!-- Tournament only -->
+      <div id="tournamentFields" style="display:none;">
+        <div class="form-grid">
+          <div class="field"><label>Category / Level</label>
+            <select id="newCategory">
+              <option value="novice">Novice</option>
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </div>
+          <div class="field"><label>Division</label>
+            <select id="newDivision" onchange="syncFormatFromDivision()">
+              <option value="mixed_doubles">Mixed Doubles</option>
+              <option value="womens_doubles">Women's Doubles</option>
+              <option value="mens_doubles">Men's Doubles</option>
+              <option value="mixed_singles">Mixed Singles</option>
+              <option value="mens_singles">Men's Singles</option>
+              <option value="womens_singles">Women's Singles</option>
+            </select>
+          </div>
+        </div>
+        <p style="font-size:11px;color:var(--bench-slate);margin:-4px 0 12px;">
+          After creating, go to the <strong>Brackets</strong> tab to set up divisions, add teams, and generate the draw.
+        </p>
+      </div>
+
       <button class="btn-primary" onclick="handleCreateSession()">Create Session</button>
       <div class="auth-error" id="createSessionError"></div>
     </div>
   `;
 }
 
-function togglePasswordVisibility(inputId, btn) {
-  const input = document.getElementById(inputId);
-  const showing = input.type === 'text';
-  input.type = showing ? 'password' : 'text';
-  btn.textContent = showing ? '👁' : '🙈';
+function selectNewSessionType(type) {
+  _newSessionType = type;
+  const openBtn = document.getElementById('typeOpenPlayBtn');
+  const tourBtn = document.getElementById('typeTournamentBtn');
+  const openFields = document.getElementById('openPlayFields');
+  const tourFields = document.getElementById('tournamentFields');
+  if (type === 'open_play') {
+    openBtn.style.background = 'var(--court-paint)';
+    openBtn.style.borderColor = 'var(--court-paint)';
+    openBtn.style.color = 'white';
+    tourBtn.style.background = 'transparent';
+    tourBtn.style.borderColor = 'var(--border-soft)';
+    tourBtn.style.color = 'var(--ink-muted)';
+    openFields.style.display = '';
+    tourFields.style.display = 'none';
+    document.getElementById('newName').value = 'Open Play';
+  } else {
+    tourBtn.style.background = 'rgba(215,242,61,0.12)';
+    tourBtn.style.borderColor = 'var(--optic-yellow)';
+    tourBtn.style.color = 'var(--optic-yellow)';
+    openBtn.style.background = 'transparent';
+    openBtn.style.borderColor = 'var(--border-soft)';
+    openBtn.style.color = 'var(--ink-muted)';
+    openFields.style.display = 'none';
+    tourFields.style.display = '';
+    document.getElementById('newName').value = 'Tournament';
+  }
+}
+
+function syncFormatFromDivision() {
+  const div = document.getElementById('newDivision')?.value || '';
+  // Format is implied by division — singles divisions → singles format
+  // This is stored internally; no separate format picker needed for tournament.
+}
+
+async function handleCreateSession() {
+  const name = document.getElementById('newName').value.trim() || 'Session';
+  const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
+  const errorEl = document.getElementById('createSessionError');
+  errorEl.textContent = '';
+
+  let format, category, division;
+  if (_newSessionType === 'tournament') {
+    category = document.getElementById('newCategory').value;
+    division = document.getElementById('newDivision').value;
+    format = division.endsWith('_singles') ? 'singles' : 'doubles';
+  } else {
+    format = document.getElementById('newFormat').value;
+  }
+
+  try {
+    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division });
+    await openSession(session.id);
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+}
+
+// ============================================================
+// PASSWORD GATE — simplified: sessions no longer have passwords.
+// Kept as stubs so existing calls don't break.
+// ============================================================
+function rememberSessionPassword(sessionId) {
+  localStorage.setItem(`istackyyy_pw_ok_${sessionId}`, 'unlocked');
+}
+function isSessionUnlocked(sessionId) {
+  return true; // No session password — host account is the auth layer
+}
+async function promptOpenSession(sessionId) {
+  await openSession(sessionId);
 }
 
 /**
- * Entry point for the delete flow.
- * If the session's password is already saved in localStorage (host used
- * it recently), skip straight to the confirmation modal.
- * Otherwise ask for the password first, verify it, then show confirmation.
+ * Delete flow — no password gate needed since host is already authenticated.
  */
 async function promptDeleteSession(sessionId, sessionName) {
-  if (isSessionUnlocked(sessionId)) {
-    await showDeleteConfirmModal(sessionId, sessionName);
-    return;
-  }
-
-  // Password not cached — ask for it before letting anyone delete.
-  document.body.insertAdjacentHTML('beforeend', `
-    <div class="modal-backdrop" id="deleteAuthModal">
-      <div class="modal-box" style="max-width:400px;">
-        <h2>Verify Password</h2>
-        <p class="modal-sub">Enter the password for <strong>"${escapeHtml(sessionName)}"</strong> to delete it.</p>
-        <div class="field">
-          <div class="password-field-wrap">
-            <input type="password" id="deleteAuthInput" placeholder="Session password" autocomplete="off"
-              onkeydown="if(event.key==='Enter') verifyDeletePassword('${sessionId}','${escapeHtml(sessionName)}')">
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('deleteAuthInput', this)">👁</button>
-          </div>
-        </div>
-        <div class="auth-error" id="deleteAuthError"></div>
-        <div class="confirm-actions">
-          <button class="btn-no" onclick="document.getElementById('deleteAuthModal').remove()">Cancel</button>
-          <button class="btn-yes" style="background:var(--fault-coral);"
-            onclick="verifyDeletePassword('${sessionId}','${escapeHtml(sessionName)}')">Verify</button>
-        </div>
-      </div>
-    </div>
-  `);
-  document.getElementById('deleteAuthInput').focus();
-}
-
-async function verifyDeletePassword(sessionId, sessionName) {
-  const input  = document.getElementById('deleteAuthInput');
-  const errEl  = document.getElementById('deleteAuthError');
-  const btn    = document.querySelector('#deleteAuthModal .btn-yes');
-  if (!input || !errEl) return;
-
-  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
-  const ok = await SessionAPI.verifySessionPassword(sessionId, input.value);
-  if (!ok) {
-    errEl.textContent = 'Incorrect password.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Verify'; }
-    return;
-  }
-
-  // Password correct — cache it and proceed to confirmation.
-  rememberSessionPassword(sessionId, input.value);
-  document.getElementById('deleteAuthModal').remove();
   await showDeleteConfirmModal(sessionId, sessionName);
 }
 
@@ -1710,63 +1786,15 @@ async function confirmDeleteSession(sessionId) {
   }
 }
 
-async function handleCreateSession() {
-  const name = document.getElementById('newName').value.trim() || 'Open Play';
-  const format = document.getElementById('newFormat').value;
-  const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
-  const password = document.getElementById('newPassword').value;
-  const passwordConfirm = document.getElementById('newPasswordConfirm').value;
-  const errorEl = document.getElementById('createSessionError');
-  errorEl.textContent = '';
-
-  if (password !== passwordConfirm) { errorEl.textContent = 'Passwords do not match.'; return; }
-  if (!password || password.length < 4) { errorEl.textContent = 'Password must be at least 4 characters.'; return; }
-
-  try {
-    const session = await SessionAPI.createSession({ name, format, courtCount, password });
-    rememberSessionPassword(session.id, password);
-    await openSession(session.id);
-  } catch (err) {
-    errorEl.textContent = err.message;
-  }
-}
 
 // ============================================================
-// PASSWORD GATE
+// PASSWORD GATE — stubs only; sessions no longer have passwords
 // ============================================================
 function rememberSessionPassword(sessionId) {
   localStorage.setItem(`istackyyy_pw_ok_${sessionId}`, 'unlocked');
 }
-function isSessionUnlocked(sessionId) {
-  return localStorage.getItem(`istackyyy_pw_ok_${sessionId}`) === 'unlocked';
-}
-async function promptOpenSession(sessionId) {
-  if (isSessionUnlocked(sessionId)) { await openSession(sessionId); return; }
-  const session = await SessionAPI.getSession(sessionId);
-  document.body.insertAdjacentHTML('beforeend', `
-    <div class="modal-backdrop" id="pwModal">
-      <div class="modal-box">
-        <h2>Enter Password</h2>
-        <p class="modal-sub">"${escapeHtml(session.name)}" is password-protected.</p>
-        <div class="field"><input type="password" id="sessionPwInput" placeholder="Session password" autocomplete="off" onkeydown="if(event.key==='Enter') confirmSessionPassword('${sessionId}')"></div>
-        <div class="auth-error" id="pwModalError"></div>
-        <div class="confirm-actions">
-          <button class="btn-no" onclick="document.getElementById('pwModal').remove()">Cancel</button>
-          <button class="btn-yes" onclick="confirmSessionPassword('${sessionId}')">Unlock</button>
-        </div>
-      </div>
-    </div>
-  `);
-  document.getElementById('sessionPwInput').focus();
-}
-async function confirmSessionPassword(sessionId) {
-  const input = document.getElementById('sessionPwInput').value;
-  const ok = await SessionAPI.verifySessionPassword(sessionId, input);
-  if (!ok) { document.getElementById('pwModalError').textContent = 'Incorrect password.'; return; }
-  rememberSessionPassword(sessionId, input);
-  document.getElementById('pwModal').remove();
-  await openSession(sessionId);
-}
+function isSessionUnlocked() { return true; }
+async function promptOpenSession(sessionId) { await openSession(sessionId); }
 
 // ============================================================
 // OPEN SESSION
@@ -1815,6 +1843,7 @@ async function renderConsole() {
 
     <div class="tabs">
       <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
+      ${activeSession.session_type === 'tournament' ? `<button class="tab-btn ${activeTab === 'brackets' ? 'active' : ''}" onclick="switchTab('brackets')">Brackets</button>` : ''}
       <button class="tab-btn ${activeTab === 'courts' ? 'active' : ''}" onclick="switchTab('courts')">Courts</button>
       <button class="tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}" onclick="switchTab('leaderboard')">Leaderboard</button>
       <button class="tab-btn ${activeTab === 'inbox' ? 'active' : ''}" onclick="switchTab('inbox')">Inbox <span class="inbox-badge" id="inboxBadge" style="display:none;"></span></button>
@@ -1848,13 +1877,6 @@ async function handleFinishSession() {
 }
 
 async function startHostAgainFlow(oldSessionId) {
-  if (!isSessionUnlocked(oldSessionId)) {
-    const password = prompt('Enter the password for this finished session:');
-    if (password === null) return;
-    const ok = await SessionAPI.verifySessionPassword(oldSessionId, password);
-    if (!ok) { alert('Incorrect password.'); return; }
-    rememberSessionPassword(oldSessionId, password);
-  }
   const oldSession = await SessionAPI.getSession(oldSessionId);
   const oldPlayers = await SessionAPI.getPlayers(oldSessionId);
 
@@ -1865,7 +1887,6 @@ async function startHostAgainFlow(oldSessionId) {
         <p class="modal-sub">New session based on "${escapeHtml(oldSession.name)}". Select players to carry over.</p>
         <div class="field"><label>New Session Name</label><input type="text" id="hostAgainName" value="${escapeHtml(oldSession.name)} (2)"></div>
         <div class="field"><label>Number of Courts</label><input type="number" id="hostAgainCourts" value="${oldSession.court_count}" min="1" max="20"></div>
-        <div class="field"><label>New Session Password</label><input type="password" id="hostAgainPassword" placeholder="At least 4 characters"></div>
         <p style="font-size:12px;font-weight:700;margin:14px 0 8px;">Players to carry over (they'll start as Expected):</p>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;" id="hostAgainChecklist">
           ${oldPlayers.filter(p => p.status !== 'left').map(p => `
@@ -1885,17 +1906,14 @@ async function startHostAgainFlow(oldSessionId) {
 async function confirmHostAgain(oldSessionId) {
   const name = document.getElementById('hostAgainName').value.trim() || 'Open Play';
   const courtCount = parseInt(document.getElementById('hostAgainCourts').value, 10) || 1;
-  const password = document.getElementById('hostAgainPassword').value;
   const errorEl = document.getElementById('hostAgainError');
-  if (!password || password.length < 4) { errorEl.textContent = 'Password must be at least 4 characters.'; return; }
 
   const oldSession = await SessionAPI.getSession(oldSessionId);
   const chips = [...document.querySelectorAll('#hostAgainChecklist .player-check.selected')];
   const carryPlayers = chips.map(el => ({ name: el.dataset.name, skill_tier: el.dataset.tier }));
 
   try {
-    const newSession = await SessionAPI.createSession({ name, format: oldSession.format, courtCount, password });
-    rememberSessionPassword(newSession.id, password);
+    const newSession = await SessionAPI.createSession({ name, format: oldSession.format, courtCount, sessionType: oldSession.session_type || 'open_play' });
     if (carryPlayers.length > 0) await SessionAPI.carryPlayersToNewSession(newSession.id, carryPlayers);
     document.getElementById('hostAgainModal').remove();
     await openSession(newSession.id);
@@ -1918,6 +1936,7 @@ async function renderActiveTab() {
   const panel = document.getElementById('tabPanel');
   if (!panel) return;
   if (activeTab === 'roster')      panel.innerHTML = await rosterTabHtml();
+  if (activeTab === 'brackets')    panel.innerHTML = await bracketsTabHtml();
   if (activeTab === 'courts')      await renderCourtsTab(panel);
   if (activeTab === 'leaderboard') panel.innerHTML = await leaderboardTabHtml();
   if (activeTab === 'inbox')       panel.innerHTML = await inboxTabHtml();
@@ -2447,6 +2466,921 @@ function closeResultModal() {
   resultFlowWinnerTeamId = null;
   _resultInFlight = false;
   _dispositions = {};
+}
+
+// ============================================================
+// BRACKETS TAB — Tournament bracket management
+// ============================================================
+
+// ── Utility: smallest power of 2 >= n ──
+function nextPowerOf2(n) {
+  if (n <= 2) return 2;
+  let p = 2;
+  while (p < n) p *= 2;
+  return p;
+}
+
+// ── Utility: number of rounds in a single-elim bracket ──
+function bracketRounds(slots) {
+  return Math.log2(slots);
+}
+
+// ── Utility: friendly round name ──
+function roundName(round, totalRounds) {
+  const remaining = totalRounds - round + 1;
+  if (remaining === 1) return 'Final';
+  if (remaining === 2) return 'Semifinal';
+  if (remaining === 3) return 'Quarterfinal';
+  return `Round ${round}`;
+}
+
+// ── Seeding: place entries into bracket slots (top-down seeding) ──
+function seedSlots(entries, totalSlots) {
+  // Standard single-elimination seeding pattern
+  // Seed 1 vs lowest seed, Seed 2 vs 2nd lowest, etc.
+  const slots = new Array(totalSlots).fill(null);
+  const n = entries.length;
+  // Place byes first at the bottom half
+  const seeded = [...entries];
+  for (let i = seeded.length; i < totalSlots; i++) {
+    seeded.push({ id: `bye_${i}`, team_name: 'BYE', is_bye: true });
+  }
+  // Standard bracket placement
+  const positions = [];
+  function buildPositions(lo, hi) {
+    if (lo === hi) { positions.push(lo); return; }
+    const mid = Math.floor((lo + hi) / 2);
+    buildPositions(lo, mid);
+    buildPositions(mid + 1, hi);
+  }
+  // Simple sequential for now — more complex seeding can be added
+  return seeded;
+}
+
+// ── Generate all match stubs for a bracket ──
+function generateMatchStubs(bracketId, totalSlots, bestOf) {
+  const totalRounds = Math.log2(totalSlots);
+  const stubs = [];
+  for (let round = 1; round <= totalRounds; round++) {
+    const matchesInRound = totalSlots / Math.pow(2, round);
+    for (let pos = 1; pos <= matchesInRound; pos++) {
+      stubs.push({
+        bracket_id: bracketId,
+        round,
+        position: pos,
+        status: 'pending',
+        best_of: bestOf || 1,
+      });
+    }
+  }
+  return stubs;
+}
+
+// ── API: brackets ──
+const BracketAPI = (() => {
+  async function getBrackets(sessionId) {
+    const { data, error } = await supabaseClient.from('brackets')
+      .select('*').eq('session_id', sessionId).order('created_at', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function createBracket({ sessionId, name, category, division, bracketType, bestOf, totalSlots }) {
+    const { data, error } = await supabaseClient.from('brackets')
+      .insert({ session_id: sessionId, name, category, division, bracket_type: bracketType, best_of: bestOf, total_slots: totalSlots })
+      .select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function updateBracket(bracketId, updates) {
+    const { error } = await supabaseClient.from('brackets').update(updates).eq('id', bracketId);
+    if (error) throw error;
+  }
+
+  async function deleteBracket(bracketId) {
+    await supabaseClient.from('bracket_matches').delete().eq('bracket_id', bracketId);
+    await supabaseClient.from('bracket_entries').delete().eq('bracket_id', bracketId);
+    const { error } = await supabaseClient.from('brackets').delete().eq('id', bracketId);
+    if (error) throw error;
+  }
+
+  async function getEntries(bracketId) {
+    const { data, error } = await supabaseClient.from('bracket_entries')
+      .select('*').eq('bracket_id', bracketId).order('slot', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function upsertEntry(bracketId, slot, teamName, player1, player2) {
+    // Check if entry exists for this slot
+    const { data: existing } = await supabaseClient.from('bracket_entries')
+      .select('id').eq('bracket_id', bracketId).eq('slot', slot).single();
+    if (existing) {
+      const { error } = await supabaseClient.from('bracket_entries')
+        .update({ team_name: teamName, player1_name: player1 || null, player2_name: player2 || null, is_bye: false })
+        .eq('id', existing.id);
+      if (error) throw error;
+      return existing.id;
+    } else {
+      const { data, error } = await supabaseClient.from('bracket_entries')
+        .insert({ bracket_id: bracketId, team_name: teamName, player1_name: player1 || null, player2_name: player2 || null, slot, is_bye: false, seed: slot })
+        .select('id').single();
+      if (error) throw error;
+      return data.id;
+    }
+  }
+
+  async function deleteEntry(entryId) {
+    // Clear from any matches referencing this entry
+    await supabaseClient.from('bracket_matches')
+      .update({ entry_a_id: null, winner_id: null }).eq('entry_a_id', entryId);
+    await supabaseClient.from('bracket_matches')
+      .update({ entry_b_id: null, winner_id: null }).eq('entry_b_id', entryId);
+    await supabaseClient.from('bracket_entries').delete().eq('id', entryId);
+  }
+
+  async function getMatches(bracketId) {
+    const { data, error } = await supabaseClient.from('bracket_matches')
+      .select('*').eq('bracket_id', bracketId)
+      .order('round', { ascending: true }).order('position', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function initializeMatches(bracketId, totalSlots, bestOf, entries) {
+    // Delete existing matches first
+    await supabaseClient.from('bracket_matches').delete().eq('bracket_id', bracketId);
+
+    const stubs = generateMatchStubs(bracketId, totalSlots, bestOf);
+
+    // Assign entries to first-round matches
+    // Round 1 match position p gets: entry at slot (2p-1) vs entry at slot (2p)
+    const firstRoundMatches = stubs.filter(m => m.round === 1);
+    const entryBySlot = Object.fromEntries((entries || []).map(e => [e.slot, e]));
+
+    for (const match of firstRoundMatches) {
+      const slotA = 2 * match.position - 1;
+      const slotB = 2 * match.position;
+      const entA = entryBySlot[slotA];
+      const entB = entryBySlot[slotB];
+      match.entry_a_id = entA?.id || null;
+      match.entry_b_id = entB?.id || null;
+
+      // Auto-advance byes
+      if (entA?.is_bye && entB && !entB.is_bye) {
+        match.winner_id = entB.id;
+        match.status = 'completed';
+      } else if (entB?.is_bye && entA && !entA.is_bye) {
+        match.winner_id = entA.id;
+        match.status = 'completed';
+      }
+    }
+
+    const { error } = await supabaseClient.from('bracket_matches').insert(stubs.map(s => ({
+      bracket_id: s.bracket_id, round: s.round, position: s.position,
+      best_of: s.best_of, status: s.status || 'pending',
+      entry_a_id: s.entry_a_id || null, entry_b_id: s.entry_b_id || null,
+      winner_id: s.winner_id || null,
+    })));
+    if (error) throw error;
+
+    // Propagate existing bye winners forward
+    await propagateWinners(bracketId);
+  }
+
+  async function recordMatchResult(matchId, scoreA, scoreB, winnerId, bracketId) {
+    const { error } = await supabaseClient.from('bracket_matches').update({
+      score_a: scoreA, score_b: scoreB, winner_id: winnerId,
+      status: 'completed', ended_at: new Date().toISOString(),
+    }).eq('id', matchId);
+    if (error) throw error;
+    await propagateWinners(bracketId);
+  }
+
+  async function reverseMatchResult(matchId, bracketId) {
+    // Clear result and all downstream results in the same bracket
+    const { data: match } = await supabaseClient.from('bracket_matches')
+      .select('*').eq('id', matchId).single();
+    if (!match) return;
+
+    // Clear this match
+    await supabaseClient.from('bracket_matches').update({
+      score_a: null, score_b: null, winner_id: null, status: 'pending', ended_at: null,
+    }).eq('id', matchId);
+
+    // Clear all subsequent rounds' matches that may have been seeded from this result
+    const { data: allMatches } = await supabaseClient.from('bracket_matches')
+      .select('*').eq('bracket_id', bracketId).gt('round', match.round);
+    // Any match in a later round that had this match's winner as an entry is now invalid
+    if (allMatches) {
+      const clearIds = allMatches
+        .filter(m => m.entry_a_id === match.winner_id || m.entry_b_id === match.winner_id)
+        .map(m => m.id);
+      for (const id of clearIds) {
+        await supabaseClient.from('bracket_matches').update({
+          entry_a_id: null, entry_b_id: null, winner_id: null, status: 'pending',
+          score_a: null, score_b: null,
+        }).eq('id', id);
+      }
+    }
+  }
+
+  async function propagateWinners(bracketId) {
+    const matches = await getMatches(bracketId);
+    const byRoundPos = {};
+    for (const m of matches) byRoundPos[`${m.round}_${m.position}`] = m;
+
+    // For each completed match, place winner into next round
+    for (const m of matches) {
+      if (m.status !== 'completed' || !m.winner_id) continue;
+      const nextRound = m.round + 1;
+      const nextPos = Math.ceil(m.position / 2);
+      const nextMatch = byRoundPos[`${nextRound}_${nextPos}`];
+      if (!nextMatch) continue;
+
+      // Winner from even positions goes to entry_b, odd to entry_a
+      const isOdd = m.position % 2 === 1;
+      const updateField = isOdd ? 'entry_a_id' : 'entry_b_id';
+      if (nextMatch[updateField] === m.winner_id) continue; // already set
+
+      await supabaseClient.from('bracket_matches')
+        .update({ [updateField]: m.winner_id }).eq('id', nextMatch.id);
+    }
+  }
+
+  // Round-robin scoreboard
+  async function getRoundRobinScores(bracketId) {
+    const [entries, matches] = await Promise.all([
+      getEntries(bracketId),
+      getMatches(bracketId),
+    ]);
+    const completedMatches = matches.filter(m => m.status === 'completed' && m.score_a !== null);
+    return { entries, matches: completedMatches };
+  }
+
+  return {
+    getBrackets, createBracket, updateBracket, deleteBracket,
+    getEntries, upsertEntry, deleteEntry,
+    getMatches, initializeMatches, recordMatchResult, reverseMatchResult,
+    propagateWinners, getRoundRobinScores,
+  };
+})();
+
+// ── Bracket tab state ──
+let _activeBracketId = null;
+let _bracketView = 'list'; // 'list' | 'draw' | 'rr_table'
+
+async function bracketsTabHtml() {
+  const brackets = await BracketAPI.getBrackets(activeSession.id);
+
+  if (brackets.length === 0 || _bracketView === 'list') {
+    return await bracketListView(brackets);
+  }
+  const bracket = brackets.find(b => b.id === _activeBracketId) || brackets[0];
+  _activeBracketId = bracket.id;
+  if (bracket.bracket_type === 'round_robin') {
+    return await roundRobinView(bracket);
+  }
+  return await singleElimView(bracket);
+}
+
+async function bracketListView(brackets) {
+  const session = activeSession;
+  const divLabel = session.division ? (DIVISION_SHORT[session.division] || session.division) : '';
+  const catLabel = session.category ? (CATEGORY_LABELS[session.category] || session.category) : '';
+
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+        <div>
+          <h2 style="margin:0 0 4px;">Brackets</h2>
+          <p style="font-size:12px;color:var(--bench-slate);margin:0;">${catLabel}${catLabel && divLabel ? ' · ' : ''}${divLabel} Tournament</p>
+        </div>
+        <button onclick="showCreateBracketModal()" style="background:var(--court-paint);color:white;border:none;padding:9px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;">+ New Bracket</button>
+      </div>
+
+      ${brackets.length === 0 ? `
+        <div style="text-align:center;padding:32px 20px;color:var(--bench-slate);">
+          <div style="font-size:32px;margin-bottom:12px;">🏆</div>
+          <div style="font-weight:700;font-size:14px;color:var(--ink);margin-bottom:6px;">No brackets yet</div>
+          <p style="font-size:13px;margin:0;">Create your first bracket above. You can have multiple brackets for the same tournament (e.g. Bracket A, Bracket B for large draws).</p>
+        </div>
+      ` : brackets.map(b => `
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border-soft);">
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:14px;">${escapeHtml(b.name)}</div>
+            <div style="font-size:11px;color:var(--bench-slate);margin-top:2px;">
+              ${b.bracket_type === 'round_robin' ? 'Round Robin' : 'Single Elimination'} ·
+              ${b.total_slots} slots · Best of ${b.best_of}
+              <span style="margin-left:8px;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;background:${b.status === 'active' ? 'rgba(78,203,126,0.15)' : b.status === 'completed' ? 'rgba(107,120,114,0.15)' : 'rgba(111,168,224,0.15)'};color:${b.status === 'active' ? 'var(--winner-green)' : b.status === 'completed' ? 'var(--bench-slate)' : 'var(--waiting-blue)'};">
+                ${b.status === 'active' ? 'Active' : b.status === 'completed' ? 'Completed' : 'Setup'}
+              </span>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="openBracket('${b.id}')" style="background:var(--court-paint);color:white;border:none;padding:7px 14px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:36px;">Open</button>
+            <button onclick="confirmDeleteBracket('${b.id}','${escapeHtml(b.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 10px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:36px;">🗑</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function showCreateBracketModal() {
+  if (document.getElementById('createBracketModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="createBracketModal">
+      <div class="modal-box" style="max-width:500px;">
+        <h2>New Bracket</h2>
+        <p class="modal-sub">Set up a bracket for this tournament. You can create multiple brackets if the draw is large.</p>
+        <div class="form-grid">
+          <div class="field" style="grid-column:1/-1;"><label>Bracket Name</label><input type="text" id="cbName" placeholder="e.g. Bracket A, Pool 1"></div>
+          <div class="field"><label>Type</label>
+            <select id="cbType">
+              <option value="single_elim">Single Elimination</option>
+              <option value="round_robin">Round Robin</option>
+            </select>
+          </div>
+          <div class="field"><label>Best Of</label>
+            <select id="cbBestOf">
+              <option value="1">Best of 1</option>
+              <option value="3">Best of 3</option>
+              <option value="5">Best of 5</option>
+            </select>
+          </div>
+          <div class="field" id="slotsField">
+            <label>Number of Teams / Entries</label>
+            <input type="number" id="cbEntries" min="2" max="64" value="8"
+              oninput="updateSlotPreview()" onchange="updateSlotPreview()">
+            <p id="slotPreview" style="font-size:11px;color:var(--bench-slate);margin:4px 0 0;"></p>
+          </div>
+        </div>
+        <div class="auth-error" id="cbError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('createBracketModal').remove()">Cancel</button>
+          <button class="btn-yes" id="cbCreateBtn" onclick="handleCreateBracket()">Create Bracket</button>
+        </div>
+      </div>
+    </div>
+  `);
+  updateSlotPreview();
+}
+
+function updateSlotPreview() {
+  const n = parseInt(document.getElementById('cbEntries')?.value, 10) || 0;
+  const type = document.getElementById('cbType')?.value;
+  const preview = document.getElementById('slotPreview');
+  if (!preview) return;
+  if (type === 'round_robin') {
+    preview.textContent = `${n} teams, ${n*(n-1)/2} total matches`;
+  } else {
+    const slots = nextPowerOf2(n);
+    const byes = slots - n;
+    preview.textContent = `${slots}-slot bracket${byes > 0 ? ` · ${byes} bye${byes>1?'s':''}` : ' · no byes'}`;
+  }
+}
+
+async function handleCreateBracket() {
+  const name    = document.getElementById('cbName')?.value?.trim();
+  const type    = document.getElementById('cbType')?.value;
+  const bestOf  = parseInt(document.getElementById('cbBestOf')?.value, 10) || 1;
+  const entries = parseInt(document.getElementById('cbEntries')?.value, 10) || 0;
+  const errEl   = document.getElementById('cbError');
+  const btn     = document.getElementById('cbCreateBtn');
+
+  if (!name) { errEl.textContent = 'Give this bracket a name.'; return; }
+  if (entries < 2) { errEl.textContent = 'Need at least 2 teams.'; return; }
+
+  const totalSlots = type === 'round_robin' ? entries : nextPowerOf2(entries);
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+
+  try {
+    const bracket = await BracketAPI.createBracket({
+      sessionId: activeSession.id,
+      name, category: activeSession.category, division: activeSession.division,
+      bracketType: type, bestOf, totalSlots,
+    });
+    document.getElementById('createBracketModal').remove();
+    _activeBracketId = bracket.id;
+    _bracketView = 'draw';
+    document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not create bracket.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Create Bracket'; }
+  }
+}
+
+async function openBracket(bracketId) {
+  _activeBracketId = bracketId;
+  _bracketView = 'draw';
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+async function confirmDeleteBracket(bracketId, name) {
+  if (!confirm(`Delete bracket "${name}"? This will remove all entries and match results.`)) return;
+  await BracketAPI.deleteBracket(bracketId);
+  _activeBracketId = null;
+  _bracketView = 'list';
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+// ── Single Elimination Draw View ──
+async function singleElimView(bracket) {
+  const [entries, matches] = await Promise.all([
+    BracketAPI.getEntries(bracket.id),
+    BracketAPI.getMatches(bracket.id),
+  ]);
+  const totalRounds = Math.log2(bracket.total_slots);
+  const entryMap = Object.fromEntries(entries.map(e => [e.id, e]));
+
+  const bracketStarted = matches.length > 0;
+
+  return `
+    <div class="card" style="overflow:visible;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+        <button onclick="_bracketView='list';document.getElementById('tabPanel').innerHTML=bracketsTabHtml();"
+          style="background:none;border:none;color:var(--bench-slate);font-size:13px;font-weight:700;padding:0;cursor:pointer;">← All Brackets</button>
+        <span style="color:var(--border-soft);">|</span>
+        <h2 style="margin:0;font-size:15px;">${escapeHtml(bracket.name)}</h2>
+        <span style="font-size:10px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;letter-spacing:0.05em;">
+          Single Elim · Best of ${bracket.best_of} · ${bracket.total_slots} slots
+        </span>
+      </div>
+
+      <!-- Entry setup (before bracket starts) -->
+      ${!bracketStarted ? `
+        <div style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--bench-slate);">
+              Teams / Entries (${entries.filter(e=>!e.is_bye).length} / ${bracket.total_slots})
+            </div>
+            <button onclick="handleStartBracket('${bracket.id}',${bracket.total_slots},${bracket.best_of})"
+              style="background:var(--optic-yellow);color:var(--optic-yellow-ink);border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:36px;">
+              Generate Draw →
+            </button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;">
+            ${Array.from({length: bracket.total_slots}, (_,i) => {
+              const slot = i + 1;
+              const entry = entries.find(e => e.slot === slot && !e.is_bye);
+              return `
+                <div style="border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:10px 12px;background:var(--surface-raised);cursor:pointer;"
+                  onclick="editEntrySlot('${bracket.id}',${slot},'${escapeHtml(entry?.team_name||'')}','${escapeHtml(entry?.player1_name||'')}','${escapeHtml(entry?.player2_name||'')}','${entry?.id||''}',${bracket.format==='singles'||false})">
+                  <div style="font-size:10px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;margin-bottom:4px;">Seed ${slot}</div>
+                  ${entry ? `
+                    <div style="font-weight:700;font-size:13px;">${escapeHtml(entry.team_name)}</div>
+                    ${entry.player1_name ? `<div style="font-size:11px;color:var(--bench-slate);">${escapeHtml(entry.player1_name)}${entry.player2_name ? ' & ' + escapeHtml(entry.player2_name) : ''}</div>` : ''}
+                  ` : `<div style="font-size:12px;color:var(--bench-slate);font-style:italic;">Click to add team</div>`}
+                </div>`;
+            }).join('')}
+          </div>
+        </div>
+      ` : `
+        <!-- Visual bracket draw -->
+        <div style="overflow-x:auto;padding-bottom:8px;">
+          <div style="display:flex;gap:0;min-width:${totalRounds * 200}px;align-items:stretch;">
+            ${Array.from({length:totalRounds}, (_,ri) => {
+              const round = ri + 1;
+              const matchesInRound = bracket.total_slots / Math.pow(2, round);
+              const roundMatches = matches.filter(m => m.round === round);
+              return `
+                <div style="flex:1;display:flex;flex-direction:column;justify-content:space-around;padding:0 4px;">
+                  <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:var(--bench-slate);text-align:center;padding:6px 0;border-bottom:1px solid var(--border-soft);margin-bottom:8px;">
+                    ${roundName(round, totalRounds)}
+                  </div>
+                  ${roundMatches.map(m => bracketMatchCard(m, entryMap, bracket)).join('')}
+                </div>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button onclick="handleResetBracket('${bracket.id}',${bracket.total_slots},${bracket.best_of})"
+            style="background:transparent;border:1px solid var(--bench-slate);color:var(--bench-slate);padding:7px 14px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:36px;">
+            ↺ Reset Draw
+          </button>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function bracketMatchCard(match, entryMap, bracket) {
+  const entA = match.entry_a_id ? entryMap[match.entry_a_id] : null;
+  const entB = match.entry_b_id ? entryMap[match.entry_b_id] : null;
+  const isComplete = match.status === 'completed';
+  const winnerIsA = isComplete && match.winner_id === match.entry_a_id;
+  const winnerIsB = isComplete && match.winner_id === match.entry_b_id;
+
+  const entryRow = (entry, score, isWinner, isBye) => {
+    if (isBye) return `<div style="padding:7px 10px;font-size:12px;color:var(--bench-slate);font-style:italic;">BYE</div>`;
+    if (!entry) return `<div style="padding:7px 10px;font-size:12px;color:var(--bench-slate);font-style:italic;">TBD</div>`;
+    return `<div style="padding:7px 10px;display:flex;justify-content:space-between;align-items:center;${isWinner?'background:rgba(78,203,126,0.1);':''};border-radius:4px;">
+      <span style="font-size:12px;font-weight:${isWinner?'800':'600'};color:${isWinner?'var(--winner-green)':'var(--ink)'};">${escapeHtml(entry.team_name)}</span>
+      <span style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:${isWinner?'var(--winner-green)':'var(--bench-slate)'};">${score !== null && score !== undefined ? score : ''}</span>
+    </div>`;
+  };
+
+  return `
+    <div style="border:1px solid ${isComplete ? 'var(--border-card)' : 'var(--border-soft)'};border-radius:var(--radius-sm);margin-bottom:8px;overflow:hidden;background:var(--surface-raised);cursor:${entA&&entB&&!isComplete?'pointer':'default'};"
+      onclick="${entA&&entB&&!isComplete ? `showMatchScoreModal('${match.id}','${bracket.id}','${escapeHtml(entA?.team_name||'')}','${escapeHtml(entB?.team_name||'')}',${match.best_of},'${match.entry_a_id}','${match.entry_b_id}')` : ''}">
+      ${entryRow(entA, match.score_a, winnerIsA, entA?.is_bye)}
+      <div style="height:1px;background:var(--border-soft);"></div>
+      ${entryRow(entB, match.score_b, winnerIsB, entB?.is_bye)}
+      ${isComplete ? `
+        <div style="padding:3px 10px;font-size:10px;color:var(--bench-slate);display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border-soft);">
+          <span>Final</span>
+          <button onclick="event.stopPropagation();showReverseMatchModal('${match.id}','${bracket.id}')"
+            style="background:none;border:none;color:var(--fault-coral);font-size:10px;font-weight:700;min-height:0;padding:2px 0;cursor:pointer;">✕ Reverse</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// ── Round Robin View ──
+async function roundRobinView(bracket) {
+  const { entries, matches } = await BracketAPI.getRoundRobinScores(bracket.id);
+  const allMatches = await BracketAPI.getMatches(bracket.id);
+  const started = allMatches.length > 0;
+
+  // Build standings table
+  const standings = entries.filter(e => !e.is_bye).map(e => {
+    let wins = 0, losses = 0, pts = 0, against = 0, gp = 0;
+    for (const m of matches) {
+      const isA = m.entry_a_id === e.id;
+      const isB = m.entry_b_id === e.id;
+      if (!isA && !isB) continue;
+      gp++;
+      if (m.winner_id === e.id) wins++;
+      else losses++;
+      pts     += isA ? (m.score_a || 0) : (m.score_b || 0);
+      against += isA ? (m.score_b || 0) : (m.score_a || 0);
+    }
+    return { ...e, wins, losses, pts, against, gp };
+  }).sort((a,b) => b.wins - a.wins || (b.pts-b.against) - (a.pts-a.against));
+
+  // Score matrix
+  const scoreMap = {};
+  for (const m of matches) {
+    if (m.entry_a_id && m.entry_b_id) {
+      scoreMap[`${m.entry_a_id}_${m.entry_b_id}`] = { a: m.score_a, b: m.score_b, winner: m.winner_id, id: m.id };
+    }
+  }
+
+  return `
+    <div class="card" style="overflow:visible;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+        <button onclick="_bracketView='list';document.getElementById('tabPanel').innerHTML=bracketsTabHtml();"
+          style="background:none;border:none;color:var(--bench-slate);font-size:13px;font-weight:700;padding:0;cursor:pointer;">← All Brackets</button>
+        <span style="color:var(--border-soft);">|</span>
+        <h2 style="margin:0;font-size:15px;">${escapeHtml(bracket.name)}</h2>
+        <span style="font-size:10px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;letter-spacing:0.05em;">Round Robin · Best of ${bracket.best_of}</span>
+      </div>
+
+      ${!started ? `
+        <!-- Entry setup -->
+        <div style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--bench-slate);">Teams (${entries.filter(e=>!e.is_bye).length} / ${bracket.total_slots})</div>
+            <button onclick="handleStartRR('${bracket.id}',${bracket.total_slots},${bracket.best_of})"
+              style="background:var(--optic-yellow);color:var(--optic-yellow-ink);border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:36px;">
+              Generate Matches →
+            </button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;">
+            ${Array.from({length: bracket.total_slots}, (_,i) => {
+              const slot = i + 1;
+              const entry = entries.find(e => e.slot === slot && !e.is_bye);
+              return `
+                <div style="border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:10px 12px;background:var(--surface-raised);cursor:pointer;"
+                  onclick="editEntrySlot('${bracket.id}',${slot},'${escapeHtml(entry?.team_name||'')}','${escapeHtml(entry?.player1_name||'')}','${escapeHtml(entry?.player2_name||'')}','${entry?.id||''}',false)">
+                  <div style="font-size:10px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;margin-bottom:4px;">Team ${slot}</div>
+                  ${entry ? `<div style="font-weight:700;font-size:13px;">${escapeHtml(entry.team_name)}</div>` : `<div style="font-size:12px;color:var(--bench-slate);font-style:italic;">Click to add team</div>`}
+                </div>`;
+            }).join('')}
+          </div>
+        </div>
+      ` : `
+        <!-- Standings -->
+        <div style="margin-bottom:18px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--bench-slate);margin-bottom:8px;">Standings</div>
+          <div class="table-scroll">
+            <table class="roster-table">
+              <thead><tr><th>#</th><th>Team</th><th>W</th><th>L</th><th>GP</th><th>Pts For</th><th>Pts Ag.</th><th>Diff</th></tr></thead>
+              <tbody>
+                ${standings.map((e,i) => `
+                  <tr class="${i===0?'lb-highlight':''}">
+                    <td style="font-family:var(--font-mono);font-weight:700;">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+                    <td style="font-weight:700;">${escapeHtml(e.team_name)}</td>
+                    <td style="color:var(--winner-green);font-weight:700;font-family:var(--font-mono);">${e.wins}</td>
+                    <td style="color:var(--fault-coral);font-family:var(--font-mono);">${e.losses}</td>
+                    <td style="font-family:var(--font-mono);">${e.gp}</td>
+                    <td style="font-family:var(--font-mono);">${e.pts}</td>
+                    <td style="font-family:var(--font-mono);">${e.against}</td>
+                    <td style="font-family:var(--font-mono);font-weight:700;color:${e.pts-e.against>=0?'var(--winner-green)':'var(--fault-coral)'};">${e.pts-e.against>=0?'+':''}${e.pts-e.against}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Score matrix -->
+        <div style="margin-bottom:14px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--bench-slate);margin-bottom:8px;">Score Matrix — tap a cell to enter / edit score</div>
+          <div class="table-scroll">
+            <table style="border-collapse:collapse;font-size:12px;width:100%;">
+              <thead>
+                <tr>
+                  <th style="padding:8px 10px;text-align:left;border-bottom:1.5px solid var(--border-soft);color:var(--bench-slate);font-size:10px;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;min-width:120px;">Team</th>
+                  ${entries.filter(e=>!e.is_bye).map(e => `
+                    <th style="padding:8px 6px;text-align:center;border-bottom:1.5px solid var(--border-soft);color:var(--bench-slate);font-size:10px;white-space:nowrap;max-width:90px;">${escapeHtml(e.team_name)}</th>
+                  `).join('')}
+                  <th style="padding:8px 10px;text-align:center;border-bottom:1.5px solid var(--border-soft);color:var(--bench-slate);font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">Total Pts</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${entries.filter(e=>!e.is_bye).map(rowEntry => {
+                  const rowStanding = standings.find(s=>s.id===rowEntry.id);
+                  return `
+                    <tr>
+                      <td style="padding:8px 10px;font-weight:700;border-bottom:1px solid var(--border-soft);white-space:nowrap;">${escapeHtml(rowEntry.team_name)}</td>
+                      ${entries.filter(e=>!e.is_bye).map(colEntry => {
+                        if (rowEntry.id === colEntry.id) {
+                          return `<td style="padding:8px 6px;text-align:center;border-bottom:1px solid var(--border-soft);background:var(--surface-hover);color:var(--bench-slate);">✕</td>`;
+                        }
+                        const key = `${rowEntry.id}_${colEntry.id}`;
+                        const revKey = `${colEntry.id}_${rowEntry.id}`;
+                        const cell = scoreMap[key] || scoreMap[revKey];
+                        const isRowA = !!scoreMap[key];
+                        const rowScore = cell ? (isRowA ? cell.a : cell.b) : null;
+                        const colScore = cell ? (isRowA ? cell.b : cell.a) : null;
+                        const rowWon = cell?.winner === rowEntry.id;
+                        return `
+                          <td style="padding:6px;text-align:center;border-bottom:1px solid var(--border-soft);cursor:pointer;"
+                            onclick="showRRMatchModal('${bracket.id}','${rowEntry.id}','${escapeHtml(rowEntry.team_name)}','${colEntry.id}','${escapeHtml(colEntry.team_name)}','${cell?.id||''}')">
+                            ${cell ? `
+                              <span style="font-family:var(--font-mono);font-weight:700;color:${rowWon?'var(--winner-green)':'var(--fault-coral)'};">${rowScore}</span>
+                              <span style="font-family:var(--font-mono);color:var(--bench-slate);">–${colScore}</span>
+                            ` : `<span style="color:var(--bench-slate);font-size:11px;">–</span>`}
+                          </td>`;
+                      }).join('')}
+                      <td style="padding:8px 10px;text-align:center;border-bottom:1px solid var(--border-soft);font-family:var(--font-mono);font-weight:700;color:var(--ink);">${rowStanding?.pts || 0}</td>
+                    </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <button onclick="handleResetRR('${bracket.id}')"
+          style="background:transparent;border:1px solid var(--bench-slate);color:var(--bench-slate);padding:7px 14px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:36px;">
+          ↺ Reset All Matches
+        </button>
+      `}
+    </div>
+  `;
+}
+
+// ── Entry editor modal ──
+function editEntrySlot(bracketId, slot, teamName, p1, p2, entryId, isSingles) {
+  if (document.getElementById('entryEditModal')) document.getElementById('entryEditModal').remove();
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="entryEditModal">
+      <div class="modal-box" style="max-width:400px;">
+        <h2>${teamName ? 'Edit' : 'Add'} Team — Seed ${slot}</h2>
+        <div class="field"><label>Team Name</label><input type="text" id="eeTeamName" value="${escapeHtml(teamName)}" placeholder="Team name or player name"></div>
+        <div class="field"><label>${isSingles ? 'Player Name' : 'Player 1'}</label><input type="text" id="eeP1" value="${escapeHtml(p1)}" placeholder="Optional"></div>
+        ${!isSingles ? `<div class="field"><label>Player 2</label><input type="text" id="eeP2" value="${escapeHtml(p2)}" placeholder="Optional"></div>` : ''}
+        <div class="auth-error" id="eeError"></div>
+        <div class="confirm-actions">
+          ${entryId ? `<button class="btn-no" style="background:rgba(255,122,92,0.12);color:var(--fault-coral);" onclick="handleDeleteEntry('${entryId}','${bracketId}')">Remove</button>` : `<button class="btn-no" onclick="document.getElementById('entryEditModal').remove()">Cancel</button>`}
+          <button class="btn-yes" onclick="handleSaveEntry('${bracketId}',${slot},${isSingles})">Save</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('eeTeamName')?.focus();
+}
+
+async function handleSaveEntry(bracketId, slot, isSingles) {
+  const teamName = document.getElementById('eeTeamName')?.value?.trim();
+  const p1 = document.getElementById('eeP1')?.value?.trim();
+  const p2 = !isSingles ? document.getElementById('eeP2')?.value?.trim() : null;
+  const errEl = document.getElementById('eeError');
+  if (!teamName) { errEl.textContent = 'Team name is required.'; return; }
+  try {
+    await BracketAPI.upsertEntry(bracketId, slot, teamName, p1, p2);
+    document.getElementById('entryEditModal').remove();
+    document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not save.';
+  }
+}
+
+async function handleDeleteEntry(entryId, bracketId) {
+  await BracketAPI.deleteEntry(entryId);
+  document.getElementById('entryEditModal').remove();
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+// ── Start bracket / generate draw ──
+async function handleStartBracket(bracketId, totalSlots, bestOf) {
+  const entries = await BracketAPI.getEntries(bracketId);
+  const real = entries.filter(e => !e.is_bye);
+  if (real.length < 2) { alert('Add at least 2 teams before generating the draw.'); return; }
+
+  // Fill remaining slots with byes
+  const byes = [];
+  for (let slot = 1; slot <= totalSlots; slot++) {
+    if (!entries.find(e => e.slot === slot)) {
+      byes.push({ bracket_id: bracketId, team_name: 'BYE', is_bye: true, slot, seed: slot });
+    }
+  }
+  if (byes.length > 0) {
+    await supabaseClient.from('bracket_entries').insert(byes);
+  }
+  const allEntries = await BracketAPI.getEntries(bracketId);
+  await BracketAPI.initializeMatches(bracketId, totalSlots, bestOf, allEntries);
+  await BracketAPI.updateBracket(bracketId, { status: 'active' });
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+async function handleResetBracket(bracketId, totalSlots, bestOf) {
+  if (!confirm('Reset the bracket? All match results will be cleared but team entries are kept.')) return;
+  const entries = await BracketAPI.getEntries(bracketId);
+  await BracketAPI.initializeMatches(bracketId, totalSlots, bestOf, entries);
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+async function handleStartRR(bracketId, totalSlots, bestOf) {
+  const entries = await BracketAPI.getEntries(bracketId);
+  const real = entries.filter(e => !e.is_bye);
+  if (real.length < 2) { alert('Add at least 2 teams.'); return; }
+
+  // Generate all round-robin matchups
+  await supabaseClient.from('bracket_matches').delete().eq('bracket_id', bracketId);
+  const matchRows = [];
+  let pos = 1;
+  for (let i = 0; i < real.length; i++) {
+    for (let j = i + 1; j < real.length; j++) {
+      matchRows.push({
+        bracket_id: bracketId, round: 1, position: pos++,
+        entry_a_id: real[i].id, entry_b_id: real[j].id,
+        best_of: bestOf, status: 'pending',
+      });
+    }
+  }
+  await supabaseClient.from('bracket_matches').insert(matchRows);
+  await BracketAPI.updateBracket(bracketId, { status: 'active' });
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+async function handleResetRR(bracketId) {
+  if (!confirm('Clear all match results?')) return;
+  await supabaseClient.from('bracket_matches')
+    .update({ score_a: null, score_b: null, winner_id: null, status: 'pending' })
+    .eq('bracket_id', bracketId);
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+// ── Match score entry modal (single elim) ──
+function showMatchScoreModal(matchId, bracketId, nameA, nameB, bestOf, entryAId, entryBId) {
+  if (document.getElementById('matchScoreModal')) return;
+  const gamesLabel = bestOf === 1 ? 'Score' : `Best of ${bestOf} — enter games won`;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="matchScoreModal">
+      <div class="modal-box" style="max-width:400px;">
+        <h2>Enter Match Score</h2>
+        <p class="modal-sub">${gamesLabel}</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0;">
+          <div style="text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;margin-bottom:6px;">${escapeHtml(nameA)}</div>
+            <input type="number" id="msScoreA" min="0" value="0"
+              style="font-size:36px;font-weight:800;font-family:var(--font-mono);width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--ink);padding:4px 0;min-height:0;">
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;margin-bottom:6px;">${escapeHtml(nameB)}</div>
+            <input type="number" id="msScoreB" min="0" value="0"
+              style="font-size:36px;font-weight:800;font-family:var(--font-mono);width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--ink);padding:4px 0;min-height:0;">
+          </div>
+        </div>
+        <div class="auth-error" id="msError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('matchScoreModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="handleMatchScore('${matchId}','${bracketId}','${entryAId}','${entryBId}')">Save Result</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('msScoreA')?.focus();
+}
+
+async function handleMatchScore(matchId, bracketId, entryAId, entryBId) {
+  const scoreA = parseInt(document.getElementById('msScoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('msScoreB').value, 10);
+  const errEl  = document.getElementById('msError');
+  if (isNaN(scoreA) || isNaN(scoreB)) { errEl.textContent = 'Enter valid scores.'; return; }
+  if (scoreA === scoreB) { errEl.textContent = 'Scores cannot be tied — there must be a winner.'; return; }
+  const winnerId = scoreA > scoreB ? entryAId : entryBId;
+  try {
+    await BracketAPI.recordMatchResult(matchId, scoreA, scoreB, winnerId, bracketId);
+    document.getElementById('matchScoreModal').remove();
+    document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not save.';
+  }
+}
+
+function showReverseMatchModal(matchId, bracketId) {
+  if (document.getElementById('reverseModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="reverseModal">
+      <div class="modal-box" style="max-width:380px;">
+        <h2>Reverse Match Result?</h2>
+        <p class="modal-sub">This will clear the score and winner, and remove any downstream results that depended on it. You can re-enter the correct score after.</p>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('reverseModal').remove()">Cancel</button>
+          <button class="btn-yes" style="background:var(--fault-coral);" onclick="handleReverseMatch('${matchId}','${bracketId}')">Reverse</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function handleReverseMatch(matchId, bracketId) {
+  await BracketAPI.reverseMatchResult(matchId, bracketId);
+  document.getElementById('reverseModal').remove();
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+// ── Round-robin match modal ──
+function showRRMatchModal(bracketId, entryAId, nameA, entryBId, nameB, existingMatchId) {
+  if (document.getElementById('rrMatchModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="rrMatchModal">
+      <div class="modal-box" style="max-width:400px;">
+        <h2>Match Score</h2>
+        <p class="modal-sub">${escapeHtml(nameA)} vs ${escapeHtml(nameB)}</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0;">
+          <div style="text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;margin-bottom:6px;">${escapeHtml(nameA)}</div>
+            <input type="number" id="rrScoreA" min="0" value="0"
+              style="font-size:36px;font-weight:800;font-family:var(--font-mono);width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--ink);padding:4px 0;min-height:0;">
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:11px;font-weight:700;color:var(--bench-slate);text-transform:uppercase;margin-bottom:6px;">${escapeHtml(nameB)}</div>
+            <input type="number" id="rrScoreB" min="0" value="0"
+              style="font-size:36px;font-weight:800;font-family:var(--font-mono);width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);color:var(--ink);padding:4px 0;min-height:0;">
+          </div>
+        </div>
+        <div class="auth-error" id="rrError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('rrMatchModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="handleRRScore('${bracketId}','${entryAId}','${entryBId}','${existingMatchId}')">Save</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('rrScoreA')?.focus();
+}
+
+async function handleRRScore(bracketId, entryAId, entryBId, existingMatchId) {
+  const scoreA = parseInt(document.getElementById('rrScoreA').value, 10);
+  const scoreB = parseInt(document.getElementById('rrScoreB').value, 10);
+  const errEl  = document.getElementById('rrError');
+  if (isNaN(scoreA) || isNaN(scoreB)) { errEl.textContent = 'Enter valid scores.'; return; }
+  if (scoreA === scoreB) { errEl.textContent = 'Scores cannot be tied.'; return; }
+  const winnerId = scoreA > scoreB ? entryAId : entryBId;
+
+  if (existingMatchId) {
+    await BracketAPI.recordMatchResult(existingMatchId, scoreA, scoreB, winnerId, bracketId);
+  } else {
+    // Find the pending match between these two
+    const { data: m } = await supabaseClient.from('bracket_matches').select('id')
+      .eq('bracket_id', bracketId)
+      .or(`and(entry_a_id.eq.${entryAId},entry_b_id.eq.${entryBId}),and(entry_a_id.eq.${entryBId},entry_b_id.eq.${entryAId})`)
+      .single();
+    if (m) await BracketAPI.recordMatchResult(m.id, scoreA, scoreB, winnerId, bracketId);
+  }
+  document.getElementById('rrMatchModal').remove();
+  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+}
+
+// ── bracketsTabHtml needs to be async too ──
+async function bracketsTabHtml() {
+  const brackets = await BracketAPI.getBrackets(activeSession.id);
+  if (!_activeBracketId || _bracketView === 'list') {
+    _bracketView = 'list';
+    return await bracketListView(brackets);
+  }
+  const bracket = brackets.find(b => b.id === _activeBracketId);
+  if (!bracket) { _bracketView = 'list'; return await bracketListView(brackets); }
+  if (bracket.bracket_type === 'round_robin') return await roundRobinView(bracket);
+  return await singleElimView(bracket);
 }
 
 // ============================================================
