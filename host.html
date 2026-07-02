@@ -833,6 +833,9 @@ function generateReferenceCode() {
 const SessionAPI = (() => {
 
   async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled }) {
+    if (!currentHost?.id) {
+      throw new Error('Not logged in — please log out and sign in again.');
+    }
     let session, error;
     for (let attempt = 0; attempt < 5; attempt++) {
       const referenceCode = generateReferenceCode();
@@ -1450,11 +1453,41 @@ init();
 
 async function init() {
   applyThemeIcon();
-  if (!currentHost) {
+
+  // Always verify the saved session is still valid — don't just trust localStorage.
+  // A stale, corrupted, or pre-auth-system session must be rejected.
+  if (currentHost?.id) {
+    try {
+      const { data, error } = await supabaseClient
+        .from('host_accounts')
+        .select('id, name, username, is_active')
+        .eq('id', currentHost.id)
+        .single();
+
+      if (error || !data || !data.is_active) {
+        // Account deleted, deactivated, or localStorage corrupted — force re-login.
+        clearHostSession();
+        currentHost = null;
+        renderLoginScreen();
+        return;
+      }
+      // Refresh currentHost with live data in case name/username changed.
+      currentHost = { id: data.id, name: data.name, username: data.username };
+      saveHostSession(currentHost);
+    } catch (_) {
+      clearHostSession();
+      currentHost = null;
+      renderLoginScreen();
+      return;
+    }
+  } else {
+    // No saved session or saved session has no id.
+    clearHostSession();
+    currentHost = null;
     renderLoginScreen();
     return;
   }
-  // Show host name and logout button in topbar.
+
   renderTopbarHost();
   try { await renderSessionList(); }
   catch (err) {
