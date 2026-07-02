@@ -10,442 +10,463 @@
 <style>
 :root,html[data-theme="dark"]{
   --bg:#0F1413;--surface:#181F1D;--surface-raised:#202927;--surface-hover:#263330;
-  --ink:#F2F4F0;--ink-muted:#8A9E96;--border-soft:rgba(242,244,240,0.07);--border-card:rgba(242,244,240,0.05);
+  --ink:#F2F4F0;--ink-muted:#8A9E96;--border-soft:rgba(242,244,240,0.08);--border-card:rgba(242,244,240,0.06);
   --court-paint:#1B4D3E;--court-paint-deep:#0E2820;--court-paint-mid:#163D30;
   --optic-yellow:#D7F23D;--optic-yellow-ink:#0F1413;
   --winner-green:#4ECB7E;--fault-coral:#FF7A5C;--bench-slate:#6B7872;--waiting-blue:#6FA8E0;
   --shadow-card:0 1px 8px rgba(0,0,0,0.45),0 0 0 1px rgba(242,244,240,0.04);
   --shadow-raised:0 6px 28px rgba(0,0,0,0.55);--shadow-modal:0 -2px 32px rgba(0,0,0,0.6);
-  --line-tape:#F2F4F0;--font-display:'Archivo Black','Arial Black',sans-serif;
+  --line:rgba(242,244,240,0.18);--line-win:rgba(78,203,126,0.6);
+  --font-display:'Archivo Black','Arial Black',sans-serif;
   --font-body:'Inter',-apple-system,sans-serif;--font-mono:'JetBrains Mono','Courier New',monospace;
   --radius:10px;--radius-sm:7px;--radius-xs:4px;
   --ease-bounce:cubic-bezier(0.34,1.56,0.64,1);--ease-settle:cubic-bezier(0.16,1,0.3,1);
-  --dur-fast:180ms;--dur-base:340ms;
+  --dur-fast:160ms;--dur-base:300ms;
 }
 html[data-theme="light"]{
   --bg:#F0EDE4;--surface:#FAFAF7;--surface-raised:#FFFFFF;--surface-hover:#EAE7DD;
-  --ink:#15201C;--ink-muted:#5A6E67;--border-soft:rgba(21,32,28,0.09);--border-card:rgba(21,32,28,0.07);
+  --ink:#15201C;--ink-muted:#5A6E67;--border-soft:rgba(21,32,28,0.1);--border-card:rgba(21,32,28,0.08);
   --court-paint:#1B4D3E;--court-paint-deep:#123329;--court-paint-mid:#1A4339;
   --optic-yellow:#5E7A0A;--optic-yellow-ink:#FFFFFF;
   --winner-green:#2F9A5C;--fault-coral:#D9523A;--bench-slate:#8E9B97;--waiting-blue:#4E7FB5;
-  --shadow-card:0 1px 6px rgba(21,32,28,0.1),0 0 0 1px rgba(21,32,28,0.06);
+  --shadow-card:0 1px 6px rgba(21,32,28,0.1),0 0 0 1px rgba(21,32,28,0.07);
   --shadow-raised:0 4px 20px rgba(21,32,28,0.15);--shadow-modal:0 -2px 32px rgba(21,32,28,0.18);
-  --line-tape:#F7F5EF;
+  --line:rgba(21,32,28,0.2);--line-win:rgba(47,154,92,0.6);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{color-scheme:dark}html[data-theme="light"]{color-scheme:light}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);overflow-x:hidden}
-h1,h2,h3{font-family:var(--font-display);text-transform:uppercase;letter-spacing:-0.01em}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--font-body)}
+h1,h2,h3{font-family:var(--font-display);text-transform:uppercase;letter-spacing:-0.01em;margin:0}
 button{font-family:var(--font-body);cursor:pointer;touch-action:manipulation}
-input,select{font-size:16px;min-height:44px}
-button{min-height:44px}
+input,select{font-size:16px;min-height:44px}button{min-height:44px}
 ::selection{background:var(--optic-yellow);color:var(--optic-yellow-ink)}
-:focus-visible{outline:2px solid var(--optic-yellow);outline-offset:3px;border-radius:3px}
+:focus-visible{outline:2px solid var(--optic-yellow);outline-offset:2px;border-radius:3px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0.001ms!important;transition-duration:0.001ms!important}}
-.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 
 /* Watermark */
 body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 560' preserveAspectRatio='xMidYMid slice'%3E%3Cg stroke='%23F2F4F0' fill='none'%3E%3Crect x='80' y='50' width='740' height='460' stroke-width='2.5'/%3E%3Cline x1='80' y1='280' x2='820' y2='280' stroke-width='3'/%3E%3Cline x1='80' y1='124' x2='820' y2='124' stroke-width='1.5'/%3E%3Cline x1='80' y1='436' x2='820' y2='436' stroke-width='1.5'/%3E%3Cline x1='450' y1='50' x2='450' y2='124' stroke-width='1.5'/%3E%3Cline x1='450' y1='436' x2='450' y2='510' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E");
-  background-size:cover;opacity:0.035}
-body{padding-bottom:80px;position:relative;z-index:1}
+  background-size:cover;opacity:0.03}
+body{position:relative;z-index:1;overflow-x:hidden}
 
 /* Topbar */
-.topbar{background:var(--court-paint-deep);border-bottom:1px solid rgba(242,244,240,0.07);color:var(--line-tape);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:10px;position:sticky;top:0;z-index:10}
-.brand{display:flex;align-items:center;gap:9px}
-.brand-text{font-family:var(--font-display);font-size:16px;color:var(--line-tape);letter-spacing:0.01em}
+.topbar{background:var(--court-paint-deep);border-bottom:1px solid rgba(242,244,240,0.07);color:#F2F4F0;
+  padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:8px}
+.brand-name{font-family:var(--font-display);font-size:15px;letter-spacing:0.01em}
 .brand-dot{color:rgba(215,242,61,0.6)}
-.topbar-right{display:flex;align-items:center;gap:10px;font-size:12px}
-.theme-btn{background:rgba(242,244,240,0.07);border:1px solid rgba(242,244,240,0.1);border-radius:999px;width:34px;height:34px;display:flex;align-items:center;justify-content:center;color:var(--line-tape);opacity:0.7;transition:transform var(--dur-fast) var(--ease-bounce)}
-.theme-btn:hover{transform:scale(1.1) rotate(-12deg)}
+.tourn-badge{font-size:9px;background:rgba(215,242,61,0.18);color:var(--optic-yellow);
+  padding:2px 7px;border-radius:var(--radius-xs);font-weight:800;letter-spacing:.07em}
+.topbar-right{display:flex;align-items:center;gap:8px;font-size:11px}
+.theme-btn{background:rgba(242,244,240,0.07);border:1px solid rgba(242,244,240,0.1);
+  border-radius:999px;width:32px;height:32px;min-height:0;display:flex;align-items:center;justify-content:center;
+  color:#F2F4F0;opacity:0.7;font-size:14px;}
+.back-link{color:rgba(242,244,240,0.55);text-decoration:none;font-size:11px;font-weight:700}
 
-/* Layout */
-.page{max-width:1200px;margin:0 auto;padding:20px 16px;position:relative;z-index:1}
-
-/* Cards */
-.card{background:var(--surface);border:1px solid var(--border-card);border-radius:var(--radius);box-shadow:var(--shadow-card);padding:18px;margin-bottom:14px}
-.card h2{font-size:14px;margin:0 0 14px;letter-spacing:0.03em}
+/* Main page */
+.page{max-width:1600px;margin:0 auto;padding:16px;position:relative;z-index:1}
 
 /* Tabs */
-.tabs{display:flex;gap:2px;background:var(--surface);border:1px solid var(--border-card);border-radius:var(--radius);padding:3px;margin-bottom:14px;box-shadow:var(--shadow-card);overflow-x:auto;scrollbar-width:none}
+.tabs{display:flex;gap:2px;background:var(--surface);border:1px solid var(--border-card);
+  border-radius:var(--radius);padding:3px;margin-bottom:14px;
+  box-shadow:var(--shadow-card);overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
-.tab{background:none;border:none;padding:8px 15px;font-weight:700;font-size:12px;color:var(--ink-muted);border-radius:var(--radius-sm);transition:all var(--dur-fast) var(--ease-settle);white-space:nowrap;flex-shrink:0}
-.tab.active{background:var(--court-paint);color:rgba(242,244,240,0.95)}
+.tab{background:none;border:none;padding:8px 16px;font-weight:700;font-size:12px;
+  color:var(--ink-muted);border-radius:var(--radius-sm);
+  transition:all var(--dur-fast) var(--ease-settle);white-space:nowrap;flex-shrink:0;min-height:0}
+.tab.active{background:var(--court-paint);color:rgba(242,244,240,.95)}
+
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border-card);border-radius:var(--radius);
+  box-shadow:var(--shadow-card);padding:16px;margin-bottom:12px}
+
+/* Form */
+.field{margin-bottom:11px}
+.field label{display:block;font-size:10px;font-weight:700;margin-bottom:4px;
+  text-transform:uppercase;letter-spacing:.08em;color:var(--ink-muted)}
+.field input,.field select{width:100%;padding:10px 12px;border:1px solid var(--border-soft);
+  border-radius:var(--radius-sm);font-size:16px;background:var(--surface-raised);color:var(--ink)}
+.field input:focus,.field select:focus{border-color:var(--court-paint);outline:none}
+.fg2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:500px){.fg2{grid-template-columns:1fr}}
+.err{color:var(--fault-coral);font-size:12px;margin-top:5px;min-height:15px}
 
 /* Buttons */
-.btn-primary{background:var(--court-paint);color:white;border:none;padding:10px 18px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;transition:filter var(--dur-fast)}
-.btn-primary:hover{filter:brightness(1.15)}
-.btn-sm{padding:6px 12px;font-size:12px;min-height:34px;border-radius:var(--radius-sm);font-weight:700;border:none;cursor:pointer}
-.btn-danger{background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral)}
-.btn-ghost{background:var(--surface-hover);border:1px solid var(--border-soft);color:var(--ink-muted)}
-.btn-yellow{background:var(--optic-yellow);color:var(--optic-yellow-ink);border:none}
-
-/* Form fields */
-.field{margin-bottom:12px}
-.field label{display:block;font-size:10px;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-muted)}
-.field input,.field select{width:100%;padding:10px 12px;border:1px solid var(--border-soft);border-radius:var(--radius-sm);font-size:16px;background:var(--surface-raised);color:var(--ink)}
-.field input:focus,.field select:focus{border-color:var(--court-paint);outline:none}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:500px){.form-grid{grid-template-columns:1fr}}
-.auth-error{color:var(--fault-coral);font-size:12px;margin-top:6px;min-height:16px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:none;cursor:pointer;
+  padding:9px 16px;transition:filter var(--dur-fast)}
+.btn:hover{filter:brightness(1.12)}.btn:active{filter:brightness(.92)}
+.btn-green{background:var(--court-paint);color:white}
+.btn-yellow{background:var(--optic-yellow);color:var(--optic-yellow-ink)}
+.btn-ghost{background:var(--surface-hover);color:var(--ink-muted);border:1px solid var(--border-soft)}
+.btn-red{background:transparent;color:var(--fault-coral);border:1px solid var(--fault-coral)}
+.btn-sm{padding:5px 11px;font-size:11px;min-height:0}
 
 /* Modals */
-.overlay{position:fixed;inset:0;background:rgba(5,10,9,0.75);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
-.modal{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border-card);max-width:460px;width:100%;max-height:90vh;overflow-y:auto;padding:22px;box-shadow:var(--shadow-modal)}
-.modal::before{content:'';display:block;width:32px;height:3px;background:rgba(242,244,240,0.18);border-radius:999px;margin:-6px auto 16px}
-.modal h2{font-size:14px;margin:0 0 5px}
-.modal-sub{font-size:12px;color:var(--bench-slate);margin:0 0 14px;line-height:1.5}
-.modal-actions{display:flex;gap:8px;margin-top:14px}
-.modal-actions button{flex:1;padding:12px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:none;min-height:48px}
-.btn-yes{background:var(--winner-green);color:white}
-.btn-yes-danger{background:var(--fault-coral);color:white}
-.btn-no{background:var(--surface-hover);color:var(--ink);border:1px solid var(--border-soft)!important}
-@media(max-width:600px){.overlay{padding:0;align-items:flex-end}.modal{max-width:100%;border-radius:var(--radius) var(--radius) 0 0;border-bottom:none;max-height:92vh}.modal-actions{flex-direction:column-reverse}}
+.overlay{position:fixed;inset:0;background:rgba(5,10,9,.78);
+  display:flex;align-items:center;justify-content:center;z-index:200;padding:14px}
+.modal{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border-card);
+  max-width:440px;width:100%;max-height:90vh;overflow-y:auto;padding:20px;box-shadow:var(--shadow-modal)}
+.modal::before{content:'';display:block;width:30px;height:3px;
+  background:rgba(242,244,240,.16);border-radius:999px;margin:-4px auto 14px}
+.modal h2{font-size:14px;margin-bottom:4px}
+.modal-sub{font-size:12px;color:var(--bench-slate);margin:0 0 12px;line-height:1.5}
+.ma{display:flex;gap:8px;margin-top:12px}
+.ma button{flex:1;padding:11px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:none;min-height:46px}
+.ma .ok{background:var(--winner-green);color:white}
+.ma .ok-y{background:var(--optic-yellow);color:var(--optic-yellow-ink)}
+.ma .ok-r{background:var(--fault-coral);color:white}
+.ma .no{background:var(--surface-hover);color:var(--ink);border:1px solid var(--border-soft)!important}
+@media(max-width:600px){
+  .overlay{padding:0;align-items:flex-end}
+  .modal{max-width:100%;border-radius:var(--radius) var(--radius) 0 0;border-bottom:none;max-height:92vh}
+  .ma{flex-direction:column-reverse}
+}
 
-/* Tables */
-.tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl th{text-align:left;padding:7px 10px;color:var(--bench-slate);font-size:10px;text-transform:uppercase;letter-spacing:0.07em;border-bottom:1.5px solid var(--border-soft)}
-.tbl td{padding:8px 10px;border-bottom:1px solid var(--border-soft)}
-.tbl tr:last-child td{border-bottom:none}
-.tbl .gold{color:var(--optic-yellow);font-weight:800}
-.tbl .green{color:var(--winner-green);font-weight:700}
-.tbl .red{color:var(--fault-coral)}
-.tbl .hl{background:rgba(78,203,126,0.07)}
-.t-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* ═══════════════════════════════════════════
+   BRACKET DRAW — NCAA March Madness style
+   Left half: seeds 1–N/2 top to bottom
+   Right half: seeds N/2+1–N bottom to top
+   Winners fold inward round by round
+   Center: Champion slot
+   ═══════════════════════════════════════════ */
+.bracket-page{padding:0}
+.bracket-outer{overflow:auto;-webkit-overflow-scrolling:touch}
 
-/* ── BRACKET DRAW ── */
-.bracket-wrap{overflow-x:auto;overflow-y:visible;padding:0 0 16px}
-.bracket-cols{display:flex;gap:0;min-width:max-content;align-items:flex-start}
-.bracket-col{display:flex;flex-direction:column;justify-content:space-around;min-width:190px;padding:0 6px}
-.round-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:var(--bench-slate);text-align:center;padding:5px 0;border-bottom:1px solid var(--border-soft);margin-bottom:10px}
-.match-card{border:1px solid var(--border-soft);border-radius:var(--radius-sm);overflow:hidden;background:var(--surface-raised);margin-bottom:10px;transition:box-shadow var(--dur-fast)}
-.match-card.live{border-color:rgba(78,203,126,0.4)}
-.match-card.clickable{cursor:pointer}
-.match-card.clickable:hover{box-shadow:var(--shadow-raised)}
-.match-header{padding:3px 9px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-soft);color:var(--bench-slate)}
-.match-row{padding:7px 10px;display:flex;justify-content:space-between;align-items:center;min-height:34px;gap:8px}
-.match-row.won{background:rgba(78,203,126,0.1)}
-.match-row.lost{opacity:0.65}
-.team-name{font-size:12px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.team-name.w{font-weight:800;color:var(--winner-green)}
-.team-name.bye{color:var(--bench-slate);font-style:italic;font-size:11px}
-.team-name.tbd{color:var(--bench-slate);font-size:11px}
-.match-score{font-family:var(--font-mono);font-size:13px;font-weight:700;min-width:24px;text-align:right}
-.match-score.w{color:var(--winner-green)}
-.match-divider{height:1px;background:var(--border-soft)}
-.match-footer{padding:3px 9px;font-size:9px;color:var(--bench-slate);display:flex;justify-content:space-between;border-top:1px solid var(--border-soft)}
-.reverse-btn{color:var(--fault-coral);font-size:9px;font-weight:700;background:none;border:none;cursor:pointer;padding:0;min-height:0}
-.bo-select{background:transparent;border:none;color:var(--bench-slate);font-size:9px;font-weight:700;padding:0;min-height:0;cursor:pointer}
+/* The bracket is one wide flex row:
+   [left rounds...] [champion] [right rounds reversed] */
+.bracket-root{
+  display:inline-flex;align-items:stretch;
+  padding:20px 8px;gap:0;min-width:max-content;
+}
 
-/* Section headers for losers/finals */
-.section-hdr{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;padding:8px 0 4px;margin:8px 0 0;display:flex;align-items:center;gap:6px}
-.section-hdr::after{content:'';flex:1;height:1px;background:var(--border-soft)}
+/* One column of matches per round */
+.b-col{
+  display:flex;flex-direction:column;
+  justify-content:space-around;
+  min-width:160px;position:relative;
+}
+.b-col.left-col{border-right:none}
+.b-col.right-col{border-left:none}
 
-/* Scoreboard matrix */
-.matrix-wrap{overflow-x:auto}
-.matrix-tbl{border-collapse:collapse;font-size:12px}
-.matrix-tbl th,.matrix-tbl td{padding:8px 10px;border:1px solid var(--border-soft);text-align:center;white-space:nowrap}
-.matrix-tbl th{background:var(--surface-raised);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--bench-slate)}
-.matrix-tbl .row-label{text-align:left;font-weight:700;font-size:12px;background:var(--surface-raised)}
-.matrix-tbl .self{background:var(--surface-hover);color:var(--bench-slate)}
-.matrix-tbl .cell-done{cursor:pointer}
-.matrix-tbl .cell-done:hover{background:var(--surface-hover)}
-.matrix-score-w{color:var(--winner-green);font-weight:800;font-family:var(--font-mono)}
-.matrix-score-l{color:var(--fault-coral);font-family:var(--font-mono)}
-.total-col{background:rgba(78,203,126,0.07);font-weight:700;font-family:var(--font-mono)}
+/* Round label at top of each column */
+.round-hdr{
+  font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--bench-slate);text-align:center;
+  padding:4px 0 8px;border-bottom:1px solid var(--border-soft);
+  margin-bottom:6px;position:sticky;top:0;background:var(--bg);z-index:2;
+}
 
-/* Team chips */
-.team-chip{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--surface-raised);margin-bottom:7px}
-.team-chip-name{font-weight:700;font-size:13px;flex:1}
-.team-chip-players{font-size:11px;color:var(--bench-slate)}
-.seed-badge{font-family:var(--font-mono);font-size:10px;font-weight:700;color:var(--bench-slate);min-width:24px}
+/* Each match is a pair of team slots */
+.match-wrap{
+  display:flex;flex-direction:column;
+  margin:4px 0;position:relative;
+  flex:1;justify-content:center;
+}
 
-/* Status pill */
-.pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:0.04em}
-.pill-active{background:rgba(78,203,126,0.15);color:var(--winner-green)}
-.pill-done{background:rgba(107,120,114,0.15);color:var(--bench-slate)}
-.pill-setup{background:rgba(111,168,224,0.15);color:var(--waiting-blue)}
+/* The two team slots */
+.slot{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 8px;border:1px solid var(--border-soft);
+  background:var(--surface-raised);cursor:default;
+  min-height:30px;position:relative;transition:background var(--dur-fast);
+}
+.slot:first-child{border-bottom:none;border-radius:var(--radius-xs) var(--radius-xs) 0 0}
+.slot:last-child{border-top:none;border-radius:0 0 var(--radius-xs) var(--radius-xs)}
+.slot.clickable{cursor:pointer}
+.slot.clickable:hover{background:var(--surface-hover)}
+.slot.won{background:rgba(78,203,126,.12)}
+.slot.lost{opacity:.55}
+
+/* Seed number */
+.seed{font-family:var(--font-mono);font-size:9px;font-weight:700;
+  color:var(--bench-slate);min-width:16px;text-align:right;flex-shrink:0}
+/* Team name */
+.tname{font-size:11px;font-weight:600;flex:1;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.tname.w{font-weight:800;color:var(--winner-green)}
+.tname.bye{color:var(--bench-slate);font-style:italic;font-size:10px}
+.tname.tbd{color:var(--bench-slate);font-size:10px}
+/* Score */
+.sc{font-family:var(--font-mono);font-size:11px;font-weight:700;
+  min-width:20px;text-align:right;flex-shrink:0}
+.sc.w{color:var(--winner-green)}
+
+/* Connector lines drawn via SVG overlay on each col */
+.b-col{overflow:visible}
+
+/* Champion center column */
+.champion-col{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-width:130px;padding:0 10px;gap:8px;
+}
+.champ-label{
+  font-family:var(--font-display);font-size:12px;letter-spacing:.04em;
+  color:var(--optic-yellow);text-align:center;margin-bottom:4px;
+}
+.champ-slot{
+  background:rgba(215,242,61,.1);border:2px solid rgba(215,242,61,.35);
+  border-radius:var(--radius-sm);padding:10px 14px;text-align:center;
+  min-width:120px;
+}
+.champ-name{font-size:13px;font-weight:800;color:var(--optic-yellow)}
+.champ-name.tbd{color:var(--bench-slate);font-size:11px;font-weight:500}
+.trophy{font-size:24px;margin-bottom:4px}
+
+/* 3rd place / consolation */
+.third-wrap{margin-top:16px;text-align:center}
+.third-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:6px}
+
+/* Best-of badge */
+.bo-badge{
+  font-size:9px;font-weight:800;color:var(--bench-slate);
+  background:var(--surface-hover);border-radius:var(--radius-xs);
+  padding:1px 5px;cursor:pointer;border:1px solid var(--border-soft);
+  white-space:nowrap;flex-shrink:0;
+}
+.bo-badge:hover{border-color:var(--court-paint);color:var(--ink)}
+
+/* Reverse btn */
+.rev-btn{
+  font-size:9px;font-weight:700;color:var(--fault-coral);background:none;border:none;
+  cursor:pointer;padding:0;min-height:0;position:absolute;right:2px;top:50%;
+  transform:translateY(-50%);opacity:0;transition:opacity var(--dur-fast);
+}
+.match-wrap:hover .rev-btn{opacity:1}
+
+/* Teams list (setup phase) */
+.team-row{display:flex;align-items:center;gap:10px;padding:10px 12px;
+  border:1px solid var(--border-soft);border-radius:var(--radius-sm);
+  background:var(--surface-raised);margin-bottom:7px}
+.team-seed{font-family:var(--font-mono);font-size:10px;font-weight:700;
+  color:var(--bench-slate);min-width:22px}
+.team-info{flex:1}
+.team-name-main{font-weight:700;font-size:13px}
+.team-players{font-size:11px;color:var(--bench-slate)}
+
+/* Standings table */
+.stbl{width:100%;border-collapse:collapse;font-size:12px}
+.stbl th{padding:7px 10px;text-align:left;border-bottom:1.5px solid var(--border-soft);
+  color:var(--bench-slate);font-size:9px;text-transform:uppercase;letter-spacing:.07em}
+.stbl td{padding:8px 10px;border-bottom:1px solid var(--border-soft)}
+.stbl tr:last-child td{border-bottom:none}
+.stbl .hl{background:rgba(78,203,126,.07)}
+.scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* Score matrix */
+.mtx{border-collapse:collapse;font-size:12px}
+.mtx th,.mtx td{padding:7px 10px;border:1px solid var(--border-soft);text-align:center;white-space:nowrap}
+.mtx th{background:var(--surface-raised);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--bench-slate)}
+.mtx .rl{text-align:left;font-weight:700;background:var(--surface-raised)}
+.mtx .xs{background:var(--surface-hover);color:var(--bench-slate)}
+.mtx .mw{color:var(--winner-green);font-weight:800;font-family:var(--font-mono)}
+.mtx .ml{color:var(--fault-coral);font-family:var(--font-mono)}
+.mtx .tot{background:rgba(78,203,126,.07);font-weight:700;font-family:var(--font-mono)}
+.mtx td.tap{cursor:pointer}
+.mtx td.tap:hover{background:var(--surface-hover)}
 
 /* Empty state */
-.empty{text-align:center;padding:36px 20px;color:var(--bench-slate);font-size:13px}
-.empty-icon{font-size:32px;margin-bottom:10px}
-.empty-title{font-weight:700;color:var(--ink);font-size:15px;margin-bottom:6px;font-family:var(--font-display);text-transform:uppercase}
-
-@media(max-width:768px){
-  .page{padding:12px}
-  .bracket-col{min-width:164px;padding:0 3px}
-  .match-row{padding:6px 8px}
-  .team-name{font-size:11px}
-  .card{padding:14px}
-}
+.empty{text-align:center;padding:40px 20px;color:var(--bench-slate);font-size:13px}
+.empty-icon{font-size:36px;margin-bottom:10px}
+.empty-title{font-weight:700;font-size:15px;color:var(--ink);margin-bottom:6px;
+  font-family:var(--font-display);text-transform:uppercase}
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="brand">
-    <span class="brand-text">iStackyyy<span class="brand-dot">.</span></span>
-    <span style="font-size:10px;background:rgba(215,242,61,0.18);color:var(--optic-yellow);padding:2px 8px;border-radius:var(--radius-xs);font-weight:800;letter-spacing:0.06em;">TOURNAMENT</span>
+    <span class="brand-name">iStackyyy<span class="brand-dot">.</span></span>
+    <span class="tourn-badge">TOURNAMENT</span>
+    <span id="sessionLabel" style="font-size:11px;opacity:.55;margin-left:4px;"></span>
   </div>
   <div class="topbar-right">
-    <span id="sessionLabel" style="opacity:0.6;"></span>
-    <button class="theme-btn" onclick="toggleTheme()" aria-label="Toggle theme">☀</button>
-    <a href="javascript:history.back()" style="color:rgba(242,244,240,0.6);text-decoration:none;font-size:12px;font-weight:700;">← Back</a>
+    <button class="theme-btn" onclick="toggleTheme()" title="Toggle theme">☀</button>
+    <a class="back-link" href="javascript:history.back()">← Back</a>
   </div>
 </div>
 
 <div class="page">
   <div class="tabs" id="mainTabs">
-    <button class="tab active" onclick="switchTab('teams')" id="tab-teams">Teams</button>
-    <button class="tab" onclick="switchTab('brackets')" id="tab-brackets">Brackets</button>
-    <button class="tab" onclick="switchTab('scoreboard')" id="tab-scoreboard">Scoreboard</button>
+    <button class="tab active" onclick="switchTab('teams')" id="tab-teams">👥 Teams</button>
+    <button class="tab" onclick="switchTab('bracket')" id="tab-bracket">🏆 Bracket</button>
+    <button class="tab" onclick="switchTab('scoreboard')" id="tab-scoreboard">📊 Scoreboard</button>
   </div>
   <div id="tabContent"></div>
 </div>
-
-<!-- Modals container -->
 <div id="modals"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
-// ─── Config ───────────────────────────────────────────
-const SUPABASE_URL = 'https://srkmbofgyajdairkjwti.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNya21ib2ZneWFqZGFpcmtqd3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4Nzk3NDQsImV4cCI6MjA5NzQ1NTc0NH0.GxSJ2RH2txJLM2VjJ0t-Q0Yqd_6M2TrO6BS7Cq17QuY';
-const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// ════════════════════════════════════════════
+// BOOTSTRAP
+// ════════════════════════════════════════════
+const SURL='https://srkmbofgyajdairkjwti.supabase.co';
+const SKEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNya21ib2ZneWFqZGFpcmtqd3RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4Nzk3NDQsImV4cCI6MjA5NzQ1NTc0NH0.GxSJ2RH2txJLM2VjJ0t-Q0Yqd_6M2TrO6BS7Cq17QuY';
+const db=supabase.createClient(SURL,SKEY);
+const SID=new URLSearchParams(location.search).get('session');
 
-const params = new URLSearchParams(location.search);
-const SESSION_ID = params.get('session');
+let SESSION=null, TEAMS=[], MATCHES=[], BRACKET=null;
+let activeTab='teams';
 
-let session = null;
-let activeTab = 'teams';
-let activeBracketId = null;
-
-// ─── Theme ────────────────────────────────────────────
 function toggleTheme(){
-  const t = document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+  const t=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
   document.documentElement.setAttribute('data-theme',t);
   localStorage.setItem('istackyyy_theme',t);
 }
-
-// ─── Helpers ──────────────────────────────────────────
 function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML}
+function M(h){document.getElementById('modals').innerHTML=h}
+function CM(){document.getElementById('modals').innerHTML=''}
 function nextP2(n){if(n<=2)return 2;let p=2;while(p<n)p*=2;return p}
-function M(html){document.getElementById('modals').innerHTML=html}
-function clearM(){document.getElementById('modals').innerHTML=''}
 
-// Standard single-elim seeding positions for n teams
-// 1 vs n, 2 vs n-1, etc., with proper bracket half placement
-function buildSeededMatchups(n){
-  // Standard bracket positions: seed 1 top, seed 2 bottom, etc.
-  // For 8 teams: [1v8, 4v5, 3v6, 2v7] reading top to bottom
-  function bracket(size){
-    if(size===2)return[[1,2]];
-    const half=size/2;
-    const top=bracket(half);
-    const pairs=[];
-    for(let i=0;i<top.length;i++){
-      const[a,b]=top[i];
-      pairs.push([a,size+1-a]);
-      pairs.push([b,size+1-b]);
-    }
-    return pairs;
+// ════════════════════════════════════════════
+// DATABASE LAYER
+// ════════════════════════════════════════════
+async function loadAll(){
+  if(!SID)return;
+  const[s,t,b]=await Promise.all([
+    db.from('sessions').select('*').eq('id',SID).single(),
+    db.from('bracket_entries').select('*').eq('session_id',SID).is('bracket_id',null).order('seed',{ascending:true}),
+    db.from('brackets').select('*').eq('session_id',SID).order('created_at',{ascending:true})
+  ]);
+  SESSION=s.data;
+  TEAMS=t.data||[];
+  const brackets=b.data||[];
+  BRACKET=brackets[0]||null;// primary bracket
+  if(BRACKET){
+    const{data:m}=await db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
+      .order('round',{ascending:true}).order('position',{ascending:true});
+    MATCHES=m||[];
+  }else MATCHES=[];
+  if(SESSION)document.getElementById('sessionLabel').textContent=SESSION.name;
+}
+
+async function saveTeam(id,name,p1,p2,seed){
+  if(id) return db.from('bracket_entries').update({team_name:name,player1_name:p1||null,player2_name:p2||null}).eq('id',id);
+  return db.from('bracket_entries').insert({session_id:SID,team_name:name,player1_name:p1||null,player2_name:p2||null,is_bye:false,seed});
+}
+async function deleteTeam(id){return db.from('bracket_entries').delete().eq('id',id)}
+
+// ════════════════════════════════════════════
+// BRACKET GENERATION
+// Standard seeding positions (1 vs N, 4 vs N-3 etc.)
+// Left half: positions 1,4,3,2 reading top to bottom
+// Right half: mirrors to keep 1 and 2 on opposite sides
+// ════════════════════════════════════════════
+
+// Build the standard seeded matchup order for a power-of-2 bracket
+// Returns array of [seedA, seedB] pairs in visual top-to-bottom order
+function seededPairs(size){
+  if(size===2)return[[1,2]];
+  const half=size/2;
+  const sub=seededPairs(half);
+  const result=[];
+  for(const[a,b]of sub){
+    result.push([a,size+1-a]);
+    result.push([b,size+1-b]);
   }
+  return result;
+}
+
+async function generateBracket(type){
+  // Remove old bracket if exists
+  if(BRACKET){
+    await db.from('bracket_matches').delete().eq('bracket_id',BRACKET.id);
+    await db.from('bracket_entries').update({bracket_id:null,slot:null}).eq('bracket_id',BRACKET.id).eq('is_bye',false);
+    await db.from('bracket_entries').delete().eq('bracket_id',BRACKET.id).eq('is_bye',true);
+    await db.from('brackets').delete().eq('id',BRACKET.id);
+  }
+
+  const n=TEAMS.length;
+  if(n<2)return;
   const slots=nextP2(n);
-  return bracket(slots);// returns [[1,8],[4,5],[3,6],[2,7]] for 8
-}
+  const totalRounds=Math.log2(slots);
 
-function roundName(round,totalRounds){
-  const rem=totalRounds-round+1;
-  if(rem===1)return'Final';
-  if(rem===2)return'Semifinal';
-  if(rem===3)return'Quarterfinal';
-  return`Round ${round}`;
-}
+  // Create bracket record
+  const{data:br}=await db.from('brackets').insert({
+    session_id:SID,name:'Main Draw',bracket_type:type,total_slots:slots,best_of:1,status:'active'
+  }).select().single();
+  BRACKET=br;
 
-// ─── API ──────────────────────────────────────────────
+  // Seed teams into bracket slots in order (slot = seed rank)
+  const teamsBySlot={};
+  for(let i=0;i<TEAMS.length;i++){
+    const slot=i+1;
+    teamsBySlot[slot]=TEAMS[i];
+    await db.from('bracket_entries').update({bracket_id:br.id,slot}).eq('id',TEAMS[i].id);
+  }
+  // Fill remaining slots with byes
+  for(let s=n+1;s<=slots;s++){
+    const{data:bye}=await db.from('bracket_entries').insert({
+      bracket_id:br.id,session_id:SID,team_name:'BYE',is_bye:true,slot:s
+    }).select().single();
+    teamsBySlot[s]=bye;
+  }
 
-async function getSession(){
-  if(!SESSION_ID)return null;
-  const{data}=await db.from('sessions').select('*').eq('id',SESSION_ID).single();
-  return data;
-}
+  // Generate matches
+  const pairs=seededPairs(slots);
+  const rows=[];
 
-// Teams (bracket_entries with no bracket_id)
-async function getTeams(){
-  const{data}=await db.from('bracket_entries')
-    .select('*').eq('session_id',SESSION_ID).is('bracket_id',null)
-    .order('seed',{ascending:true});
-  return data||[];
-}
-async function saveTeam(id,name,p1,p2){
-  if(id){
-    await db.from('bracket_entries').update({team_name:name,player1_name:p1||null,player2_name:p2||null}).eq('id',id);
+  // Round 1 — standard seeded pairs
+  for(let p=0;p<pairs.length;p++){
+    const[sA,sB]=pairs[p];
+    const eA=teamsBySlot[sA],eB=teamsBySlot[sB];
+    const row={bracket_id:br.id,round:1,position:p+1,best_of:1,status:'pending',
+      match_type:'winners',entry_a_id:eA?.id||null,entry_b_id:eB?.id||null,
+      score_a:null,score_b:null,winner_id:null,loser_id:null};
+    // Auto-advance bye
+    if(eA?.is_bye&&eB&&!eB.is_bye){row.winner_id=eB.id;row.loser_id=eA.id;row.status='completed'}
+    else if(eB?.is_bye&&eA&&!eA.is_bye){row.winner_id=eA.id;row.loser_id=eB.id;row.status='completed'}
+    rows.push(row);
+  }
+
+  // Rounds 2..totalRounds — placeholders
+  for(let r=2;r<=totalRounds;r++){
+    const cnt=slots/Math.pow(2,r);
+    for(let p=1;p<=cnt;p++) rows.push({bracket_id:br.id,round:r,position:p,best_of:1,
+      status:'pending',match_type:'winners',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
+  }
+
+  if(type==='double_elim'){
+    // Losers bracket rounds
+    const lRounds=2*(totalRounds-1);
+    let lCnt=slots/4;
+    for(let lr=1;lr<=lRounds;lr++){
+      const cnt=Math.max(1,Math.round(lCnt));
+      for(let p=1;p<=cnt;p++) rows.push({bracket_id:br.id,round:lr,position:p,best_of:1,
+        status:'pending',match_type:'losers',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
+      if(lr%2===0)lCnt/=2;
+    }
+    // Grand final + bracket reset
+    rows.push({bracket_id:br.id,round:1,position:1,best_of:1,status:'pending',match_type:'grand_final',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
+    rows.push({bracket_id:br.id,round:2,position:1,best_of:1,status:'pending',match_type:'bracket_reset',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
   }else{
-    const teams=await getTeams();
-    await db.from('bracket_entries').insert({session_id:SESSION_ID,team_name:name,player1_name:p1||null,player2_name:p2||null,is_bye:false,seed:(teams.length+1)});
+    // 3rd place match
+    rows.push({bracket_id:br.id,round:totalRounds,position:2,best_of:1,status:'pending',match_type:'third_place',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
   }
-}
-async function deleteTeam(id){await db.from('bracket_entries').delete().eq('id',id)}
-async function reorderSeed(id,newSeed){await db.from('bracket_entries').update({seed:newSeed}).eq('id',id)}
 
-// Brackets
-async function getBrackets(){
-  const{data}=await db.from('brackets').select('*').eq('session_id',SESSION_ID).order('created_at',{ascending:true});
-  return data||[];
-}
-async function createBracket(name,type,slots){
-  const{data}=await db.from('brackets').insert({session_id:SESSION_ID,name,bracket_type:type,total_slots:slots,best_of:1,status:'setup'}).select().single();
-  return data;
-}
-async function deleteBracket(id){
-  await db.from('bracket_matches').delete().eq('bracket_id',id);
-  await db.from('bracket_entries').update({bracket_id:null,slot:null}).eq('bracket_id',id).eq('is_bye',false);
-  await db.from('bracket_entries').delete().eq('bracket_id',id).eq('is_bye',true);
-  await db.from('brackets').delete().eq('id',id);
-}
-
-// Entries seeded into a bracket
-async function getBracketEntries(bracketId){
-  const{data}=await db.from('bracket_entries').select('*').eq('bracket_id',bracketId).order('slot',{ascending:true});
-  return data||[];
-}
-async function seedEntry(teamId,bracketId,slot){
-  await db.from('bracket_entries').update({bracket_id:bracketId,slot}).eq('id',teamId);
-}
-async function unseedEntry(teamId){
-  await db.from('bracket_entries').update({bracket_id:null,slot:null}).eq('id',teamId);
-}
-
-// Matches
-async function getMatches(bracketId){
-  const{data}=await db.from('bracket_matches').select('*').eq('bracket_id',bracketId)
+  await db.from('bracket_matches').insert(rows);
+  const{data:fresh}=await db.from('bracket_matches').select('*').eq('bracket_id',br.id)
     .order('round',{ascending:true}).order('position',{ascending:true});
-  return data||[];
-}
-async function setBestOf(matchId,bestOf){
-  await db.from('bracket_matches').update({best_of:bestOf}).eq('id',matchId);
-}
-async function recordResult(matchId,sA,sB,winnerId,loserId,bracketId){
-  await db.from('bracket_matches').update({
-    score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
-    status:'completed',ended_at:new Date().toISOString()
-  }).eq('id',matchId);
-  await propagate(bracketId);
-}
-async function reverseResult(matchId,bracketId){
-  const{data:m}=await db.from('bracket_matches').select('*').eq('id',matchId).single();
-  if(!m)return;
-  await db.from('bracket_matches').update({score_a:null,score_b:null,winner_id:null,loser_id:null,status:'pending',ended_at:null}).eq('id',matchId);
-  // Clear downstream
-  const{data:all}=await db.from('bracket_matches').select('*').eq('bracket_id',bracketId);
-  const affected=(all||[]).filter(x=>x.entry_a_id===m.winner_id||x.entry_b_id===m.winner_id||x.entry_a_id===m.loser_id||x.entry_b_id===m.loser_id);
-  for(const x of affected){
-    await db.from('bracket_matches').update({
-      entry_a_id:x.entry_a_id===m.winner_id||x.entry_a_id===m.loser_id?null:x.entry_a_id,
-      entry_b_id:x.entry_b_id===m.winner_id||x.entry_b_id===m.loser_id?null:x.entry_b_id,
-      winner_id:null,loser_id:null,status:'pending',score_a:null,score_b:null,ended_at:null
-    }).eq('id',x.id);
-  }
+  MATCHES=fresh||[];
+
+  // Propagate byes
+  await propagate();
 }
 
-// ── GENERATE DRAW ──────────────────────────────────────
-async function generateSingleElim(bracketId,entries,slots){
-  await db.from('bracket_matches').delete().eq('bracket_id',bracketId);
-  const totalRounds=Math.log2(slots);
-  const bySlot=Object.fromEntries(entries.map(e=>[e.slot,e]));
-  const rows=[];
-
-  // Build all rounds using the standard seeding pattern
-  const matchupsR1=buildSeededMatchups(slots);// [[seed1,seed2],...]
-
-  // Round 1 — use standard seeded positions
-  for(let p=0;p<matchupsR1.length;p++){
-    const[sA,sB]=matchupsR1[p];
-    const eA=bySlot[sA],eB=bySlot[sB];
-    const row={bracket_id:bracketId,round:1,position:p+1,best_of:1,status:'pending',match_type:'winners',
-      entry_a_id:eA?.id||null,entry_b_id:eB?.id||null};
-    // Auto-bye
-    if(eA?.is_bye&&eB&&!eB.is_bye){row.winner_id=eB.id;row.loser_id=eA.id;row.status='completed'}
-    else if(eB?.is_bye&&eA&&!eA.is_bye){row.winner_id=eA.id;row.loser_id=eB.id;row.status='completed'}
-    rows.push(row);
-  }
-
-  // Rounds 2+ — placeholders
-  for(let r=2;r<=totalRounds;r++){
-    const cnt=slots/Math.pow(2,r);
-    for(let p=1;p<=cnt;p++) rows.push({bracket_id:bracketId,round:r,position:p,best_of:1,status:'pending',match_type:'winners'});
-  }
-
-  await db.from('bracket_matches').insert(rows);
-  await propagate(bracketId);
-  await db.from('brackets').update({status:'active'}).eq('id',bracketId);
-}
-
-async function generateDoubleElim(bracketId,entries,slots){
-  await db.from('bracket_matches').delete().eq('bracket_id',bracketId);
-  const totalRounds=Math.log2(slots);
-  const bySlot=Object.fromEntries(entries.map(e=>[e.slot,e]));
-  const rows=[];
-
-  // Winners bracket
-  const matchupsR1=buildSeededMatchups(slots);
-  for(let p=0;p<matchupsR1.length;p++){
-    const[sA,sB]=matchupsR1[p];
-    const eA=bySlot[sA],eB=bySlot[sB];
-    const row={bracket_id:bracketId,round:1,position:p+1,best_of:1,status:'pending',match_type:'winners',
-      entry_a_id:eA?.id||null,entry_b_id:eB?.id||null};
-    if(eA?.is_bye&&eB&&!eB.is_bye){row.winner_id=eB.id;row.loser_id=eA.id;row.status='completed'}
-    else if(eB?.is_bye&&eA&&!eA.is_bye){row.winner_id=eA.id;row.loser_id=eB.id;row.status='completed'}
-    rows.push(row);
-  }
-  for(let r=2;r<=totalRounds;r++){
-    const cnt=slots/Math.pow(2,r);
-    for(let p=1;p<=cnt;p++) rows.push({bracket_id:bracketId,round:r,position:p,best_of:1,status:'pending',match_type:'winners'});
-  }
-
-  // Losers bracket — runs 2*(totalRounds-1) rounds
-  const lRounds=2*(totalRounds-1);
-  let lMatchCnt=slots/4;// starts at half of R1 matches
-  for(let lr=1;lr<=lRounds;lr++){
-    const cnt=Math.max(1,Math.floor(lMatchCnt));
-    for(let p=1;p<=cnt;p++) rows.push({bracket_id:bracketId,round:lr,position:p,best_of:1,status:'pending',match_type:'losers'});
-    if(lr%2===0)lMatchCnt/=2;
-  }
-
-  // Grand Final (reset possible)
-  rows.push({bracket_id:bracketId,round:1,position:1,best_of:1,status:'pending',match_type:'grand_final'});
-  rows.push({bracket_id:bracketId,round:2,position:1,best_of:1,status:'pending',match_type:'bracket_reset'});
-
-  await db.from('bracket_matches').insert(rows);
-  await propagate(bracketId);
-  await db.from('brackets').update({status:'active'}).eq('id',bracketId);
-}
-
-async function generateRR(bracketId,entries){
-  await db.from('bracket_matches').delete().eq('bracket_id',bracketId);
-  const real=entries.filter(e=>!e.is_bye);
-  const rows=[];
-  let pos=1;
-  for(let i=0;i<real.length;i++)
-    for(let j=i+1;j<real.length;j++)
-      rows.push({bracket_id:bracketId,round:1,position:pos++,best_of:1,status:'pending',match_type:'pool',
-        entry_a_id:real[i].id,entry_b_id:real[j].id});
-  await db.from('bracket_matches').insert(rows);
-  await db.from('brackets').update({status:'active'}).eq('id',bracketId);
-}
-
-// ── PROPAGATE WINNERS ──────────────────────────────────
-async function propagate(bracketId){
-  const{data:all}=await db.from('bracket_matches').select('*').eq('bracket_id',bracketId)
+async function propagate(){
+  if(!BRACKET)return;
+  const{data:all}=await db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
     .order('round',{ascending:true}).order('position',{ascending:true});
-  if(!all)return;
+  if(!all)return;MATCHES=all;
 
   const wM=all.filter(m=>m.match_type==='winners');
   const lM=all.filter(m=>m.match_type==='losers');
   const gf=all.find(m=>m.match_type==='grand_final');
   const br=all.find(m=>m.match_type==='bracket_reset');
+  const tfM=all.find(m=>m.match_type==='third_place');
   const maxWR=wM.reduce((a,m)=>Math.max(a,m.round),0);
-  const maxLR=lM.reduce((a,m)=>Math.max(a,m.round),0);
+  const maxLR=lM.length?lM.reduce((a,m)=>Math.max(a,m.round),0):0;
 
   for(const m of all.filter(x=>x.status==='completed'&&x.winner_id)){
     if(m.match_type==='winners'){
@@ -453,51 +474,517 @@ async function propagate(bracketId){
       if(m.round<maxWR){
         const nr=m.round+1,np=Math.ceil(m.position/2);
         const nxt=wM.find(x=>x.round===nr&&x.position===np);
-        if(nxt&&m.winner_id){
+        if(nxt){
           const f=m.position%2===1?'entry_a_id':'entry_b_id';
-          if(nxt[f]!==m.winner_id)await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxt.id);
+          if(nxt[f]!==m.winner_id){await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxt.id);nxt[f]=m.winner_id;}
         }
       }
-      // Loser → losers bracket
-      // Winners R1 losers go to Losers R1; Winners R2 losers go to Losers R3; etc.
-      if(m.loser_id){
-        const lRound=m.round===1?1:2*m.round-2;// LR1 from WR1, LR3 from WR2, LR5 from WR3...
-        const lMatchesInRound=lM.filter(x=>x.round===lRound);
-        const lPos=lMatchesInRound.length>0?Math.ceil(m.position/2):1;
-        const lNxt=lM.find(x=>x.round===lRound&&x.position===lPos);
-        if(lNxt&&m.loser_id){
+      // Loser → losers bracket (double elim only)
+      if(m.loser_id&&lM.length){
+        const lR=m.round===1?1:2*m.round-2;
+        const lMs=lM.filter(x=>x.round===lR);
+        const lP=lMs.length>0?Math.ceil(m.position/2):1;
+        const lNxt=lMs.find(x=>x.position===lP)||lMs[0];
+        if(lNxt){
           const f=m.position%2===1?'entry_a_id':'entry_b_id';
-          if(lNxt[f]!==m.loser_id)await db.from('bracket_matches').update({[f]:m.loser_id}).eq('id',lNxt.id);
+          if(lNxt[f]!==m.loser_id){await db.from('bracket_matches').update({[f]:m.loser_id}).eq('id',lNxt.id);lNxt[f]=m.loser_id;}
         }
       }
-      // Winners champion → Grand Final A
-      if(m.round===maxWR&&gf&&m.winner_id&&gf.entry_a_id!==m.winner_id)
-        await db.from('bracket_matches').update({entry_a_id:m.winner_id}).eq('id',gf.id);
+      // Winners champion → grand final A / 3rd place semi
+      if(m.round===maxWR){
+        if(gf&&m.winner_id&&gf.entry_a_id!==m.winner_id){await db.from('bracket_matches').update({entry_a_id:m.winner_id}).eq('id',gf.id);gf.entry_a_id=m.winner_id;}
+        if(tfM&&m.loser_id&&tfM.entry_a_id!==m.loser_id){await db.from('bracket_matches').update({entry_a_id:m.loser_id}).eq('id',tfM.id);tfM.entry_a_id=m.loser_id;}
+      }
     }
-    if(m.match_type==='losers'){
+    if(m.match_type==='losers'&&m.winner_id){
       if(m.round<maxLR){
         const nr=m.round+1,np=Math.ceil(m.position/2);
         const nxt=lM.find(x=>x.round===nr&&x.position===np);
-        if(nxt&&m.winner_id){
+        if(nxt){
           const f=m.position%2===1?'entry_a_id':'entry_b_id';
-          if(nxt[f]!==m.winner_id)await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxt.id);
+          if(nxt[f]!==m.winner_id){await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxt.id);nxt[f]=m.winner_id;}
         }
       }
-      // Losers champion → Grand Final B
-      if(m.round===maxLR&&gf&&m.winner_id&&gf.entry_b_id!==m.winner_id)
-        await db.from('bracket_matches').update({entry_b_id:m.winner_id}).eq('id',gf.id);
+      if(m.round===maxLR&&gf&&m.winner_id&&gf.entry_b_id!==m.winner_id){await db.from('bracket_matches').update({entry_b_id:m.winner_id}).eq('id',gf.id);gf.entry_b_id=m.winner_id;}
     }
-    // Grand Final — if losers champ wins → bracket reset
-    if(m.match_type==='grand_final'&&m.winner_id&&br){
-      if(m.winner_id===m.entry_b_id){// losers bracket champ won → reset
+    if(m.match_type==='grand_final'&&m.winner_id){
+      // Bracket reset: if losers champ won
+      if(br&&m.winner_id===m.entry_b_id){
         if(br.entry_a_id!==m.entry_a_id||br.entry_b_id!==m.entry_b_id)
           await db.from('bracket_matches').update({entry_a_id:m.entry_a_id,entry_b_id:m.entry_b_id,status:'pending'}).eq('id',br.id);
       }
+      // 3rd place B slot from grand final loser
+      if(tfM&&m.loser_id&&tfM.entry_b_id!==m.loser_id){await db.from('bracket_matches').update({entry_b_id:m.loser_id}).eq('id',tfM.id);}
+    }
+    // 3rd place: loser of semi-finals
+    if(m.match_type==='winners'&&m.round===maxWR-1&&tfM){
+      const f=m.position===1?'entry_a_id':'entry_b_id';
+      if(m.loser_id&&tfM[f]!==m.loser_id){await db.from('bracket_matches').update({[f]:m.loser_id}).eq('id',tfM.id);}
     }
   }
+  // Refresh
+  const{data:refreshed}=await db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
+    .order('round',{ascending:true}).order('position',{ascending:true});
+  MATCHES=refreshed||[];
 }
 
-// ─── RENDER TABS ──────────────────────────────────────
+async function doRecord(matchId,sA,sB,eAId,eBId){
+  const winnerId=sA>sB?eAId:eBId;
+  const loserId=sA>sB?eBId:eAId;
+  await db.from('bracket_matches').update({
+    score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
+    status:'completed',ended_at:new Date().toISOString()
+  }).eq('id',matchId);
+  await propagate();
+}
+
+async function doReverse(matchId){
+  const m=MATCHES.find(x=>x.id===matchId);
+  if(!m)return;
+  await db.from('bracket_matches').update({
+    score_a:null,score_b:null,winner_id:null,loser_id:null,status:'pending',ended_at:null
+  }).eq('id',matchId);
+  // Clear downstream
+  for(const x of MATCHES){
+    if(x.entry_a_id===m.winner_id||x.entry_b_id===m.winner_id||x.entry_a_id===m.loser_id||x.entry_b_id===m.loser_id){
+      await db.from('bracket_matches').update({
+        entry_a_id:(x.entry_a_id===m.winner_id||x.entry_a_id===m.loser_id)?null:x.entry_a_id,
+        entry_b_id:(x.entry_b_id===m.winner_id||x.entry_b_id===m.loser_id)?null:x.entry_b_id,
+        winner_id:null,loser_id:null,status:'pending',score_a:null,score_b:null,ended_at:null
+      }).eq('id',x.id);
+    }
+  }
+  await propagate();
+}
+
+// ════════════════════════════════════════════
+// RENDER — TEAMS TAB
+// ════════════════════════════════════════════
+function renderTeams(){
+  const isDoubles=SESSION?.format==='doubles';
+  return`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div>
+        <h2 style="margin-bottom:3px">Teams <span style="font-size:11px;color:var(--bench-slate);font-family:var(--font-body);text-transform:none;letter-spacing:0">(${TEAMS.length})</span></h2>
+        <p style="font-size:11px;color:var(--bench-slate);margin:0">Add all teams, then go to <strong>Bracket</strong> to generate the draw.</p>
+      </div>
+      <button class="btn btn-green btn-sm" onclick="openTeamModal(null)">+ Add Team</button>
+    </div>
+    ${TEAMS.length===0?`<div class="empty"><div class="empty-icon">🎾</div><div class="empty-title">No teams yet</div><p>Add teams — each team needs a name and ${isDoubles?'two players':'one player'}.</p></div>`:
+    TEAMS.map((t,i)=>`<div class="team-row">
+      <span class="team-seed">#${t.seed||i+1}</span>
+      <div class="team-info">
+        <div class="team-name-main">${esc(t.team_name)}</div>
+        ${t.player1_name?`<div class="team-players">${esc(t.player1_name)}${t.player2_name?' &amp; '+esc(t.player2_name):''}</div>`:''}
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="openTeamModal('${t.id}')">Edit</button>
+    </div>`).join('')}
+  </div>`;
+}
+
+function openTeamModal(id){
+  const t=id?TEAMS.find(x=>x.id===id):null;
+  const isDoubles=SESSION?.format==='doubles';
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>${t?'Edit':'Add'} Team</h2>
+      <div class="field"><label>Team Name</label><input id="tn" type="text" value="${esc(t?.team_name||'')}" placeholder="e.g. Team Alpha" autocomplete="off"></div>
+      <div class="field"><label>${isDoubles?'Player 1':'Player'}</label><input id="tp1" type="text" value="${esc(t?.player1_name||'')}" placeholder="Player name"></div>
+      ${isDoubles?`<div class="field"><label>Player 2</label><input id="tp2" type="text" value="${esc(t?.player2_name||'')}" placeholder="Player name"></div>`:''}
+      <div class="err" id="tmErr"></div>
+      <div class="ma">
+        ${t?`<button class="ok-r" onclick="doDelTeam('${t.id}')">Delete</button>`:`<button class="no" onclick="CM()">Cancel</button>`}
+        <button class="ok" onclick="doSaveTeam('${id||''}',${isDoubles})">Save</button>
+      </div>
+      ${t?`<button class="no" style="width:100%;margin-top:8px;border-radius:var(--radius-sm);padding:10px;font-weight:700;border:1px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);" onclick="CM()">Cancel</button>`:''}
+    </div>
+  </div>`);
+  document.getElementById('tn')?.focus();
+}
+
+async function doSaveTeam(id,isDoubles){
+  const name=document.getElementById('tn')?.value?.trim();
+  const p1=document.getElementById('tp1')?.value?.trim();
+  const p2=isDoubles?document.getElementById('tp2')?.value?.trim():'';
+  if(!name){document.getElementById('tmErr').textContent='Team name is required.';return}
+  await saveTeam(id||null,name,p1,p2,TEAMS.length+1);
+  CM();await loadAll();render();
+}
+async function doDelTeam(id){
+  if(!confirm('Remove this team?'))return;
+  await deleteTeam(id);CM();await loadAll();render();
+}
+
+// ════════════════════════════════════════════
+// RENDER — BRACKET TAB (NCAA visual style)
+// ════════════════════════════════════════════
+function renderBracket(){
+  if(TEAMS.length<2) return`<div class="empty"><div class="empty-icon">🏆</div><div class="empty-title">Add teams first</div><p>Go to the Teams tab and add at least 2 teams.</p></div>`;
+
+  if(!BRACKET||MATCHES.length===0){
+    return`<div class="card">
+      <h2 style="margin-bottom:6px">Generate Bracket Draw</h2>
+      <p style="font-size:12px;color:var(--bench-slate);margin:0 0 16px">${TEAMS.length} teams registered · ${nextP2(TEAMS.length)}-slot bracket (${nextP2(TEAMS.length)-TEAMS.length} bye${nextP2(TEAMS.length)-TEAMS.length!==1?'s':''} will be added)</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-green" onclick="confirmGenerate('single_elim')">Single Elimination</button>
+        <button class="btn btn-green" onclick="confirmGenerate('double_elim')">Double Elimination</button>
+      </div>
+      <p style="font-size:11px;color:var(--bench-slate);margin:12px 0 0">
+        <strong>Single Elim:</strong> Lose once → out. Fast and decisive.<br>
+        <strong>Double Elim:</strong> Lose once → Losers bracket. Lose twice → eliminated. More play time.
+      </p>
+    </div>`;
+  }
+
+  // Build the visual bracket
+  return buildNCAABracket();
+}
+
+function confirmGenerate(type){
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>Generate ${type==='double_elim'?'Double Elimination':'Single Elimination'} Bracket?</h2>
+      <p class="modal-sub">${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. Teams are seeded in the order they appear on the Teams tab. The best team should be seed #1.<br><br>
+      ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}</p>
+      <div class="ma">
+        <button class="no" onclick="CM()">Cancel</button>
+        <button class="ok-y" onclick="CM();doGenerate('${type}')">Generate Draw</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+async function doGenerate(type){
+  document.getElementById('tabContent').innerHTML='<div class="empty"><div class="empty-icon">⚙️</div><p>Generating bracket…</p></div>';
+  await generateBracket(type);
+  render();
+}
+
+function buildNCAABracket(){
+  const wM=MATCHES.filter(m=>m.match_type==='winners');
+  const lM=MATCHES.filter(m=>m.match_type==='losers');
+  const gf=MATCHES.find(m=>m.match_type==='grand_final');
+  const br=MATCHES.find(m=>m.match_type==='bracket_reset');
+  const tf=MATCHES.find(m=>m.match_type==='third_place');
+  const maxWR=wM.reduce((a,m)=>Math.max(a,m.round),0);
+  const isDbl=BRACKET.bracket_type==='double_elim';
+
+  // Build entity map
+  const{data:allEntries}={data:[...TEAMS]};
+  // We'll look up by id using MATCHES' entry refs + TEAMS
+  const entMap={};
+  TEAMS.forEach(t=>{entMap[t.id]=t});
+  // Also need bye entries — fetch from entries stored in bracket
+  // We'll load them lazily from match references
+  // (bye entries won't be in TEAMS, they'll have is_bye=true)
+  // For now mark unknown ids as TBD
+  function getTeam(id){return id?entMap[id]:null}
+
+  // Split winners matches into LEFT half and RIGHT half
+  // Left half: positions 1..n/2 in round 1, progressing inward
+  const r1Matches=wM.filter(m=>m.round===1).sort((a,b)=>a.position-b.position);
+  const half=Math.ceil(r1Matches.length/2);
+  const leftR1=r1Matches.slice(0,half);
+  const rightR1=r1Matches.slice(half);
+
+  // For right half, positions in round 2+ follow different logic
+  // left: odd positions  right: even positions (roughly)
+  // Actually for standard bracket: left positions ceil to same, right mirror
+
+  function matchCard(m,side='left'){
+    if(!m)return'';
+    const eA=getTeam(m.entry_a_id);
+    const eB=getTeam(m.entry_b_id);
+    const done=m.status==='completed';
+    const wA=done&&m.winner_id===m.entry_a_id;
+    const wB=done&&m.winner_id===m.entry_b_id;
+
+    function slotHtml(e,score,isW,isLost,idx){
+      const isBye=e?.is_bye;
+      const isTBD=!e;
+      let nameClass='tname';
+      if(isW)nameClass+=' w';
+      else if(isBye)nameClass+=' bye';
+      else if(isTBD)nameClass+=' tbd';
+      const seedNum=e&&!isBye?`<span class="seed">${e.seed||''}</span>`:'<span class="seed"></span>';
+      const name=isBye?'BYE':isTBD?'TBD':esc(e.team_name);
+      const sc=done&&score!=null?`<span class="sc ${isW?'w':''}">${score}</span>`:'<span class="sc"></span>';
+      return`<div class="slot ${isW?'won':isLost?'lost':''} ${canClick?'clickable':''}">
+        ${seedNum}<span class="${nameClass}">${name}</span>${sc}
+      </div>`;
+    }
+
+    const canClick=eA&&eB&&!eA?.is_bye&&!eB?.is_bye&&!done;
+    const clickAttr=canClick?`onclick="openMatchModal('${m.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`:''
+    const boSel=`<select class="bo-badge" title="Best of" onclick="event.stopPropagation()" onchange="event.stopPropagation();doSetBO('${m.id}',this.value)">${[1,3,5,7].map(n=>`<option value="${n}" ${(m.best_of||1)===n?'selected':''}>Bo${n}</option>`).join('')}</select>`;
+    const revBtn=done?`<button class="rev-btn" onclick="openReverseModal('${m.id}')" title="Reverse result">↺</button>`:'';
+
+    return`<div class="match-wrap" ${clickAttr} style="cursor:${canClick?'pointer':'default'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:1px 6px 2px;gap:4px;">
+        ${boSel}${revBtn}
+      </div>
+      ${slotHtml(eA,m.score_a,wA,done&&!wA,0)}
+      ${slotHtml(eB,m.score_b,wB,done&&!wB,1)}
+    </div>`;
+  }
+
+  // Build left columns (round 1 → maxWR-1, inward)
+  function buildSide(sideR1Matches,side){
+    const cols=[];
+    for(let r=1;r<=maxWR-1;r++){
+      let roundMatches;
+      if(r===1){
+        roundMatches=sideR1Matches;
+      }else{
+        // In later rounds, positions that came from this side
+        const prevPositions=new Set(sideR1Matches.map(m=>m.position));
+        // Round 2+ positions = ceil(prevPos/2)
+        let curPositions=new Set();
+        for(const p of prevPositions)curPositions.add(Math.ceil(p/2));
+        for(let round=2;round<r;round++){
+          const next=new Set();
+          for(const p of curPositions)next.add(Math.ceil(p/2));
+          curPositions=next;
+        }
+        roundMatches=wM.filter(m=>m.round===r&&curPositions.has(m.position))
+          .sort((a,b)=>a.position-b.position);
+      }
+      const lbl=roundLabel(r,maxWR);
+      cols.push(`<div class="b-col">
+        <div class="round-hdr">${lbl}</div>
+        ${roundMatches.map(m=>matchCard(m,side)).join('')}
+      </div>`);
+    }
+    return cols;
+  }
+
+  // Final match (center)
+  const finalMatch=wM.find(m=>m.round===maxWR);
+  const champion=finalMatch?.winner_id?getTeam(finalMatch.winner_id):null;
+
+  // Left side: positions 1..half of R1
+  const leftCols=buildSide(leftR1,'left');
+  // Right side: reverse column order to mirror
+  const rightCols=buildSide(rightR1,'right').reverse();
+
+  // Champion center
+  const champHtml=`<div class="champion-col">
+    <div class="trophy">🏆</div>
+    <div class="champ-label">${isDbl?'GRAND FINAL':'FINAL'}</div>
+    ${finalMatch?`<div style="margin-bottom:8px">${matchCard(finalMatch,'center')}</div>`:''}
+    <div class="champ-slot">
+      <div class="champ-name ${champion?'':'tbd'}">${champion?esc(champion.team_name):'Champion TBD'}</div>
+    </div>
+    ${tf?`<div class="third-wrap">
+      <div class="third-label">🥉 3rd Place</div>
+      ${matchCard(tf,'center')}
+    </div>`:''}
+    ${isDbl&&gf?`<div style="margin-top:12px;">
+      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:4px;text-align:center;">Grand Final</div>
+      ${matchCard(gf,'center')}
+    </div>`:''}
+    ${isDbl&&br?`<div style="margin-top:8px;">
+      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:4px;text-align:center;">Bracket Reset <span style="font-weight:400;opacity:.6">(if needed)</span></div>
+      ${gf?.status==='completed'&&gf?.winner_id===gf?.entry_b_id?matchCard(br,'center'):'<div style="font-size:10px;color:var(--bench-slate);text-align:center;padding:8px;">Plays if Losers champ wins GF</div>'}
+    </div>`:''}
+  </div>`;
+
+  const loserSection=isDbl&&lM.length>0?`
+    <div style="padding:16px 8px 0;border-top:1px solid var(--border-soft);margin-top:12px">
+      <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--fault-coral);margin-bottom:10px;">📉 Losers Bracket</div>
+      <div class="bracket-outer">
+        <div class="bracket-root" style="padding:0">
+          ${(() => {
+            const maxLR=lM.reduce((a,m)=>Math.max(a,m.round),0);
+            return Array.from({length:maxLR},(_,i)=>{
+              const r=i+1;
+              const ms=lM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+              return`<div class="b-col"><div class="round-hdr" style="color:var(--fault-coral)">LR${r}</div>${ms.map(m=>matchCard(m,'left')).join('')}</div>`;
+            }).join('');
+          })()}
+        </div>
+      </div>
+    </div>`:''
+
+  return`
+    <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:11px;color:var(--bench-slate)">${BRACKET.bracket_type==='double_elim'?'Double Elimination':'Single Elimination'} · ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="confirmGenerate('${BRACKET.bracket_type}')">↺ Reset</button>
+        <button class="btn btn-ghost btn-sm" onclick="confirmGenerate('${BRACKET.bracket_type==='double_elim'?'single_elim':'double_elim'}')">Switch to ${BRACKET.bracket_type==='double_elim'?'Single Elim':'Double Elim'}</button>
+      </div>
+    </div>
+    <div class="bracket-outer">
+      <div class="bracket-root">
+        ${leftCols.join('')}
+        ${champHtml}
+        ${rightCols.join('')}
+      </div>
+    </div>
+    ${loserSection}`;
+}
+
+function roundLabel(r,total){
+  const rem=total-r+1;
+  if(rem===1)return'Final';
+  if(rem===2)return'Semifinal';
+  if(rem===3)return'Quarterfinal';
+  return`Round ${r}`;
+}
+
+// ════════════════════════════════════════════
+// RENDER — SCOREBOARD TAB
+// ════════════════════════════════════════════
+function renderScoreboard(){
+  if(!BRACKET||MATCHES.length===0) return`<div class="empty"><div class="empty-icon">📊</div><div class="empty-title">No bracket yet</div><p>Generate a bracket first, then enter match results to see the scoreboard.</p></div>`;
+
+  const done=MATCHES.filter(m=>m.status==='completed'&&m.score_a!=null);
+  const isRR=BRACKET.bracket_type==='round_robin';
+
+  // Build standings from all completed matches
+  const stats={};
+  TEAMS.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,p1:t.player1_name,p2:t.player2_name,seed:t.seed,w:0,l:0,pf:0,pa:0,gp:0}});
+  for(const m of done){
+    if(m.winner_id&&stats[m.winner_id]){const s=stats[m.winner_id];s.w++;s.gp++;s.pf+=m.score_a===m.winner_id?m.score_a:m.score_b;// simplified
+    }
+    // Recalculate properly
+  }
+
+  // Recalculate stats properly
+  Object.values(stats).forEach(s=>{s.w=0;s.l=0;s.pf=0;s.pa=0;s.gp=0});
+  for(const m of done){
+    const isA_w=m.winner_id===m.entry_a_id;
+    const wId=m.winner_id,lId=isA_w?m.entry_b_id:m.entry_a_id;
+    const wScore=isA_w?m.score_a:m.score_b;
+    const lScore=isA_w?m.score_b:m.score_a;
+    if(stats[wId]){const s=stats[wId];s.w++;s.gp++;s.pf+=wScore||0;s.pa+=lScore||0}
+    if(stats[lId]){const s=stats[lId];s.l++;s.gp++;s.pf+=lScore||0;s.pa+=wScore||0}
+  }
+
+  const sorted=Object.values(stats).filter(s=>s.gp>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa)||a.l-b.l);
+  const all=Object.values(stats).sort((a,b)=>(a.seed||99)-(b.seed||99));
+
+  // Round results table
+  const wM=MATCHES.filter(m=>m.match_type==='winners');
+  const maxWR=wM.reduce((a,m)=>Math.max(a,m.round),0);
+
+  return`
+    <div class="card" style="margin-bottom:12px">
+      <h2 style="margin-bottom:12px">🏅 Standings</h2>
+      <div class="scroll-x">
+        <table class="stbl">
+          <thead><tr><th>#</th><th>Team</th><th>Players</th><th>W</th><th>L</th><th>GP</th><th>PF</th><th>PA</th><th>Diff</th><th>Win%</th></tr></thead>
+          <tbody>
+            ${sorted.length===0?`<tr><td colspan="10" style="text-align:center;color:var(--bench-slate);padding:20px">No completed matches yet</td></tr>`:
+            sorted.map((s,i)=>`<tr class="${i===0?'hl':''}">
+              <td style="font-weight:800;font-family:var(--font-mono)">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+              <td style="font-weight:700">${esc(s.name)}</td>
+              <td style="font-size:11px;color:var(--bench-slate)">${s.p1?esc(s.p1)+(s.p2?' &amp; '+esc(s.p2):''):''}</td>
+              <td style="color:var(--winner-green);font-weight:700;font-family:var(--font-mono)">${s.w}</td>
+              <td style="color:var(--fault-coral);font-family:var(--font-mono)">${s.l}</td>
+              <td style="font-family:var(--font-mono)">${s.gp}</td>
+              <td style="font-family:var(--font-mono)">${s.pf}</td>
+              <td style="font-family:var(--font-mono)">${s.pa}</td>
+              <td style="font-family:var(--font-mono);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'var(--fault-coral)'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
+              <td style="font-family:var(--font-mono)">${s.gp?Math.round(s.w/s.gp*100):0}%</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:12px">📋 Match Results by Round</h2>
+      ${Array.from({length:maxWR},(_,i)=>{
+        const r=i+1;
+        const ms=wM.filter(m=>m.round===r);
+        const doneMids=ms.filter(m=>m.status==='completed');
+        if(doneMids.length===0)return`<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.06em;margin-bottom:6px">${roundLabel(r,maxWR)}</div><div style="font-size:12px;color:var(--bench-slate)">No completed matches yet</div></div>`;
+        return`<div style="margin-bottom:14px">
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.06em;margin-bottom:6px">${roundLabel(r,maxWR)}</div>
+          ${doneMids.map(m=>{
+            const eA=TEAMS.find(t=>t.id===m.entry_a_id),eB=TEAMS.find(t=>t.id===m.entry_b_id);
+            const wA=m.winner_id===m.entry_a_id;
+            return`<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:5px;font-size:12px">
+              <span style="font-weight:${wA?'800':'600'};color:${wA?'var(--winner-green)':'var(--ink)'};">${esc(eA?.team_name||'?')}</span>
+              <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate);flex:0;">${m.score_a}–${m.score_b}</span>
+              <span style="font-weight:${!wA?'800':'600'};color:${!wA?'var(--winner-green)':'var(--ink)'};">${esc(eB?.team_name||'?')}</span>
+              <button style="margin-left:auto;font-size:9px;color:var(--fault-coral);background:none;border:none;cursor:pointer;min-height:0;padding:0;font-weight:700" onclick="openReverseModal('${m.id}')">↺ Reverse</button>
+            </div>`;
+          }).join('')}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// ════════════════════════════════════════════
+// MODALS — MATCH SCORE ENTRY
+// ════════════════════════════════════════════
+function openMatchModal(matchId,nameA,nameB,eAId,eBId,bestOf){
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>Enter Score</h2>
+      <p class="modal-sub">Best of ${bestOf} · Enter ${bestOf>1?'games won':'the score'}</p>
+      <div class="fg2">
+        <div class="field">
+          <label>${esc(nameA)}</label>
+          <input id="sA" type="number" min="0" value="0" style="font-size:36px;font-weight:800;text-align:center;font-family:var(--font-mono);padding:8px 0">
+        </div>
+        <div class="field">
+          <label>${esc(nameB)}</label>
+          <input id="sB" type="number" min="0" value="0" style="font-size:36px;font-weight:800;text-align:center;font-family:var(--font-mono);padding:8px 0">
+        </div>
+      </div>
+      <div class="err" id="mErr"></div>
+      <div class="ma">
+        <button class="no" onclick="CM()">Cancel</button>
+        <button class="ok" onclick="doScore('${matchId}','${eAId}','${eBId}')">Save Result</button>
+      </div>
+    </div>
+  </div>`);
+  document.getElementById('sA')?.focus();
+}
+
+async function doScore(matchId,eAId,eBId){
+  const sA=parseInt(document.getElementById('sA').value,10);
+  const sB=parseInt(document.getElementById('sB').value,10);
+  if(isNaN(sA)||isNaN(sB)){document.getElementById('mErr').textContent='Enter valid scores.';return}
+  if(sA===sB){document.getElementById('mErr').textContent='Scores cannot be tied.';return}
+  CM();
+  document.getElementById('tabContent').innerHTML='<div class="empty"><p>Saving…</p></div>';
+  await doRecord(matchId,sA,sB,eAId,eBId);
+  render();
+}
+
+function openReverseModal(matchId){
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>Reverse This Result?</h2>
+      <p class="modal-sub">Clears this score and any results that depended on it. You can re-enter the correct score after.</p>
+      <div class="ma">
+        <button class="no" onclick="CM()">Cancel</button>
+        <button class="ok-r" onclick="CM();doReverseAndRender('${matchId}')">Reverse</button>
+      </div>
+    </div>
+  </div>`);
+}
+async function doReverseAndRender(matchId){
+  document.getElementById('tabContent').innerHTML='<div class="empty"><p>Reversing…</p></div>';
+  await doReverse(matchId);render();
+}
+
+async function doSetBO(matchId,bestOf){
+  await db.from('bracket_matches').update({best_of:parseInt(bestOf,10)}).eq('id',matchId);
+  const m=MATCHES.find(x=>x.id===matchId);
+  if(m)m.best_of=parseInt(bestOf,10);
+  render();
+}
+
+// ════════════════════════════════════════════
+// TAB SWITCHING + MAIN RENDER
+// ════════════════════════════════════════════
 function switchTab(tab){
   activeTab=tab;
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
@@ -505,627 +992,29 @@ function switchTab(tab){
   render();
 }
 
-async function render(){
+function render(){
   const el=document.getElementById('tabContent');
-  el.innerHTML='<div class="empty"><div class="empty-icon">⏳</div>Loading…</div>';
-  if(activeTab==='teams') el.innerHTML=await renderTeams();
-  else if(activeTab==='brackets') el.innerHTML=await renderBrackets();
-  else if(activeTab==='scoreboard') el.innerHTML=await renderScoreboard();
+  if(activeTab==='teams')el.innerHTML=renderTeams();
+  else if(activeTab==='bracket')el.innerHTML=renderBracket();
+  else if(activeTab==='scoreboard')el.innerHTML=renderScoreboard();
 }
 
-// ─── TEAMS TAB ────────────────────────────────────────
-async function renderTeams(){
-  const teams=await getTeams();
-  const isDoubles=session?.format==='doubles';
-  return`
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <h2 style="margin:0;">Teams <span style="font-size:12px;color:var(--bench-slate);font-family:var(--font-body);text-transform:none;letter-spacing:0;">(${teams.length})</span></h2>
-      <button class="btn-primary btn-sm" onclick="openTeamModal(null,'','','',${isDoubles})">+ Add Team</button>
-    </div>
-    ${teams.length===0?`<div class="empty"><div class="empty-icon">🎾</div><div class="empty-title">No teams yet</div><p>Add all teams first. Then go to Brackets to create the draw.</p></div>`:`
-    <div>
-      ${teams.map((t,i)=>`
-        <div class="team-chip">
-          <span class="seed-badge">#${t.seed||i+1}</span>
-          <div style="flex:1">
-            <div class="team-chip-name">${esc(t.team_name)}</div>
-            ${t.player1_name?`<div class="team-chip-players">${esc(t.player1_name)}${t.player2_name?' &amp; '+esc(t.player2_name):''}</div>`:''}
-          </div>
-          <button class="btn-sm btn-ghost" onclick="openTeamModal('${t.id}','${esc(t.team_name)}','${esc(t.player1_name||'')}','${esc(t.player2_name||'')}',${isDoubles})" style="min-height:0;padding:5px 10px;font-size:11px;">Edit</button>
-        </div>`).join('')}
-    </div>`}
-  </div>`;
-}
-
-function openTeamModal(id,name,p1,p2,isDoubles){
-  M(`<div class="overlay" onclick="if(event.target===this)clearM()">
-    <div class="modal">
-      <h2>${id?'Edit':'Add'} Team</h2>
-      <div class="field"><label>Team Name</label><input id="tmName" type="text" value="${esc(name)}" placeholder="e.g. Team Alpha"></div>
-      <div class="field"><label>Player 1</label><input id="tmP1" type="text" value="${esc(p1)}" placeholder="Name"></div>
-      ${isDoubles?`<div class="field"><label>Player 2</label><input id="tmP2" type="text" value="${esc(p2)}" placeholder="Name"></div>`:''}
-      <div class="auth-error" id="tmErr"></div>
-      <div class="modal-actions">
-        ${id?`<button class="btn-sm btn-danger" style="min-height:48px;flex:0.6;" onclick="doDeleteTeam('${id}')">Delete</button>`:`<button class="btn-no" onclick="clearM()">Cancel</button>`}
-        <button class="btn-yes" onclick="doSaveTeam('${id||''}',${isDoubles})">Save</button>
-      </div>
-      ${id?`<button class="btn-no" style="margin-top:8px;width:100%;" onclick="clearM()">Cancel</button>`:''}
-    </div>
-  </div>`);
-  document.getElementById('tmName')?.focus();
-}
-
-async function doSaveTeam(id,isDoubles){
-  const name=document.getElementById('tmName')?.value?.trim();
-  const p1=document.getElementById('tmP1')?.value?.trim();
-  const p2=isDoubles?document.getElementById('tmP2')?.value?.trim():'';
-  if(!name){document.getElementById('tmErr').textContent='Team name required.';return}
-  await saveTeam(id||null,name,p1,p2);
-  clearM();await render();
-}
-async function doDeleteTeam(id){
-  if(!confirm('Remove this team?'))return;
-  await deleteTeam(id);clearM();await render();
-}
-
-// ─── BRACKETS TAB ─────────────────────────────────────
-async function renderBrackets(){
-  const[teams,brackets]=await Promise.all([getTeams(),getBrackets()]);
-  if(activeBracketId){
-    const b=brackets.find(x=>x.id===activeBracketId);
-    if(b)return await renderDraw(b,teams);
-    activeBracketId=null;
-  }
-  return`
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <div>
-        <h2 style="margin:0 0 3px;">Brackets</h2>
-        <p style="font-size:11px;color:var(--bench-slate);margin:0;">${teams.length} team${teams.length!==1?'s':''} registered</p>
-      </div>
-      <button class="btn-primary btn-sm" onclick="openCreateBracket(${teams.length})">+ New Bracket</button>
-    </div>
-    ${brackets.length===0?`<div class="empty"><div class="empty-icon">🏆</div><div class="empty-title">No brackets yet</div><p>Create a bracket, seed teams into it, then generate the draw.</p></div>`:`
-    ${brackets.map(b=>{
-      const st=b.status==='active'?'pill-active':b.status==='completed'?'pill-done':'pill-setup';
-      return`<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--border-soft);">
-        <div style="flex:1">
-          <div style="font-weight:700;font-size:14px;">${esc(b.name)}</div>
-          <div style="font-size:11px;color:var(--bench-slate);margin-top:2px;">
-            ${b.bracket_type==='single_elim'?'Single Elimination':b.bracket_type==='double_elim'?'Double Elimination':'Round Robin'}
-            · ${b.total_slots} slots
-            <span class="pill ${st}" style="margin-left:6px;">${b.status}</span>
-          </div>
-        </div>
-        <button class="btn-primary btn-sm" onclick="activeBracketId='${b.id}';render()">Open →</button>
-        <button class="btn-sm btn-danger" style="min-height:34px;" onclick="doDeleteBracket('${b.id}','${esc(b.name)}')">🗑</button>
-      </div>`;
-    }).join('')}`}
-  </div>`;
-}
-
-function openCreateBracket(teamCount){
-  const suggest=nextP2(Math.max(teamCount,4));
-  M(`<div class="overlay" onclick="if(event.target===this)clearM()">
-    <div class="modal">
-      <h2>New Bracket</h2>
-      <div class="field"><label>Name</label><input id="cbName" type="text" placeholder="e.g. Bracket A, Main Draw"></div>
-      <div class="form-grid">
-        <div class="field"><label>Format</label>
-          <select id="cbType">
-            <option value="single_elim">Single Elimination</option>
-            <option value="double_elim">Double Elimination</option>
-            <option value="round_robin">Round Robin</option>
-          </select>
-        </div>
-        <div class="field"><label>Teams / Slots</label>
-          <input id="cbSlots" type="number" value="${suggest}" min="2" max="64" oninput="updateCbHint()">
-          <div id="cbHint" style="font-size:10px;color:var(--bench-slate);margin-top:3px;"></div>
-        </div>
-      </div>
-      <div class="auth-error" id="cbErr"></div>
-      <div class="modal-actions">
-        <button class="btn-no" onclick="clearM()">Cancel</button>
-        <button class="btn-yes" onclick="doCreateBracket()">Create</button>
-      </div>
-    </div>
-  </div>`);
-  updateCbHint();
-  document.getElementById('cbName')?.focus();
-}
-function updateCbHint(){
-  const n=parseInt(document.getElementById('cbSlots')?.value||0);
-  const t=document.getElementById('cbType')?.value;
-  const h=document.getElementById('cbHint');
-  if(!h)return;
-  if(t==='round_robin')h.textContent=`${n} teams · ${n*(n-1)/2} total matches`;
-  else{const s=nextP2(n);h.textContent=`${s}-slot bracket · ${s-n} bye${s-n!==1?'s':''}`}
-}
-async function doCreateBracket(){
-  const name=document.getElementById('cbName')?.value?.trim();
-  const type=document.getElementById('cbType')?.value;
-  const n=parseInt(document.getElementById('cbSlots')?.value||0);
-  if(!name){document.getElementById('cbErr').textContent='Name required.';return}
-  if(n<2){document.getElementById('cbErr').textContent='Need at least 2.';return}
-  const slots=type==='round_robin'?n:nextP2(n);
-  const b=await createBracket(name,type,slots);
-  clearM();activeBracketId=b.id;await render();
-}
-async function doDeleteBracket(id,name){
-  if(!confirm(`Delete bracket "${name}"? All match data will be lost.`))return;
-  if(activeBracketId===id)activeBracketId=null;
-  await deleteBracket(id);await render();
-}
-
-// ─── DRAW VIEW ────────────────────────────────────────
-async function renderDraw(bracket,allTeams){
-  const[entries,matches]=await Promise.all([getBracketEntries(bracket.id),getMatches(bracket.id)]);
-  const entMap=Object.fromEntries([...entries,...allTeams].map(e=>[e.id,e]));
-  const isStarted=matches.length>0;
-  const isRR=bracket.bracket_type==='round_robin';
-  const isDbl=bracket.bracket_type==='double_elim';
-
-  const hdr=`
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
-      <button style="background:none;border:none;color:var(--bench-slate);font-weight:700;font-size:13px;padding:0;cursor:pointer;min-height:0;" onclick="activeBracketId=null;render()">← Brackets</button>
-      <span style="color:var(--border-soft);">|</span>
-      <span style="font-family:var(--font-display);font-size:14px;text-transform:uppercase;">${esc(bracket.name)}</span>
-      <span style="font-size:10px;color:var(--bench-slate);">${isRR?'Round Robin':isDbl?'Double Elimination':'Single Elimination'} · ${bracket.total_slots} slots</span>
-      <span class="pill ${bracket.status==='active'?'pill-active':bracket.status==='completed'?'pill-done':'pill-setup'}">${bracket.status}</span>
-    </div>`;
-
-  if(!isStarted) return`<div class="card">${hdr}${renderSeedingPanel(bracket,entries,allTeams)}</div>`;
-  if(isRR) return`<div class="card">${hdr}${renderRRDraw(bracket,entries,matches,entMap)}</div>`;
-  return`<div class="card">${hdr}${renderElimDraw(bracket,entries,matches,entMap,isDbl)}</div>`;
-}
-
-// ── Seeding Panel ──
-function renderSeedingPanel(bracket,entries,allTeams){
-  const seeded=entries.filter(e=>!e.is_bye);
-  const seededIds=new Set(seeded.map(e=>e.id));
-  const available=allTeams.filter(t=>!seededIds.has(t.id));
-  const isRR=bracket.bracket_type==='round_robin';
-
-  return`
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-      <div>
-        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:8px;">Available (${available.length})</div>
-        ${available.length===0?`<p style="font-size:12px;color:var(--bench-slate);">All teams seeded ✓</p>`:''}
-        ${available.map(t=>`
-          <div class="team-chip" style="cursor:default;">
-            <div style="flex:1"><div class="team-chip-name">${esc(t.team_name)}</div>
-              ${t.player1_name?`<div class="team-chip-players">${esc(t.player1_name)}${t.player2_name?' & '+esc(t.player2_name):''}</div>`:''}
-            </div>
-            <button class="btn-sm btn-primary" style="min-height:0;padding:5px 10px;font-size:11px;" onclick="doSeedTeam('${t.id}','${bracket.id}',${seeded.length+1})">Seed →</button>
-          </div>`).join('')}
-      </div>
-      <div>
-        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:8px;">Seeded (${seeded.length}/${bracket.total_slots})</div>
-        ${seeded.map((e,i)=>`
-          <div class="team-chip">
-            <span class="seed-badge">#${i+1}</span>
-            <div style="flex:1"><div class="team-chip-name">${esc(e.team_name)}</div></div>
-            <button class="btn-sm" style="background:none;border:none;color:var(--fault-coral);font-size:11px;font-weight:700;min-height:0;padding:4px 8px;" onclick="doUnseed('${e.id}','${bracket.id}')">✕</button>
-          </div>`).join('')}
-      </div>
-    </div>
-    ${seeded.length>=2?`
-    <button class="btn-yellow btn-sm" style="padding:10px 20px;font-size:13px;min-height:44px;" onclick="doGenerateDraw('${bracket.id}','${bracket.bracket_type}',${bracket.total_slots})">
-      Generate Draw →
-    </button>`:`<p style="font-size:12px;color:var(--bench-slate);">Seed at least 2 teams to generate the draw.</p>`}`;
-}
-
-async function doSeedTeam(teamId,bracketId,slot){
-  await seedEntry(teamId,bracketId,slot);
-  activeBracketId=bracketId;await render();
-}
-async function doUnseed(teamId,bracketId){
-  await unseedEntry(teamId);
-  activeBracketId=bracketId;await render();
-}
-async function doGenerateDraw(bracketId,type,slots){
-  const entries=await getBracketEntries(bracketId);
-  const real=entries.filter(e=>!e.is_bye);
-  if(real.length<2){alert('Need at least 2 seeded teams.');return}
-
-  // Fill byes for single/double elim
-  if(type!=='round_robin'){
-    const existingSlots=new Set(entries.map(e=>e.slot));
-    for(let s=1;s<=slots;s++){
-      if(!existingSlots.has(s))
-        await db.from('bracket_entries').insert({bracket_id:bracketId,session_id:SESSION_ID,team_name:'BYE',is_bye:true,slot:s});
-    }
-  }
-  const allEntries=await getBracketEntries(bracketId);
-  if(type==='single_elim')await generateSingleElim(bracketId,allEntries,slots);
-  else if(type==='double_elim')await generateDoubleElim(bracketId,allEntries,slots);
-  else await generateRR(bracketId,allEntries);
-  await render();
-}
-
-// ── Single / Double Elim Draw ──
-function renderElimDraw(bracket,entries,matches,entMap,isDbl){
-  const wM=matches.filter(m=>m.match_type==='winners');
-  const lM=matches.filter(m=>m.match_type==='losers');
-  const gf=matches.find(m=>m.match_type==='grand_final');
-  const br=matches.find(m=>m.match_type==='bracket_reset');
-  const maxWR=wM.reduce((a,m)=>Math.max(a,m.round),0);
-  const maxLR=lM.reduce((a,m)=>Math.max(a,m.round),0);
-
-  function card(m){
-    if(!m)return'';
-    const eA=m.entry_a_id?entMap[m.entry_a_id]:null;
-    const eB=m.entry_b_id?entMap[m.entry_b_id]:null;
-    const done=m.status==='completed';
-    const wA=done&&m.winner_id===m.entry_a_id;
-    const wB=done&&m.winner_id===m.entry_b_id;
-    const canClick=eA&&eB&&!eA.is_bye&&!eB.is_bye&&!done;
-    const rowA=`<div class="match-row ${wA?'won':done?'lost':''}">
-      <span class="team-name ${wA?'w':eA?.is_bye?'bye':!eA?'tbd':''}">${eA?esc(eA.is_bye?'BYE':eA.team_name):'TBD'}</span>
-      <span class="match-score ${wA?'w':''}">${m.score_a!=null?m.score_a:''}</span></div>`;
-    const rowB=`<div class="match-row ${wB?'won':done?'lost':''}">
-      <span class="team-name ${wB?'w':eB?.is_bye?'bye':!eB?'tbd':''}">${eB?esc(eB.is_bye?'BYE':eB.team_name):'TBD'}</span>
-      <span class="match-score ${wB?'w':''}">${m.score_b!=null?m.score_b:''}</span></div>`;
-    return`<div class="match-card ${done?'live':''} ${canClick?'clickable':''}" ${canClick?`onclick="openMatchModal('${m.id}','${bracket.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`:''}>
-      <div class="match-header">
-        <span>Bo<select class="bo-select" onclick="event.stopPropagation()" onchange="event.stopPropagation();doSetBestOf('${m.id}',this.value,'${bracket.id}')">
-          ${[1,3,5,7].map(n=>`<option value="${n}" ${(m.best_of||1)===n?'selected':''}>${n}</option>`).join('')}
-        </select></span>
-        ${done?`<button class="reverse-btn" onclick="event.stopPropagation();openReverseModal('${m.id}','${bracket.id}')">↺ Reverse</button>`:'<span></span>'}
-      </div>
-      ${rowA}<div class="match-divider"></div>${rowB}
-    </div>`;
-  }
-
-  const wCols=Array.from({length:maxWR},(_,i)=>{
-    const r=i+1;
-    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
-    return`<div class="bracket-col">
-      <div class="round-label">${roundName(r,maxWR)}</div>
-      ${ms.map(m=>card(m)).join('')}
-    </div>`;
-  }).join('');
-
-  const lCols=isDbl&&lM.length>0?Array.from({length:maxLR},(_,i)=>{
-    const r=i+1;
-    const ms=lM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
-    return`<div class="bracket-col">
-      <div class="round-label" style="color:var(--fault-coral);">Losers R${r}</div>
-      ${ms.map(m=>card(m)).join('')}
-    </div>`;
-  }).join(''):'';
-
-  return`
-    <div class="bracket-wrap">
-      <div class="section-hdr" style="color:var(--winner-green);">🏆 Winners Bracket</div>
-      <div class="bracket-cols">${wCols}</div>
-      ${isDbl&&lM.length>0?`
-        <div class="section-hdr" style="color:var(--fault-coral);margin-top:16px;">📉 Losers Bracket</div>
-        <div class="bracket-cols">${lCols}</div>`:''}
-      ${gf?`
-        <div class="section-hdr" style="color:var(--optic-yellow);margin-top:16px;">🥇 Grand Final</div>
-        <div class="bracket-cols">
-          <div class="bracket-col">
-            <div class="round-label" style="color:var(--optic-yellow);">Grand Final${isDbl?' (Winners champ vs Losers champ)':''}</div>
-            ${card(gf)}
-          </div>
-          ${br&&isDbl?`<div class="bracket-col">
-            <div class="round-label" style="color:var(--bench-slate);">Bracket Reset (if needed)</div>
-            ${gf.status==='completed'&&gf.winner_id===gf.entry_b_id?card(br):`<div style="font-size:11px;color:var(--bench-slate);padding:12px;">Only played if Losers champion wins Grand Final</div>`}
-          </div>`:''}
-        </div>`:''}
-    </div>
-    <div style="margin-top:12px;">
-      <button class="btn-sm btn-ghost" onclick="openResetModal('${bracket.id}','${bracket.bracket_type}',${bracket.total_slots})">↺ Reset Draw</button>
-    </div>`;
-}
-
-// ── Round Robin Draw ──
-function renderRRDraw(bracket,entries,matches,entMap){
-  const real=entries.filter(e=>!e.is_bye);
-  const done=matches.filter(m=>m.status==='completed');
-  // Standings
-  const standings=real.map(e=>{
-    let w=0,l=0,pf=0,pa=0;
-    for(const m of done){
-      const isA=m.entry_a_id===e.id,isB=m.entry_b_id===e.id;
-      if(!isA&&!isB)continue;
-      if(m.winner_id===e.id)w++;else l++;
-      pf+=isA?(m.score_a||0):(m.score_b||0);
-      pa+=isA?(m.score_b||0):(m.score_a||0);
-    }
-    return{...e,w,l,pf,pa,diff:pf-pa};
-  }).sort((a,b)=>b.w-a.w||b.diff-a.diff);
-
-  // Score map
-  const sm={};
-  for(const m of matches)
-    if(m.entry_a_id&&m.entry_b_id)sm[`${m.entry_a_id}_${m.entry_b_id}`]=m;
-
-  const getMatch=(aId,bId)=>sm[`${aId}_${bId}`]||sm[`${bId}_${aId}`]||null;
-
-  return`
-    <div style="margin-bottom:18px;">
-      <div class="section-hdr" style="color:var(--winner-green);">📊 Standings</div>
-      <div class="t-scroll">
-        <table class="tbl">
-          <thead><tr><th>#</th><th>Team</th><th>W</th><th>L</th><th>PF</th><th>PA</th><th>Diff</th></tr></thead>
-          <tbody>
-            ${standings.map((e,i)=>`<tr class="${i===0?'hl':''}">
-              <td class="${i===0?'gold':''}">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
-              <td style="font-weight:700">${esc(e.team_name)}</td>
-              <td class="green mono">${e.w}</td><td class="red mono">${e.l}</td>
-              <td class="mono">${e.pf}</td><td class="mono">${e.pa}</td>
-              <td class="mono" style="color:${e.diff>=0?'var(--winner-green)':'var(--fault-coral)'};font-weight:700;">${e.diff>=0?'+':''}${e.diff}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div>
-      <div class="section-hdr" style="color:var(--waiting-blue);">📋 Score Matrix — tap a cell to enter score</div>
-      <div class="matrix-wrap">
-        <table class="matrix-tbl">
-          <thead>
-            <tr>
-              <th class="row-label">Team</th>
-              ${real.map(e=>`<th>${esc(e.team_name)}</th>`).join('')}
-              <th class="total-col">Total Pts</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${real.map(row=>{
-              const st=standings.find(s=>s.id===row.id);
-              return`<tr>
-                <td class="row-label">${esc(row.team_name)}</td>
-                ${real.map(col=>{
-                  if(row.id===col.id)return`<td class="self">✕</td>`;
-                  const m=getMatch(row.id,col.id);
-                  if(!m)return`<td onclick="openRRMatch('${bracket.id}','${row.id}','${esc(row.team_name)}','${col.id}','${esc(col.team_name)}','')" style="cursor:pointer;color:var(--bench-slate);">–</td>`;
-                  const isA=m.entry_a_id===row.id;
-                  const rs=isA?m.score_a:m.score_b,cs=isA?m.score_b:m.score_a;
-                  const won=m.winner_id===row.id;
-                  return`<td class="cell-done" onclick="openRRMatch('${bracket.id}','${row.id}','${esc(row.team_name)}','${col.id}','${esc(col.team_name)}','${m.id}')">
-                    <span class="${won?'matrix-score-w':'matrix-score-l'}">${rs!=null?rs:''}</span>
-                    ${rs!=null?`<span style="color:var(--bench-slate);">–${cs}</span>`:''}
-                  </td>`;
-                }).join('')}
-                <td class="total-col">${st?.pf||0}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div style="margin-top:12px;">
-      <button class="btn-sm btn-ghost" onclick="openResetModal('${bracket.id}','round_robin',0)">↺ Reset All Scores</button>
-    </div>`;
-}
-
-// ─── SCOREBOARD TAB ───────────────────────────────────
-async function renderScoreboard(){
-  const brackets=await getBrackets();
-  if(brackets.length===0)return`<div class="empty"><div class="empty-icon">📊</div><div class="empty-title">No brackets yet</div><p>Create brackets and enter scores to see the scoreboard.</p></div>`;
-
-  let html='';
-  for(const b of brackets){
-    const[entries,matches]=await Promise.all([getBracketEntries(b.id),getMatches(b.id)]);
-    const real=entries.filter(e=>!e.is_bye);
-    const done=matches.filter(m=>m.status==='completed');
-    if(real.length===0)continue;
-
-    // Build standings
-    const rows=real.map(e=>{
-      let w=0,l=0,pf=0,pa=0,gp=0;
-      for(const m of done){
-        const isA=m.entry_a_id===e.id,isB=m.entry_b_id===e.id;
-        if(!isA&&!isB)continue;
-        gp++;
-        if(m.winner_id===e.id)w++;else l++;
-        pf+=isA?(m.score_a||0):(m.score_b||0);
-        pa+=isA?(m.score_b||0):(m.score_a||0);
-      }
-      return{...e,w,l,pf,pa,gp,diff:pf-pa};
-    }).sort((a,b)=>b.w-a.w||b.diff-a.diff);
-
-    const isRR=b.bracket_type==='round_robin';
-    const sm={};
-    for(const m of done)if(m.entry_a_id&&m.entry_b_id)sm[`${m.entry_a_id}_${m.entry_b_id}`]=m;
-    const getMatch=(aId,bId)=>sm[`${aId}_${bId}`]||sm[`${bId}_${aId}`]||null;
-
-    html+=`
-    <div class="card" style="margin-bottom:18px;">
-      <h2 style="margin-bottom:14px;">${esc(b.name)} <span style="font-size:11px;color:var(--bench-slate);font-family:var(--font-body);text-transform:none;">${isRR?'Round Robin':b.bracket_type==='double_elim'?'Double Elim':'Single Elim'}</span></h2>
-
-      ${isRR?`
-      <!-- Round Robin matrix scoreboard -->
-      <div class="matrix-wrap" style="margin-bottom:16px;">
-        <table class="matrix-tbl">
-          <thead>
-            <tr>
-              <th class="row-label">Team</th>
-              ${real.map(e=>`<th>${esc(e.team_name)}</th>`).join('')}
-              <th class="total-col">Total Pts</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(row=>{
-              return`<tr>
-                <td class="row-label" style="font-weight:700">${esc(row.team_name)}</td>
-                ${real.map(col=>{
-                  if(row.id===col.id)return`<td class="self">✕</td>`;
-                  const m=getMatch(row.id,col.id);
-                  if(!m||m.score_a==null)return`<td style="color:var(--bench-slate);">—</td>`;
-                  const isA=m.entry_a_id===row.id;
-                  const rs=isA?m.score_a:m.score_b,cs=isA?m.score_b:m.score_a;
-                  const won=m.winner_id===row.id;
-                  return`<td><span class="${won?'matrix-score-w':'matrix-score-l'}">${rs}</span><span style="color:var(--bench-slate)">–${cs}</span></td>`;
-                }).join('')}
-                <td class="total-col">${row.pf}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`:``}
-
-      <!-- Standings table (always shown) -->
-      <div class="t-scroll">
-        <table class="tbl">
-          <thead><tr><th>#</th><th>Team</th><th>W</th><th>L</th><th>GP</th><th>PF</th><th>PA</th><th>Diff</th><th>Win%</th></tr></thead>
-          <tbody>
-            ${rows.map((e,i)=>`<tr class="${i===0?'hl':''}">
-              <td class="${i===0?'gold':''}">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
-              <td style="font-weight:700">${esc(e.team_name)}</td>
-              <td class="green mono">${e.w}</td><td class="red mono">${e.l}</td>
-              <td class="mono">${e.gp}</td><td class="mono">${e.pf}</td><td class="mono">${e.pa}</td>
-              <td class="mono" style="color:${e.diff>=0?'var(--winner-green)':'var(--fault-coral)'};font-weight:700;">${e.diff>=0?'+':''}${e.diff}</td>
-              <td class="mono">${e.gp>0?Math.round(e.w/e.gp*100):0}%</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-  }
-  return html||`<div class="empty"><div class="empty-icon">📊</div><div class="empty-title">No scores yet</div><p>Enter match results in Brackets to see the scoreboard update here.</p></div>`;
-}
-
-// ─── MATCH MODALS ─────────────────────────────────────
-function openMatchModal(matchId,bracketId,nameA,nameB,entAId,entBId,bestOf){
-  const label=bestOf>1?`Best of ${bestOf} — enter games won`:'Enter the score';
-  M(`<div class="overlay" onclick="if(event.target===this)clearM()">
-    <div class="modal">
-      <h2>Match Result</h2>
-      <p class="modal-sub">${esc(nameA)} vs ${esc(nameB)}<br><small>${label}</small></p>
-      <div class="form-grid">
-        <div class="field"><label>${esc(nameA)}</label>
-          <input id="mmA" type="number" min="0" value="0" style="font-size:32px;font-weight:800;text-align:center;font-family:var(--font-mono);">
-        </div>
-        <div class="field"><label>${esc(nameB)}</label>
-          <input id="mmB" type="number" min="0" value="0" style="font-size:32px;font-weight:800;text-align:center;font-family:var(--font-mono);">
-        </div>
-      </div>
-      <div class="auth-error" id="mmErr"></div>
-      <div class="modal-actions">
-        <button class="btn-no" onclick="clearM()">Cancel</button>
-        <button class="btn-yes" onclick="doRecordResult('${matchId}','${bracketId}','${entAId}','${entBId}')">Save Result</button>
-      </div>
-    </div>
-  </div>`);
-  document.getElementById('mmA')?.focus();
-}
-
-async function doRecordResult(matchId,bracketId,entAId,entBId){
-  const sA=parseInt(document.getElementById('mmA').value,10);
-  const sB=parseInt(document.getElementById('mmB').value,10);
-  if(isNaN(sA)||isNaN(sB)){document.getElementById('mmErr').textContent='Enter valid scores.';return}
-  if(sA===sB){document.getElementById('mmErr').textContent='Cannot be tied.';return}
-  const winnerId=sA>sB?entAId:entBId;
-  const loserId=sA>sB?entBId:entAId;
-  await recordResult(matchId,sA,sB,winnerId,loserId,bracketId);
-  clearM();await render();
-}
-
-function openRRMatch(bracketId,rowId,rowName,colId,colName,existingMatchId){
-  M(`<div class="overlay" onclick="if(event.target===this)clearM()">
-    <div class="modal">
-      <h2>Match Score</h2>
-      <p class="modal-sub">${esc(rowName)} vs ${esc(colName)}</p>
-      <div class="form-grid">
-        <div class="field"><label>${esc(rowName)}</label>
-          <input id="rrA" type="number" min="0" value="0" style="font-size:32px;font-weight:800;text-align:center;font-family:var(--font-mono);">
-        </div>
-        <div class="field"><label>${esc(colName)}</label>
-          <input id="rrB" type="number" min="0" value="0" style="font-size:32px;font-weight:800;text-align:center;font-family:var(--font-mono);">
-        </div>
-      </div>
-      <div class="auth-error" id="rrErr"></div>
-      <div class="modal-actions">
-        <button class="btn-no" onclick="clearM()">Cancel</button>
-        <button class="btn-yes" onclick="doRRResult('${bracketId}','${rowId}','${colId}','${existingMatchId}')">Save</button>
-      </div>
-    </div>
-  </div>`);
-  document.getElementById('rrA')?.focus();
-}
-
-async function doRRResult(bracketId,rowId,colId,existingId){
-  const sA=parseInt(document.getElementById('rrA').value,10);
-  const sB=parseInt(document.getElementById('rrB').value,10);
-  if(isNaN(sA)||isNaN(sB)){document.getElementById('rrErr').textContent='Enter valid scores.';return}
-  if(sA===sB){document.getElementById('rrErr').textContent='Cannot be tied.';return}
-  const winnerId=sA>sB?rowId:colId;
-  const loserId=sA>sB?colId:rowId;
-  if(existingId){
-    await recordResult(existingId,sA,sB,winnerId,loserId,bracketId);
-  }else{
-    // Find the match between these two
-    const{data:m}=await db.from('bracket_matches').select('id,entry_a_id,entry_b_id')
-      .eq('bracket_id',bracketId)
-      .or(`and(entry_a_id.eq.${rowId},entry_b_id.eq.${colId}),and(entry_a_id.eq.${colId},entry_b_id.eq.${rowId})`)
-      .single();
-    if(m){
-      const isA=m.entry_a_id===rowId;
-      await recordResult(m.id,isA?sA:sB,isA?sB:sA,winnerId,loserId,bracketId);
-    }
-  }
-  clearM();await render();
-}
-
-function openReverseModal(matchId,bracketId){
-  M(`<div class="overlay" onclick="if(event.target===this)clearM()">
-    <div class="modal">
-      <h2>Reverse Result?</h2>
-      <p class="modal-sub">This clears the score and removes any downstream results that depended on it. Re-enter the correct score after.</p>
-      <div class="modal-actions">
-        <button class="btn-no" onclick="clearM()">Cancel</button>
-        <button class="btn-yes-danger" onclick="doReverse('${matchId}','${bracketId}')">Reverse</button>
-      </div>
-    </div>
-  </div>`);
-}
-async function doReverse(matchId,bracketId){
-  await reverseResult(matchId,bracketId);clearM();await render();
-}
-
-async function doSetBestOf(matchId,bestOf,bracketId){
-  await setBestOf(matchId,parseInt(bestOf,10));
-  // Refresh draw without full render to avoid flicker
-  activeBracketId=bracketId;await render();
-}
-
-function openResetModal(bracketId,type,slots){
-  M(`<div class="overlay" onclick="if(event.target===this)clearM()">
-    <div class="modal">
-      <h2>Reset Draw?</h2>
-      <p class="modal-sub">All match results will be cleared. Team seeding is kept.</p>
-      <div class="modal-actions">
-        <button class="btn-no" onclick="clearM()">Cancel</button>
-        <button class="btn-yes-danger" onclick="doReset('${bracketId}','${type}',${slots})">Reset</button>
-      </div>
-    </div>
-  </div>`);
-}
-async function doReset(bracketId,type,slots){
-  const entries=await getBracketEntries(bracketId);
-  if(type==='single_elim')await generateSingleElim(bracketId,entries,slots);
-  else if(type==='double_elim')await generateDoubleElim(bracketId,entries,slots);
-  else{
-    await db.from('bracket_matches').update({score_a:null,score_b:null,winner_id:null,loser_id:null,status:'pending',ended_at:null}).eq('bracket_id',bracketId);
-  }
-  clearM();await render();
-}
-
-// ─── INIT ─────────────────────────────────────────────
+// ════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════
 (async()=>{
-  if(!SESSION_ID){
-    document.getElementById('tabContent').innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">No session</div><p>Open this page from the host console.</p></div>';
+  if(!SID){
+    document.getElementById('tabContent').innerHTML=`<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">No Session</div><p>Open this page from the host console.</p></div>`;
     return;
   }
-  session=await getSession();
-  if(session)document.getElementById('sessionLabel').textContent=session.name;
-  await render();
+  await loadAll();
+  render();
+
+  // Real-time updates
+  db.channel(`tourn-${SID}`)
+    .on('postgres_changes',{event:'*',schema:'public',table:'bracket_matches',filter:`bracket_id=eq.${BRACKET?.id||'none'}`},async()=>{await loadAll();render()})
+    .on('postgres_changes',{event:'*',schema:'public',table:'bracket_entries',filter:`session_id=eq.${SID}`},async()=>{await loadAll();render()})
+    .subscribe();
 })();
 </script>
 </body>
