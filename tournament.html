@@ -386,9 +386,10 @@ async function generateBracket(type){
   const totalRounds=Math.log2(slots);
 
   // Create bracket record
-  const{data:br}=await db.from('brackets').insert({
+  const{data:br,error:brErr}=await db.from('brackets').insert({
     session_id:SID,name:'Main Draw',bracket_type:type,total_slots:slots,best_of:1,status:'active'
   }).select().single();
+  if(brErr||!br)throw new Error('Could not create bracket: '+(brErr?.message||'unknown error'));
   BRACKET=br;
 
   // EMPTY draw — every Round-1 slot starts blank.
@@ -426,7 +427,17 @@ async function generateBracket(type){
     rows.push({bracket_id:br.id,round:totalRounds,position:2,best_of:1,status:'pending',match_type:'third_place',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
   }
 
-  await db.from('bracket_matches').insert(rows);
+  const{error:mErr}=await db.from('bracket_matches').insert(rows);
+  if(mErr){
+    // Most common cause: missing columns. Tell the host exactly what to run.
+    if(/match_type|loser_id/.test(mErr.message||'')){
+      throw new Error('Database is missing tournament columns. Run this in Supabase SQL Editor:\n\n'+
+        'ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS match_type text DEFAULT \'winners\';\n'+
+        'ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS loser_id uuid REFERENCES bracket_entries(id);\n'+
+        'ALTER TABLE bracket_entries ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES sessions(id);');
+    }
+    throw new Error('Could not create matches: '+mErr.message);
+  }
   const{data:fresh}=await db.from('bracket_matches').select('*').eq('bracket_id',br.id)
     .order('round',{ascending:true}).order('position',{ascending:true});
   MATCHES=fresh||[];
@@ -655,7 +666,7 @@ function renderBracket(){
   if(!BRACKET||MATCHES.length===0){
     return`<div class="card">
       <h2 style="margin-bottom:6px">Generate Bracket Draw</h2>
-      <p style="font-size:12px;color:var(--bench-slate);margin:0 0 16px">${TEAMS.length} teams registered · ${nextP2(TEAMS.length)}-slot bracket (${nextP2(TEAMS.length)-TEAMS.length} bye${nextP2(TEAMS.length)-TEAMS.length!==1?'s':''} will be added)</p>
+      <p style="font-size:12px;color:var(--bench-slate);margin:0 0 16px">${TEAMS.length} teams registered · ${nextP2(TEAMS.length)}-slot bracket · assign each team to a slot with the dropdowns after generating (select BYE for empty slots)</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-yellow" onclick="confirmGenerate('single_elim')">Generate Single Elimination Draw →</button>
       </div>
@@ -687,7 +698,12 @@ function confirmGenerate(type){
 
 async function doGenerate(type){
   document.getElementById('tabContent').innerHTML='<div class="empty"><div class="empty-icon">⚙️</div><p>Generating bracket…</p></div>';
-  await generateBracket(type);
+  try{
+    await generateBracket(type);
+  }catch(err){
+    alert(err.message||'Bracket generation failed.');
+    await loadAll();
+  }
   render();
 }
 
@@ -1275,9 +1291,13 @@ function switchTab(tab){
 
 function render(){
   const el=document.getElementById('tabContent');
-  if(activeTab==='teams')el.innerHTML=renderTeams();
-  else if(activeTab==='bracket')el.innerHTML=renderBracket();
-  else if(activeTab==='scoreboard')el.innerHTML=renderScoreboard();
+  try{
+    if(activeTab==='teams')el.innerHTML=renderTeams();
+    else if(activeTab==='bracket')el.innerHTML=renderBracket();
+    else if(activeTab==='scoreboard')el.innerHTML=renderScoreboard();
+  }catch(err){
+    el.innerHTML='<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">Render error</div><p>'+String(err.message||err)+'</p></div>';
+  }
 }
 
 // ════════════════════════════════════════════
