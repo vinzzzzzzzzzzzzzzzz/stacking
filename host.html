@@ -801,11 +801,35 @@ function decideSkillBalancedTeams(group) {
 function decideNextMatchFromPool(players, teamSize) {
   const needed = teamSize * 2;
   if (!players || players.length < needed) return null;
-  // Always strict FIFO for WHO plays — only the next `needed` players.
+  // Strict order for WHO plays — only the next `needed` players
+  // (pool is already tiered: winners → fresh → losers, FIFO within tier).
   const group = players.slice(0, needed);
   if (teamSize === 1) {
     return { teamAPlayerIds: [group[0].id], teamBPlayerIds: [group[1].id] };
   }
+
+  // WINNING PAIR vs WINNING PAIR:
+  // Winners of the same match share an identical became_free_at timestamp.
+  // If the next 4 are all winners forming exactly two timestamp-pairs,
+  // keep each winning pair together as a team instead of re-splitting.
+  // Same rule for losers (losing pair vs losing pair further down the queue).
+  const allSameResult = group.every(p => p.last_match_result === 'won') ||
+                        group.every(p => p.last_match_result === 'lost');
+  if (allSameResult) {
+    const byTs = {};
+    for (const p of group) {
+      const k = p.became_free_at || '';
+      (byTs[k] = byTs[k] || []).push(p);
+    }
+    const pairs = Object.values(byTs);
+    if (pairs.length === 2 && pairs[0].length === 2 && pairs[1].length === 2) {
+      return {
+        teamAPlayerIds: pairs[0].map(p => p.id),
+        teamBPlayerIds: pairs[1].map(p => p.id),
+      };
+    }
+  }
+
   return decideSkillBalancedTeams(group);
 }
 
@@ -1190,13 +1214,26 @@ const SessionAPI = (() => {
 
     const session = sessionId ? await getSession(sessionId) : await getSession(court.session_id);
 
-    // Pull everyone who is 'waiting' — this is the single unified pool,
-    // strictly ordered by became_free_at (oldest first = longest waiting).
-    const { data: pool } = await supabaseClient.from('players')
+    // Pull everyone who is 'waiting' — single unified pool.
+    // TIERED ORDER (professional stacking):
+    //   Tier 0: last match WON      — winners group to the front
+    //   Tier 1: fresh / no result   — new arrivals next
+    //   Tier 2: last match LOST     — losers group behind
+    // Within each tier: FIFO by became_free_at.
+    // Result: winners play winners as much as possible
+    // (e.g. courts finish 1,2|3,4 and 5,8|6,7 → queue = 1,2,5,8,3,4,6,7).
+    const { data: rawPool } = await supabaseClient.from('players')
       .select('id, became_free_at, last_match_result, skill_tier')
       .eq('session_id', court.session_id)
       .eq('status', 'waiting')
       .order('became_free_at', { ascending: true });
+
+    const resultTier = p =>
+      p.last_match_result === 'won' ? 0 :
+      p.last_match_result === 'lost' ? 2 : 1;
+    const pool = (rawPool || []).slice().sort((a, b) =>
+      resultTier(a) - resultTier(b) ||
+      new Date(a.became_free_at) - new Date(b.became_free_at));
 
     const teamSize = session.format === 'doubles' ? 2 : 1;
     const decision = window.StackingEngine.decideNextMatchFromPool(pool || [], teamSize);
