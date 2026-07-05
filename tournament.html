@@ -626,12 +626,11 @@ function renderBracket(){
       <h2 style="margin-bottom:6px">Generate Bracket Draw</h2>
       <p style="font-size:12px;color:var(--bench-slate);margin:0 0 16px">${TEAMS.length} teams registered · ${nextP2(TEAMS.length)}-slot bracket (${nextP2(TEAMS.length)-TEAMS.length} bye${nextP2(TEAMS.length)-TEAMS.length!==1?'s':''} will be added)</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-green" onclick="confirmGenerate('single_elim')">Single Elimination</button>
-        <button class="btn btn-green" onclick="confirmGenerate('double_elim')">Double Elimination</button>
+        <button class="btn btn-yellow" onclick="confirmGenerate('single_elim')">Generate Single Elimination Draw →</button>
       </div>
       <p style="font-size:11px;color:var(--bench-slate);margin:12px 0 0">
-        <strong>Single Elim:</strong> Lose once → out. Fast and decisive.<br>
-        <strong>Double Elim:</strong> Lose once → Losers bracket. Lose twice → eliminated. More play time.
+        Standard single elimination — lose once, you're out. Winners advance toward the Final for 🥇 gold and 🥈 silver;
+        the two semifinal losers meet in the 🥉 3rd-place match. Each match has its own Best-of (Bo1/3/5/7) selector.
       </p>
     </div>`;
   }
@@ -660,170 +659,364 @@ async function doGenerate(type){
   render();
 }
 
+function roundLabel(r,total){
+  const rem=total-r+1;
+  if(rem===1)return'Final';
+  if(rem===2)return'Semifinal';
+  if(rem===3)return'Quarterfinal';
+  return`Round ${r}`;
+}
+
+/*
+ * SVG BRACKET — boxes connected by lines, left to right.
+ *
+ * For N teams in round 1 (N = slots/2):
+ *   Each match = two stacked boxes + a vertical connector on the right
+ *   → horizontal line to the midpoint Y of the next-round match
+ *   Repeat per round until the champion box on the far right.
+ *
+ * Geometry:
+ *   BOX_W = 128px, BOX_H = 26px, GAP = 4px between pair
+ *   COL_GAP = 52px  (the connecting horizontal line region)
+ *   R1_SPACING = PAIR_H + 18px  (space between consecutive R1 matches)
+ *   Each later round: Y-center = avg of its two child Y-centers → naturally doubles spacing
+ */
 function buildNCAABracket(){
-  const wM=MATCHES.filter(m=>m.match_type==='winners');
-  const lM=MATCHES.filter(m=>m.match_type==='losers');
-  const gf=MATCHES.find(m=>m.match_type==='grand_final');
-  const br=MATCHES.find(m=>m.match_type==='bracket_reset');
-  const tf=MATCHES.find(m=>m.match_type==='third_place');
-  const maxWR=wM.reduce((a,m)=>Math.max(a,m.round),0);
-  const isDbl=BRACKET.bracket_type==='double_elim';
+  const wM   = MATCHES.filter(m=>m.match_type==='winners').sort((a,b)=>a.round-b.round||a.position-b.position);
+  const lM   = MATCHES.filter(m=>m.match_type==='losers');
+  const gfM  = MATCHES.find(m=>m.match_type==='grand_final');
+  const tfM  = MATCHES.find(m=>m.match_type==='third_place');
+  const brM  = MATCHES.find(m=>m.match_type==='bracket_reset');
+  const maxR = wM.reduce((a,m)=>Math.max(a,m.round),0);
+  const isDbl= BRACKET.bracket_type==='double_elim';
 
-  // Build entity map
-  const{data:allEntries}={data:[...TEAMS]};
-  // We'll look up by id using MATCHES' entry refs + TEAMS
-  const entMap={};
-  TEAMS.forEach(t=>{entMap[t.id]=t});
-  // Also need bye entries — fetch from entries stored in bracket
-  // We'll load them lazily from match references
-  // (bye entries won't be in TEAMS, they'll have is_bye=true)
-  // For now mark unknown ids as TBD
-  function getTeam(id){return id?entMap[id]:null}
+  // team lookup
+  const eMap={};
+  TEAMS.forEach(t=>{eMap[t.id]=t});
+  function E(id){return id?eMap[id]:null}
 
-  // Split winners matches into LEFT half and RIGHT half
-  // Left half: positions 1..n/2 in round 1, progressing inward
-  const r1Matches=wM.filter(m=>m.round===1).sort((a,b)=>a.position-b.position);
-  const half=Math.ceil(r1Matches.length/2);
-  const leftR1=r1Matches.slice(0,half);
-  const rightR1=r1Matches.slice(half);
+  // ── Constants ──────────────────────────────
+  const BW=128, BH=26, GAP=4, CG=52, PX=14, PY=24, LH=16;
+  const PAIR=BH*2+GAP;
+  const R1SP=PAIR+18;
 
-  // For right half, positions in round 2+ follow different logic
-  // left: odd positions  right: even positions (roughly)
-  // Actually for standard bracket: left positions ceil to same, right mirror
+  const r1Matches = wM.filter(m=>m.round===1);
+  const R1N = r1Matches.length;  // number of R1 matches
 
-  function matchCard(m,side='left'){
-    if(!m)return'';
-    const eA=getTeam(m.entry_a_id);
-    const eB=getTeam(m.entry_b_id);
-    const done=m.status==='completed';
-    const wA=done&&m.winner_id===m.entry_a_id;
-    const wB=done&&m.winner_id===m.entry_b_id;
-
-    function slotHtml(e,score,isW,isLost,idx){
-      const isBye=e?.is_bye;
-      const isTBD=!e;
-      let nameClass='tname';
-      if(isW)nameClass+=' w';
-      else if(isBye)nameClass+=' bye';
-      else if(isTBD)nameClass+=' tbd';
-      const seedNum=e&&!isBye?`<span class="seed">${e.seed||''}</span>`:'<span class="seed"></span>';
-      const name=isBye?'BYE':isTBD?'TBD':esc(e.team_name);
-      const sc=done&&score!=null?`<span class="sc ${isW?'w':''}">${score}</span>`:'<span class="sc"></span>';
-      return`<div class="slot ${isW?'won':isLost?'lost':''} ${canClick?'clickable':''}">
-        ${seedNum}<span class="${nameClass}">${name}</span>${sc}
-      </div>`;
-    }
-
-    const canClick=eA&&eB&&!eA?.is_bye&&!eB?.is_bye&&!done;
-    const clickAttr=canClick?`onclick="openMatchModal('${m.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`:''
-    const boSel=`<select class="bo-badge" title="Best of" onclick="event.stopPropagation()" onchange="event.stopPropagation();doSetBO('${m.id}',this.value)">${[1,3,5,7].map(n=>`<option value="${n}" ${(m.best_of||1)===n?'selected':''}>Bo${n}</option>`).join('')}</select>`;
-    const revBtn=done?`<button class="rev-btn" onclick="openReverseModal('${m.id}')" title="Reverse result">↺</button>`:'';
-
-    return`<div class="match-wrap" ${clickAttr} style="cursor:${canClick?'pointer':'default'}">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:1px 6px 2px;gap:4px;">
-        ${boSel}${revBtn}
-      </div>
-      ${slotHtml(eA,m.score_a,wA,done&&!wA,0)}
-      ${slotHtml(eB,m.score_b,wB,done&&!wB,1)}
-    </div>`;
-  }
-
-  // Build left columns (round 1 → maxWR-1, inward)
-  function buildSide(sideR1Matches,side){
-    const cols=[];
-    for(let r=1;r<=maxWR-1;r++){
-      let roundMatches;
+  // ── Compute Y-center for every match ───────
+  // cy[r][pos] = vertical center of that match's pair
+  const cy={};
+  for(let r=1;r<=maxR;r++){
+    cy[r]={};
+    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
       if(r===1){
-        roundMatches=sideR1Matches;
-      }else{
-        // In later rounds, positions that came from this side
-        const prevPositions=new Set(sideR1Matches.map(m=>m.position));
-        // Round 2+ positions = ceil(prevPos/2)
-        let curPositions=new Set();
-        for(const p of prevPositions)curPositions.add(Math.ceil(p/2));
-        for(let round=2;round<r;round++){
-          const next=new Set();
-          for(const p of curPositions)next.add(Math.ceil(p/2));
-          curPositions=next;
-        }
-        roundMatches=wM.filter(m=>m.round===r&&curPositions.has(m.position))
-          .sort((a,b)=>a.position-b.position);
+        cy[r][m.position] = PY+LH + (m.position-1)*R1SP + PAIR/2;
+      } else {
+        const pA=2*m.position-1, pB=2*m.position;
+        const yA=cy[r-1]?.[pA], yB=cy[r-1]?.[pB];
+        cy[r][m.position] = (yA!=null&&yB!=null) ? (yA+yB)/2 : PY+LH+PAIR/2;
       }
-      const lbl=roundLabel(r,maxWR);
-      cols.push(`<div class="b-col">
-        <div class="round-hdr">${lbl}</div>
-        ${roundMatches.map(m=>matchCard(m,side)).join('')}
-      </div>`);
     }
-    return cols;
   }
 
-  // Final match (center)
-  const finalMatch=wM.find(m=>m.round===maxWR);
-  const champion=finalMatch?.winner_id?getTeam(finalMatch.winner_id):null;
+  const SVG_H = Math.max(200, PY+LH + R1N*R1SP + PY);
+  // champion box sits one column to the right of the last round
+  const CHAMP_X = PX + maxR*(BW+CG);
+  const CHAMP_W = BW+16;
+  const SVG_W   = CHAMP_X + CHAMP_W + PX;
 
-  // Left side: positions 1..half of R1
-  const leftCols=buildSide(leftR1,'left');
-  // Right side: reverse column order to mirror
-  const rightCols=buildSide(rightR1,'right').reverse();
+  // ── Draw ───────────────────────────────────
+  let s=''; // accumulates SVG markup
 
-  // Champion center
-  const champHtml=`<div class="champion-col">
-    <div class="trophy">🏆</div>
-    <div class="champ-label">${isDbl?'GRAND FINAL':'FINAL'}</div>
-    ${finalMatch?`<div style="margin-bottom:8px">${matchCard(finalMatch,'center')}</div>`:''}
-    <div class="champ-slot">
-      <div class="champ-name ${champion?'':'tbd'}">${champion?esc(champion.team_name):'Champion TBD'}</div>
-    </div>
-    ${tf?`<div class="third-wrap">
-      <div class="third-label">🥉 3rd Place</div>
-      ${matchCard(tf,'center')}
-    </div>`:''}
-    ${isDbl&&gf?`<div style="margin-top:12px;">
-      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:4px;text-align:center;">Grand Final</div>
-      ${matchCard(gf,'center')}
-    </div>`:''}
-    ${isDbl&&br?`<div style="margin-top:8px;">
-      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:4px;text-align:center;">Bracket Reset <span style="font-weight:400;opacity:.6">(if needed)</span></div>
-      ${gf?.status==='completed'&&gf?.winner_id===gf?.entry_b_id?matchCard(br,'center'):'<div style="font-size:10px;color:var(--bench-slate);text-align:center;padding:8px;">Plays if Losers champ wins GF</div>'}
-    </div>`:''}
-  </div>`;
+  // Round labels
+  for(let r=1;r<=maxR;r++){
+    const x=PX+(r-1)*(BW+CG);
+    s+=`<text x="${x+BW/2}" y="${PY+11}" text-anchor="middle"
+      font-size="9" font-weight="800" fill="var(--bench-slate)"
+      font-family="Inter,sans-serif" letter-spacing="1">
+      ${roundLabel(r,maxR).toUpperCase()}
+    </text>`;
+  }
 
-  const loserSection=isDbl&&lM.length>0?`
-    <div style="padding:16px 8px 0;border-top:1px solid var(--border-soft);margin-top:12px">
-      <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--fault-coral);margin-bottom:10px;">📉 Losers Bracket</div>
-      <div class="bracket-outer">
-        <div class="bracket-root" style="padding:0">
-          ${(() => {
-            const maxLR=lM.reduce((a,m)=>Math.max(a,m.round),0);
-            return Array.from({length:maxLR},(_,i)=>{
-              const r=i+1;
-              const ms=lM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
-              return`<div class="b-col"><div class="round-hdr" style="color:var(--fault-coral)">LR${r}</div>${ms.map(m=>matchCard(m,'left')).join('')}</div>`;
-            }).join('');
-          })()}
-        </div>
-      </div>
-    </div>`:''
+  // Matches
+  for(let r=1;r<=maxR;r++){
+    const x=PX+(r-1)*(BW+CG);
+    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
 
-  return`
-    <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <div>
-        <div style="font-size:11px;color:var(--bench-slate)">${BRACKET.bracket_type==='double_elim'?'Double Elimination':'Single Elimination'} · ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw</div>
-      </div>
+    for(const m of ms){
+      const midY = cy[r][m.position] ?? (PY+LH+PAIR/2);
+      const tyA  = midY - BH - GAP/2;   // top of top box
+      const tyB  = midY + GAP/2;         // top of bottom box
+
+      const eA=E(m.entry_a_id), eB=E(m.entry_b_id);
+      const done = m.status==='completed';
+      const wA   = done && m.winner_id===m.entry_a_id;
+      const wB   = done && m.winner_id===m.entry_b_id;
+      const canClick = eA && eB && !eA.is_bye && !eB.is_bye && !done;
+      const clickOn = canClick
+        ? `onclick="openMatchModal('${m.id}','${esc(eA.team_name)}','${esc(eB.team_name)}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`
+        : '';
+
+      // Helper: one team box
+      function box(ty, e, score, isW, isL){
+        const isBye=e?.is_bye, isTBD=!e;
+        const fill = isW ? 'rgba(78,203,126,.16)' : 'var(--surface-raised)';
+        const stroke= isW ? 'rgba(78,203,126,.55)' : (isL ? 'rgba(242,244,240,.05)' : 'var(--border-soft)');
+        const nameColor = isTBD||isBye ? 'var(--bench-slate)'
+          : isW ? 'var(--winner-green)'
+          : isL ? 'rgba(242,244,240,.38)'
+          : 'var(--ink)';
+        const nameText = isBye ? 'BYE' : isTBD ? 'TBD' : esc(e.team_name);
+        const nameStyle = (isBye||isTBD) ? 'font-style="italic"' : '';
+        const nameW = BW - (e?.seed?22:14) - (score!=null?24:6);
+
+        let out = `<rect x="${x}" y="${ty}" width="${BW}" height="${BH}" rx="3"
+          fill="${fill}" stroke="${stroke}" stroke-width="1"/>`;
+
+        // seed
+        if(e&&!e.is_bye&&e.seed)
+          out+=`<text x="${x+5}" y="${ty+BH/2+4}" font-size="8" fill="var(--bench-slate)" font-family="'JetBrains Mono',monospace">${e.seed}</text>`;
+
+        // name with clip
+        const nx = x + (e?.seed ? 18 : 8);
+        const uid = `c${m.id.replace(/-/g,'').slice(0,8)}_${ty|0}`;
+        out+=`<clipPath id="${uid}"><rect x="${nx}" y="${ty+2}" width="${nameW}" height="${BH-4}"/></clipPath>
+          <text x="${nx}" y="${ty+BH/2+4}" font-size="11" font-weight="${isW?700:500}"
+            fill="${nameColor}" font-family="Inter,sans-serif" ${nameStyle}
+            clip-path="url(#${uid})">${nameText}</text>`;
+
+        // score
+        if(score!=null)
+          out+=`<text x="${x+BW-4}" y="${ty+BH/2+4}" font-size="11" font-weight="700"
+            fill="${isW?'var(--winner-green)':'var(--bench-slate)'}"
+            text-anchor="end" font-family="'JetBrains Mono',monospace">${score}</text>`;
+
+        return out;
+      }
+
+      s += box(tyA, eA, done?m.score_a:null, wA, done&&!wA);
+      s += box(tyB, eB, done?m.score_b:null, wB, done&&!wB);
+
+      // Connector lines: right edge → vertical → horizontal to next col midY
+      const lx  = x+BW;           // right edge of boxes
+      const lyA = tyA+BH/2;       // mid-height of top box
+      const lyB = tyB+BH/2;       // mid-height of bottom box
+      s+=`<line x1="${lx}" y1="${lyA}" x2="${lx}" y2="${lyB}"
+        stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      if(r<maxR){
+        s+=`<line x1="${lx}" y1="${midY}" x2="${x+BW+CG}" y2="${midY}"
+          stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      }
+
+      // Click target (transparent rect over match area)
+      if(canClick){
+        s+=`<rect x="${x}" y="${tyA}" width="${BW+(r<maxR?CG:0)}" height="${PAIR}"
+          fill="transparent" style="cursor:pointer" ${clickOn}/>`;
+        // hover highlight via title tooltip
+        s+=`<title>Click to enter score</title>`;
+      }
+
+      // Bo selector (foreignObject above top box)
+      s+=`<foreignObject x="${x}" y="${tyA-15}" width="58" height="14">
+        <select xmlns="http://www.w3.org/1999/xhtml"
+          style="font-size:9px;font-weight:700;background:transparent;border:none;
+                 color:var(--bench-slate);padding:0;cursor:pointer;width:58px"
+          onchange="doSetBO('${m.id}',this.value)">
+          ${[1,3,5,7].map(n=>`<option value="${n}" ${(m.best_of||1)===n?'selected':''}>Bo${n}</option>`).join('')}
+        </select>
+      </foreignObject>`;
+
+      // Reverse button for completed matches
+      if(done){
+        s+=`<text x="${x+BW-2}" y="${tyA-3}" font-size="9" font-weight="700"
+          fill="var(--fault-coral)" text-anchor="end"
+          onclick="openReverseModal('${m.id}')"
+          style="cursor:pointer;opacity:.7">↺ reverse</text>`;
+      }
+    }
+  }
+
+  // ── Champion box ────────────────────────────
+  const champY  = cy[maxR]?.[1] ?? SVG_H/2;
+  const finalM  = wM.find(m=>m.round===maxR);
+  const champion= finalM?.winner_id ? E(finalM.winner_id) : null;
+
+  // connecting line from last round to champ box
+  const lastRX = PX+(maxR-1)*(BW+CG)+BW;
+  s+=`<line x1="${lastRX}" y1="${champY}" x2="${CHAMP_X}" y2="${champY}"
+    stroke="var(--line)" stroke-width="1.5"/>`;
+
+  s+=`<rect x="${CHAMP_X}" y="${champY-BH/2}" width="${CHAMP_W}" height="${BH}"
+    rx="4"
+    fill="${champion?'rgba(215,242,61,.14)':'var(--surface-raised)'}"
+    stroke="${champion?'rgba(215,242,61,.5)':'var(--border-soft)'}"
+    stroke-width="${champion?1.5:1}"/>`;
+
+  s+=`<text x="${CHAMP_X+8}" y="${champY+5}" font-size="11" font-weight="700"
+    fill="${champion?'var(--optic-yellow)':'var(--bench-slate)'}"
+    font-style="${champion?'normal':'italic'}"
+    font-family="Inter,sans-serif">
+    ${champion?esc(champion.team_name):'Champion TBD'}
+  </text>`;
+
+  s+=`<text x="${CHAMP_X+CHAMP_W/2}" y="${champY-BH/2-5}"
+    text-anchor="middle" font-size="9" font-weight="800"
+    fill="var(--optic-yellow)" font-family="Inter,sans-serif" letter-spacing="1">
+    🏆 CHAMPION
+  </text>`;
+
+  // ── Assemble SVG ────────────────────────────
+  const svgEl = `<svg width="${SVG_W}" height="${SVG_H}"
+    viewBox="0 0 ${SVG_W} ${SVG_H}"
+    xmlns="http://www.w3.org/2000/svg"
+    style="display:block;min-width:${SVG_W}px;max-width:100%">
+    <style>
+      rect{transition:fill .12s}
+      text{user-select:none}
+    </style>
+    ${s}
+  </svg>`;
+
+  // ── 3rd place (single elim only) ───────────
+  const thirdHtml = (!isDbl && tfM) ? buildFlatMatch(tfM,'🥉 3rd Place Match') : '';
+
+  // ── Grand Final + Bracket Reset (double elim) ──
+  let gfHtml='';
+  if(isDbl && gfM){
+    gfHtml = buildFlatMatch(gfM,'🥇 Grand Final — Winners vs Losers Champion');
+    if(brM && gfM.status==='completed' && gfM.winner_id===gfM.entry_b_id)
+      gfHtml += buildFlatMatch(brM,'⚡ Bracket Reset');
+  }
+
+  // ── Losers bracket (double elim) ────────────
+  const losersHtml = (isDbl && lM.length) ? buildLosersSection(lM) : '';
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <span style="font-size:11px;color:var(--bench-slate)">
+        ${isDbl?'Double Elimination':'Single Elimination'} ·
+        ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw
+      </span>
       <div style="display:flex;gap:8px">
         <button class="btn btn-ghost btn-sm" onclick="confirmGenerate('${BRACKET.bracket_type}')">↺ Reset</button>
-        <button class="btn btn-ghost btn-sm" onclick="confirmGenerate('${BRACKET.bracket_type==='double_elim'?'single_elim':'double_elim'}')">Switch to ${BRACKET.bracket_type==='double_elim'?'Single Elim':'Double Elim'}</button>
+
       </div>
     </div>
-    <div class="bracket-outer">
-      <div class="bracket-root">
-        ${leftCols.join('')}
-        ${champHtml}
-        ${rightCols.join('')}
-      </div>
+    <div style="overflow:auto;-webkit-overflow-scrolling:touch;background:var(--surface);
+      border:1px solid var(--border-card);border-radius:var(--radius);
+      padding:14px 10px;box-shadow:var(--shadow-card)">
+      ${svgEl}
     </div>
-    ${loserSection}`;
+    ${thirdHtml}${gfHtml}${losersHtml}`;
+}
+
+/* Flat 2-row match card used for 3rd place / grand final / bracket reset */
+function buildFlatMatch(m, label){
+  const eA=TEAMS.find(t=>t.id===m.entry_a_id), eB=TEAMS.find(t=>t.id===m.entry_b_id);
+  const done=m.status==='completed';
+  const wA=done&&m.winner_id===m.entry_a_id, wB=done&&m.winner_id===m.entry_b_id;
+  const canClick=eA&&eB&&!done;
+  const rows=[{e:eA,sc:m.score_a,w:wA,l:done&&!wA},{e:eB,sc:m.score_b,w:wB,l:done&&!wB}];
+  return `<div style="margin-top:14px;padding:12px 14px;border-top:1px solid var(--border-soft)">
+    <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);
+      letter-spacing:.07em;margin-bottom:8px">${label}</div>
+    <div style="display:inline-flex;flex-direction:column;gap:3px">
+      ${rows.map(({e,sc,w,l})=>`
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 12px;min-width:220px;
+        background:${w?'rgba(78,203,126,.12)':'var(--surface-raised)'};
+        border:1.5px solid ${w?'rgba(78,203,126,.4)':'var(--border-soft)'};
+        border-radius:4px;${l?'opacity:.5':''}${canClick?';cursor:pointer':''};"
+        ${canClick?`onclick="openMatchModal('${m.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`:''}>
+        <span style="flex:1;font-size:12px;font-weight:${w?700:500};
+          color:${!e?'var(--bench-slate)':w?'var(--winner-green)':'var(--ink)'}">
+          ${e?esc(e.team_name):'TBD'}
+        </span>
+        ${sc!=null?`<span style="font-family:var(--font-mono);font-size:13px;font-weight:700;
+          color:${w?'var(--winner-green)':'var(--bench-slate)'}">${sc}</span>`:''}
+      </div>`).join('')}
+    </div>
+    ${done?`<button style="margin-top:5px;font-size:9px;color:var(--fault-coral);background:none;border:none;cursor:pointer;font-weight:700;padding:0"
+      onclick="openReverseModal('${m.id}')">↺ Reverse</button>`:''}
+  </div>`;
+}
+
+/* Losers bracket SVG section */
+function buildLosersSection(lM){
+  const maxLR = lM.reduce((a,m)=>Math.max(a,m.round),0);
+  const BW=118,BH=24,GAP=3,CG=44,PX=12,PY=18,LH=15,R1SP=BH*2+GAP+14;
+  const r1n = lM.filter(m=>m.round===1).length;
+  const cy={};
+  for(let r=1;r<=maxLR;r++){
+    cy[r]={};
+    const ms=lM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
+      if(r===1) cy[r][m.position]=PY+LH+(m.position-1)*R1SP+BH+GAP/2;
+      else{
+        const yA=cy[r-1]?.[2*m.position-1], yB=cy[r-1]?.[2*m.position];
+        cy[r][m.position]=(yA!=null&&yB!=null)?(yA+yB)/2:PY+LH+BH;
+      }
+    }
+  }
+  const H=Math.max(100, PY+LH+r1n*R1SP+PY);
+  const W=PX+maxLR*(BW+CG)+PX;
+  let svg='';
+
+  for(let r=1;r<=maxLR;r++){
+    const x=PX+(r-1)*(BW+CG);
+    svg+=`<text x="${x+BW/2}" y="${PY+10}" text-anchor="middle" font-size="9"
+      font-weight="800" fill="var(--fault-coral)" font-family="Inter,sans-serif" letter-spacing="1">LR${r}</text>`;
+    const ms=lM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
+      const midY=cy[r][m.position]??PY+LH+BH;
+      const tyA=midY-BH-GAP/2, tyB=midY+GAP/2;
+      const eA=TEAMS.find(t=>t.id===m.entry_a_id), eB=TEAMS.find(t=>t.id===m.entry_b_id);
+      const done=m.status==='completed';
+      const wA=done&&m.winner_id===m.entry_a_id, wB=done&&m.winner_id===m.entry_b_id;
+      const canClick=eA&&eB&&!eA?.is_bye&&!eB?.is_bye&&!done;
+
+      [[tyA,eA,done?m.score_a:null,wA,done&&!wA],[tyB,eB,done?m.score_b:null,wB,done&&!wB]].forEach(([ty,e,sc,w,l])=>{
+        const uid=`lc${m.id.replace(/-/g,'').slice(0,6)}_${ty|0}`;
+        svg+=`<rect x="${x}" y="${ty}" width="${BW}" height="${BH}" rx="3"
+          fill="${w?'rgba(78,203,126,.14)':'var(--surface-raised)'}"
+          stroke="${w?'rgba(78,203,126,.5)':'var(--border-soft)'}" stroke-width="1"/>`;
+        svg+=`<clipPath id="${uid}"><rect x="${x+6}" y="${ty+2}" width="${BW-sc!=null?28:10}" height="${BH-4}"/></clipPath>
+          <text x="${x+7}" y="${ty+BH/2+4}" font-size="10" font-weight="${w?700:400}"
+            fill="${!e?'var(--bench-slate)':w?'var(--winner-green)':l?'rgba(242,244,240,.35)':'var(--ink)'}"
+            font-family="Inter,sans-serif" clip-path="url(#${uid})"
+            ${!e?'font-style="italic"':''}>${e?esc(e.team_name):'TBD'}</text>`;
+        if(sc!=null)
+          svg+=`<text x="${x+BW-3}" y="${ty+BH/2+4}" font-size="10" font-weight="700"
+            fill="${w?'var(--winner-green)':'var(--bench-slate)'}"
+            text-anchor="end" font-family="'JetBrains Mono',monospace">${sc}</text>`;
+      });
+
+      const lx=x+BW, lyA=tyA+BH/2, lyB=tyB+BH/2;
+      svg+=`<line x1="${lx}" y1="${lyA}" x2="${lx}" y2="${lyB}" stroke="var(--line)" stroke-width="1.5"/>`;
+      if(r<maxLR)
+        svg+=`<line x1="${lx}" y1="${midY}" x2="${x+BW+CG}" y2="${midY}" stroke="var(--line)" stroke-width="1.5"/>`;
+
+      if(canClick)
+        svg+=`<rect x="${x}" y="${tyA}" width="${BW+(r<maxLR?CG:0)}" height="${BH*2+GAP}"
+          fill="transparent" style="cursor:pointer"
+          onclick="openMatchModal('${m.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"/>`;
+      if(done)
+        svg+=`<text x="${x+BW-2}" y="${tyA-3}" font-size="8" font-weight="700"
+          fill="var(--fault-coral)" text-anchor="end" style="cursor:pointer;opacity:.75"
+          onclick="openReverseModal('${m.id}')">↺</text>`;
+    }
+  }
+
+  return `<div style="margin-top:16px;padding:12px 14px;border-top:1px solid var(--border-soft)">
+    <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--fault-coral);
+      letter-spacing:.07em;margin-bottom:10px">📉 Losers Bracket</div>
+    <div style="overflow:auto;-webkit-overflow-scrolling:touch">
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+        xmlns="http://www.w3.org/2000/svg" style="display:block">
+        ${svg}
+      </svg>
+    </div>
+  </div>`;
 }
 
 function roundLabel(r,total){
