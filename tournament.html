@@ -287,6 +287,22 @@ body{position:relative;z-index:1;overflow-x:hidden}
 </div>
 
 <div class="page">
+  <div class="card" id="shareBar" style="display:none;padding:12px 16px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--bench-slate);margin-bottom:2px">Session Code</div>
+        <div id="shareCode" style="font-family:var(--font-mono);font-size:18px;font-weight:700;letter-spacing:.04em">—</div>
+      </div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--bench-slate);margin-bottom:2px">Player Link</div>
+        <div id="shareUrl" style="font-family:var(--font-mono);font-size:11px;color:var(--ink-muted);word-break:break-all">—</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" style="min-height:40px" onclick="copyShareLink(this)">📋 Copy Link</button>
+        <button class="btn btn-green btn-sm" style="min-height:40px" onclick="copyShareChat(this)">💬 Copy for Chat</button>
+      </div>
+    </div>
+  </div>
   <div class="tabs" id="mainTabs">
     <button class="tab active" onclick="switchTab('teams')" id="tab-teams">👥 Teams</button>
     <button class="tab" onclick="switchTab('bracket')" id="tab-bracket">🏆 Bracket</button>
@@ -309,6 +325,15 @@ const SID=new URLSearchParams(location.search).get('session');
 let SESSION=null, TEAMS=[], BYES=[], MATCHES=[], BRACKET=null;
 let activeTab='teams';
 
+function copyShareLink(btn){
+  navigator.clipboard.writeText(window._shareUrl||'');
+  btn.textContent='Copied!';setTimeout(()=>{btn.textContent='📋 Copy Link'},1500);
+}
+function copyShareChat(btn){
+  const t=window._shareCode?`🏆 Tournament — watch live!\nSession Code: ${window._shareCode}\n${window._shareUrl}`:(window._shareUrl||'');
+  navigator.clipboard.writeText(t);
+  btn.textContent='Copied!';setTimeout(()=>{btn.textContent='💬 Copy for Chat'},1500);
+}
 function toggleTheme(){
   const t=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
   document.documentElement.setAttribute('data-theme',t);
@@ -341,7 +366,18 @@ async function loadAll(){
     ]);
     MATCHES=m||[]; BYES=by||[];
   }else{MATCHES=[];BYES=[]}
-  if(SESSION)document.getElementById('sessionLabel').textContent=SESSION.name;
+  if(SESSION){
+    document.getElementById('sessionLabel').textContent=SESSION.name;
+    // Share bar — same player link + code as open play sessions.
+    const bar=document.getElementById('shareBar');
+    if(bar){
+      bar.style.display='';
+      const url=`${location.origin}/?session=${SID}`;
+      document.getElementById('shareCode').textContent=SESSION.reference_code||'—';
+      document.getElementById('shareUrl').textContent=url;
+      window._shareUrl=url;window._shareCode=SESSION.reference_code||'';
+    }
+  }
 }
 
 async function saveTeam(id,name,p1,p2,seed){
