@@ -612,6 +612,11 @@ async function loadSession(sessionId) {
       session.reference_code ? `${session.name} · ${session.reference_code}` : session.name;
     document.getElementById('sessionPicker').style.display = 'none';
     window.history.replaceState({}, '', `${window.location.pathname}?session=${sessionId}`);
+    if (session.session_type === 'tournament') {
+      await refreshTournament();
+      subscribeTournamentRealtime();
+      return;
+    }
     renderShell();
     await refreshAll();
     subscribeRealtime();
@@ -993,6 +998,158 @@ async function sendHostMessage() {
     btn.textContent = 'Sent ✓';
     setTimeout(() => { btn.textContent = orig; }, 1500);
   } catch (_) { alert('Could not send message, please try again.'); }
+}
+
+// ============================================================
+// TOURNAMENT SPECTATOR VIEW (read-only, live)
+// ============================================================
+let _tBracket=null,_tTeams=[],_tByes=[],_tMatches=[];
+
+async function refreshTournament(){
+  const [{data:brs},{data:ents}] = await Promise.all([
+    supabaseClient.from('brackets').select('*').eq('session_id',currentSessionId).order('created_at',{ascending:true}),
+    supabaseClient.from('bracket_entries').select('*').eq('session_id',currentSessionId),
+  ]);
+  _tBracket=(brs||[])[0]||null;
+  _tTeams=(ents||[]).filter(e=>!e.is_bye);
+  _tByes =(ents||[]).filter(e=>e.is_bye);
+  if(_tBracket){
+    const{data:m}=await supabaseClient.from('bracket_matches').select('*')
+      .eq('bracket_id',_tBracket.id).order('round',{ascending:true}).order('position',{ascending:true});
+    _tMatches=m||[];
+  }else _tMatches=[];
+  renderTournamentView();
+}
+
+function subscribeTournamentRealtime(){
+  if(realtimeChannel)supabaseClient.removeChannel(realtimeChannel);
+  realtimeChannel=supabaseClient.channel(`tourn-view-${currentSessionId}`)
+    .on('postgres_changes',{event:'*',schema:'public',table:'bracket_matches'},refreshTournament)
+    .on('postgres_changes',{event:'*',schema:'public',table:'bracket_entries'},refreshTournament)
+    .on('postgres_changes',{event:'*',schema:'public',table:'brackets'},refreshTournament)
+    .subscribe();
+}
+
+function _tEnt(id){return id?[..._tTeams,..._tByes].find(e=>e.id===id):null}
+function _tGamesStr(m){
+  if(Array.isArray(m.games)&&m.games.length)return m.games.map(g=>`${g.a}–${g.b}`).join(', ');
+  if(m.score_a!=null)return `${m.score_a}–${m.score_b}`;
+  return '';
+}
+
+function renderTournamentView(){
+  const el=document.getElementById('mainContent');
+  const courtCount=currentSession?.court_count||1;
+
+  if(!_tBracket||_tMatches.length===0){
+    el.innerHTML=`<div class="empty-state"><div class="display">🏆 Tournament</div>
+      <p>The host hasn't generated the bracket yet — check back soon.</p></div>`;
+    return;
+  }
+
+  // ── Courts ──
+  let courtsHtml='';
+  for(let cn=1;cn<=courtCount;cn++){
+    const live=_tMatches.find(m=>m.court_label===String(cn)&&m.status==='in_progress');
+    const queued=_tMatches.filter(m=>m.court_label===String(cn)&&m.status==='pending')
+      .sort((a,b)=>a.round-b.round||a.position-b.position);
+    let inner;
+    if(live){
+      const a=_tEnt(live.entry_a_id),b=_tEnt(live.entry_b_id);
+      inner=`<div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.06em;margin-bottom:6px">▶ LIVE · Bo${live.best_of||1}</div>
+        <div style="font-weight:800;font-size:15px">${escapeHtml(a?.team_name||'?')}</div>
+        <div style="font-size:11px;color:var(--resting-slate);margin:2px 0">vs</div>
+        <div style="font-weight:800;font-size:15px">${escapeHtml(b?.team_name||'?')}</div>`;
+    }else{
+      inner=`<div style="font-size:12px;color:var(--resting-slate)">Court open</div>`;
+    }
+    if(queued.length){
+      inner+=`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-soft);font-size:10px;color:var(--resting-slate)">
+        ⏳ Up next: ${queued.slice(0,2).map(q=>{
+          const a=_tEnt(q.entry_a_id),b=_tEnt(q.entry_b_id);
+          return escapeHtml((a?.team_name||'TBD')+' vs '+(b?.team_name||'TBD'));
+        }).join(' · ')}${queued.length>2?` · +${queued.length-2} more`:''}</div>`;
+    }
+    courtsHtml+=`<div class="card" style="padding:14px">${`<div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--resting-slate);margin-bottom:8px">Court ${cn}</div>`+inner}</div>`;
+  }
+
+  // ── Standings ──
+  const doneReal=_tMatches.filter(m=>m.status==='completed'&&m.score_a!=null);
+  const stats={};
+  _tTeams.forEach(t=>{stats[t.id]={name:t.team_name,w:0,l:0,pf:0,pa:0}});
+  for(const m of doneReal){
+    let pA=0,pB=0;
+    if(Array.isArray(m.games)&&m.games.length)for(const g of m.games){pA+=g.a||0;pB+=g.b||0}
+    else{pA=m.score_a||0;pB=m.score_b||0}
+    if(stats[m.entry_a_id]){const s=stats[m.entry_a_id];s.pf+=pA;s.pa+=pB;m.winner_id===m.entry_a_id?s.w++:s.l++}
+    if(stats[m.entry_b_id]){const s=stats[m.entry_b_id];s.pf+=pB;s.pa+=pA;m.winner_id===m.entry_b_id?s.w++:s.l++}
+  }
+  const standings=Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
+
+  // ── Simple live bracket (rounds as columns of match cards) ──
+  const wM=_tMatches.filter(m=>m.match_type==='winners');
+  const maxR=wM.reduce((a,m)=>Math.max(a,m.round),0);
+  const tf=_tMatches.find(m=>m.match_type==='third_place');
+  function rn(r){const rem=maxR-r+1;return rem===1?'Final':rem===2?'Semifinal':rem===3?'Quarterfinal':'Round '+r}
+  function mCard(m){
+    const a=_tEnt(m.entry_a_id),b=_tEnt(m.entry_b_id);
+    const wA=m.winner_id&&m.winner_id===m.entry_a_id,wB=m.winner_id&&m.winner_id===m.entry_b_id;
+    const games=_tGamesStr(m);
+    const state=m.status==='in_progress'?`<span style="color:var(--optic-yellow);font-weight:800">▶ C${m.court_label}</span>`
+      :m.court_label&&m.status==='pending'?`<span style="color:var(--waiting-blue)">⏳ C${m.court_label}</span>`:'';
+    const row=(e,isW)=>`<div style="display:flex;justify-content:space-between;padding:4px 8px;${isW?'background:rgba(78,203,126,.1)':''}">
+      <span style="font-size:11px;font-weight:${isW?800:500};color:${!e?'var(--resting-slate)':e.is_bye?'var(--resting-slate)':isW?'var(--winner-green)':'var(--ink)'};${!e||e.is_bye?'font-style:italic':''}">${e?escapeHtml(e.team_name):'TBD'}</span>
+    </div>`;
+    return `<div style="border:1px solid var(--border-soft);border-radius:6px;background:var(--surface-raised);margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;padding:2px 8px;font-size:9px;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">
+        <span>Bo${m.best_of||1}</span>${state}
+      </div>
+      ${row(a,wA)}${row(b,wB)}
+      ${games?`<div style="padding:3px 8px;font-size:10px;font-family:var(--font-mono);color:var(--resting-slate);border-top:1px solid var(--border-soft)">${games}</div>`:''}
+    </div>`;
+  }
+  let bracketCols='';
+  for(let r=1;r<=maxR;r++){
+    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    bracketCols+=`<div style="flex:1;min-width:150px">
+      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--resting-slate);text-align:center;padding:4px 0;border-bottom:1px solid var(--border-soft);margin-bottom:8px">${rn(r)}</div>
+      ${ms.map(mCard).join('')}
+    </div>`;
+  }
+
+  el.innerHTML=`
+    <div style="text-align:center;margin-bottom:14px">
+      <span style="font-size:10px;background:rgba(215,242,61,.15);color:var(--optic-yellow);padding:3px 10px;border-radius:999px;font-weight:800;letter-spacing:.07em">🏆 TOURNAMENT · LIVE</span>
+    </div>
+
+    <!-- 1. BRACKET — the headline of a tournament view -->
+    <div class="card" style="margin-bottom:16px;overflow-x:auto">
+      <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">Live Bracket</h3>
+      <div style="display:flex;gap:10px;min-width:max-content;align-items:flex-start">${bracketCols}</div>
+      ${tf&&(tf.entry_a_id||tf.entry_b_id)?`<div style="margin-top:10px;max-width:220px">
+        <div style="font-size:9px;font-weight:800;text-transform:uppercase;color:var(--resting-slate);margin-bottom:4px">🥉 3rd Place</div>${mCard(tf)}</div>`:''}
+    </div>
+
+    <!-- 2. COURTS — who is playing right now -->
+    <div class="courts-grid" style="margin-bottom:16px">${courtsHtml}</div>
+
+    <!-- 3. SCOREBOARD -->
+    ${standings.length?`<div class="card">
+      <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">Standings</h3>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr>${['#','Team','W','L','PF','PA','Diff'].map(h=>`<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">${h}</th>`).join('')}</tr></thead>
+        <tbody>${standings.map((s,i)=>`<tr>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700">${escapeHtml(s.name)}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--winner-green);font-weight:700">${s.w}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--loser-coral,#FF7A5C)">${s.l}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pf}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pa}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'#FF7A5C'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>`:''}
+  `;
 }
 
 // ============================================================
