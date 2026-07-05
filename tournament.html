@@ -639,35 +639,45 @@ function openScoreModal(matchId){
   const b=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
   const bo=m.best_of||1;
   const need=Math.ceil(bo/2);
-  const prev=Array.isArray(m.games)?m.games:[];
 
+  // One row per game: pick WHO WON, then enter only the LOSER's score.
+  // Winner score is always 11 — no deuce in tournament play.
   let rows='';
   for(let g=1;g<=bo;g++){
-    const pg=prev[g-1]||{};
-    rows+=`<div style="display:grid;grid-template-columns:56px 1fr 16px 1fr;gap:8px;align-items:center;margin-bottom:8px">
-      <span style="font-size:10px;font-weight:800;color:var(--bench-slate);text-transform:uppercase">Game ${g}</span>
-      <input type="number" min="0" id="gA${g}" value="${pg.a??''}" placeholder="—"
-        style="font-size:20px;font-weight:800;text-align:center;font-family:var(--font-mono);min-height:40px;
-        background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--ink)">
-      <span style="text-align:center;color:var(--bench-slate)">–</span>
-      <input type="number" min="0" id="gB${g}" value="${pg.b??''}" placeholder="—"
-        style="font-size:20px;font-weight:800;text-align:center;font-family:var(--font-mono);min-height:40px;
-        background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--ink)">
+    rows+=`<div class="g-row" data-game="${g}" data-winner=""
+      style="border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;background:var(--surface-raised)">
+      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:7px">
+        Game ${g}${g>need?' <span style="font-weight:400;opacity:.7">(if needed)</span>':''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <button type="button" class="gw-btn" data-side="a" onclick="pickGameWinner(this)"
+          style="padding:10px 8px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:44px;
+          border:2px solid var(--border-soft);background:transparent;color:var(--ink);cursor:pointer">
+          ${esc(a?.team_name||'A')}
+        </button>
+        <button type="button" class="gw-btn" data-side="b" onclick="pickGameWinner(this)"
+          style="padding:10px 8px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:44px;
+          border:2px solid var(--border-soft);background:transparent;color:var(--ink);cursor:pointer">
+          ${esc(b?.team_name||'B')}
+        </button>
+      </div>
+      <div class="loser-wrap" style="display:none;align-items:center;gap:10px">
+        <span class="loser-label" style="font-size:11px;color:var(--bench-slate);flex:1"></span>
+        <input type="number" min="0" max="10" class="loser-score" placeholder="0"
+          oninput="updateGameSummary(this)"
+          style="width:80px;font-size:22px;font-weight:800;text-align:center;font-family:var(--font-mono);min-height:44px;
+          background:var(--bg);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--ink)">
+        <span class="game-summary" style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--winner-green);min-width:52px;text-align:right"></span>
+      </div>
     </div>`;
   }
 
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
     <div class="modal">
-      <h2>Enter Result</h2>
-      <p class="modal-sub">${esc(a?.team_name||'?')} vs ${esc(b?.team_name||'?')} · Best of ${bo}
-        ${bo>1?` — first to ${need} games. Leave unplayed games blank.`:''}</p>
-      <div style="display:grid;grid-template-columns:56px 1fr 16px 1fr;gap:8px;margin-bottom:4px">
-        <span></span>
-        <span style="font-size:10px;font-weight:700;color:var(--bench-slate);text-align:center;text-transform:uppercase">${esc(a?.team_name||'A')}</span>
-        <span></span>
-        <span style="font-size:10px;font-weight:700;color:var(--bench-slate);text-align:center;text-transform:uppercase">${esc(b?.team_name||'B')}</span>
-      </div>
-      ${rows}
+      <h2>Who Won?</h2>
+      <p class="modal-sub">${esc(a?.team_name||'?')} vs ${esc(b?.team_name||'?')} · Best of ${bo}${bo>1?` — first to ${need} games`:''}.<br>
+      Tap the winner of each game, then enter only the losing team's score (0–10) — the winner's score is always 11. No deuce.</p>
+      <div id="gameRows" data-a="${esc(a?.team_name||'A')}" data-b="${esc(b?.team_name||'B')}">${rows}</div>
       <div class="err" id="gErr"></div>
       <div class="ma">
         <button class="no" onclick="CM()">Cancel</button>
@@ -675,31 +685,61 @@ function openScoreModal(matchId){
       </div>
     </div>
   </div>`);
-  document.getElementById('gA1')?.focus();
+}
+
+function pickGameWinner(btn){
+  const row=btn.closest('.g-row');
+  const wrap=row.querySelector('.loser-wrap');
+  const names=document.getElementById('gameRows');
+  const side=btn.dataset.side;
+  row.dataset.winner=side;
+  // Highlight selection
+  row.querySelectorAll('.gw-btn').forEach(x=>{
+    const on=x===btn;
+    x.style.borderColor=on?'var(--winner-green)':'var(--border-soft)';
+    x.style.background=on?'rgba(78,203,126,.14)':'transparent';
+    x.style.color=on?'var(--winner-green)':'var(--ink)';
+  });
+  const loserName=side==='a'?names.dataset.b:names.dataset.a;
+  wrap.style.display='flex';
+  wrap.querySelector('.loser-label').textContent=`${loserName} scored:`;
+  updateGameSummary(wrap.querySelector('.loser-score'));
+  wrap.querySelector('.loser-score').focus();
+}
+
+function updateGameSummary(input){
+  const row=input.closest('.g-row');
+  const out=row.querySelector('.game-summary');
+  const ls=parseInt(input.value,10);
+  if(isNaN(ls)){out.textContent='';return}
+  const ws=11; // no deuce — straight to 11
+  const side=row.dataset.winner;
+  out.textContent=side==='a'?`${ws}–${ls}`:`${ls}–${ws}`;
 }
 
 async function saveGames(matchId,bo){
   const m=MATCHES.find(x=>x.id===matchId);
   const need=Math.ceil(bo/2);
-  const games=[];let winsA=0,winsB=0,ptsA=0,ptsB=0;
-  for(let g=1;g<=bo;g++){
-    const va=document.getElementById('gA'+g)?.value,vb=document.getElementById('gB'+g)?.value;
-    if(va===''&&vb==='')continue;
-    const a=parseInt(va,10),b=parseInt(vb,10);
-    if(isNaN(a)||isNaN(b)){document.getElementById('gErr').textContent=`Game ${g}: enter both scores or leave both blank.`;return}
-    if(a===b){document.getElementById('gErr').textContent=`Game ${g}: cannot be tied.`;return}
-    games.push({a,b});ptsA+=a;ptsB+=b;
-    if(a>b)winsA++;else winsB++;
+  const games=[];let winsA=0,winsB=0;
+  const rows=[...document.querySelectorAll('#gameRows .g-row')];
+  for(const row of rows){
+    const side=row.dataset.winner;
+    if(!side)continue; // unplayed game
+    const ls=parseInt(row.querySelector('.loser-score').value,10);
+    const g=parseInt(row.dataset.game,10);
+    if(isNaN(ls)||ls<0){document.getElementById('gErr').textContent=`Game ${g}: enter the losing team's score.`;return}
+    const ws=11; // no deuce in tournament — winner is always 11
+    if(ls>=11){document.getElementById('gErr').textContent=`Game ${g}: losing score must be 10 or below.`;return}
+    if(side==='a'){games.push({a:ws,b:ls});winsA++}
+    else{games.push({a:ls,b:ws});winsB++}
+    if(winsA>=need||winsB>=need)break; // ignore extra rows after decided
   }
-  if(games.length===0){document.getElementById('gErr').textContent='Enter at least one game.';return}
-  if(winsA<need&&winsB<need){document.getElementById('gErr').textContent=`No winner yet — someone needs ${need} game win${need>1?'s':''}.`;return}
-  if(winsA>=need&&winsB>=need){document.getElementById('gErr').textContent='Both teams cannot reach the winning count.';return}
+  if(games.length===0){document.getElementById('gErr').textContent='Pick who won at least one game.';return}
+  if(winsA<need&&winsB<need){document.getElementById('gErr').textContent=`Not decided yet — someone needs ${need} game win${need>1?'s':''}.`;return}
 
   const winnerId=winsA>winsB?m.entry_a_id:m.entry_b_id;
   const loserId =winsA>winsB?m.entry_b_id:m.entry_a_id;
-  // score_a/b displayed on the bracket:
-  //   Bo1 → the game points (e.g. 11–9)
-  //   Bo3+ → games won (e.g. 2–1)
+  // Bracket display: Bo1 shows points (11–9); Bo3+ shows games won (2–1).
   const sA=bo===1?games[0].a:winsA;
   const sB=bo===1?games[0].b:winsB;
   const freedCourt=m.court_label;
@@ -708,10 +748,10 @@ async function saveGames(matchId,bo){
     games,score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
     status:'completed',ended_at:new Date().toISOString()
   }).eq('id',matchId);
-  await propagate();
-  await promoteQueue(freedCourt);
+  await propagate();          // winner advances to next bracket slot
+  await promoteQueue(freedCourt); // next queued match on this court goes LIVE
   CM();
-  await loadAll();render();
+  await loadAll();render();   // bracket, scoreboard, standings all refresh
 }
 
 // ── SLOT ASSIGNMENT (Round 1 dropdowns) ─────────
