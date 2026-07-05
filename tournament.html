@@ -306,7 +306,7 @@ const SKEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI
 const db=supabase.createClient(SURL,SKEY);
 const SID=new URLSearchParams(location.search).get('session');
 
-let SESSION=null, TEAMS=[], MATCHES=[], BRACKET=null;
+let SESSION=null, TEAMS=[], BYES=[], MATCHES=[], BRACKET=null;
 let activeTab='teams';
 
 function toggleTheme(){
@@ -326,7 +326,7 @@ async function loadAll(){
   if(!SID)return;
   const[s,t,b]=await Promise.all([
     db.from('sessions').select('*').eq('id',SID).single(),
-    db.from('bracket_entries').select('*').eq('session_id',SID).is('bracket_id',null).order('seed',{ascending:true}),
+    db.from('bracket_entries').select('*').eq('session_id',SID).eq('is_bye',false).order('seed',{ascending:true}),
     db.from('brackets').select('*').eq('session_id',SID).order('created_at',{ascending:true})
   ]);
   SESSION=s.data;
@@ -334,10 +334,13 @@ async function loadAll(){
   const brackets=b.data||[];
   BRACKET=brackets[0]||null;// primary bracket
   if(BRACKET){
-    const{data:m}=await db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
-      .order('round',{ascending:true}).order('position',{ascending:true});
-    MATCHES=m||[];
-  }else MATCHES=[];
+    const[{data:m},{data:by}]=await Promise.all([
+      db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
+        .order('round',{ascending:true}).order('position',{ascending:true}),
+      db.from('bracket_entries').select('*').eq('bracket_id',BRACKET.id).eq('is_bye',true)
+    ]);
+    MATCHES=m||[]; BYES=by||[];
+  }else{MATCHES=[];BYES=[]}
   if(SESSION)document.getElementById('sessionLabel').textContent=SESSION.name;
 }
 
@@ -388,36 +391,14 @@ async function generateBracket(type){
   }).select().single();
   BRACKET=br;
 
-  // Seed teams into bracket slots in order (slot = seed rank)
-  const teamsBySlot={};
-  for(let i=0;i<TEAMS.length;i++){
-    const slot=i+1;
-    teamsBySlot[slot]=TEAMS[i];
-    await db.from('bracket_entries').update({bracket_id:br.id,slot}).eq('id',TEAMS[i].id);
-  }
-  // Fill remaining slots with byes
-  for(let s=n+1;s<=slots;s++){
-    const{data:bye}=await db.from('bracket_entries').insert({
-      bracket_id:br.id,session_id:SID,team_name:'BYE',is_bye:true,slot:s
-    }).select().single();
-    teamsBySlot[s]=bye;
-  }
-
-  // Generate matches
-  const pairs=seededPairs(slots);
+  // EMPTY draw — every Round-1 slot starts blank.
+  // The host assigns teams via the dropdowns drawn on the bracket itself.
   const rows=[];
-
-  // Round 1 — standard seeded pairs
-  for(let p=0;p<pairs.length;p++){
-    const[sA,sB]=pairs[p];
-    const eA=teamsBySlot[sA],eB=teamsBySlot[sB];
-    const row={bracket_id:br.id,round:1,position:p+1,best_of:1,status:'pending',
-      match_type:'winners',entry_a_id:eA?.id||null,entry_b_id:eB?.id||null,
-      score_a:null,score_b:null,winner_id:null,loser_id:null};
-    // Auto-advance bye
-    if(eA?.is_bye&&eB&&!eB.is_bye){row.winner_id=eB.id;row.loser_id=eA.id;row.status='completed'}
-    else if(eB?.is_bye&&eA&&!eA.is_bye){row.winner_id=eA.id;row.loser_id=eB.id;row.status='completed'}
-    rows.push(row);
+  const r1Count=slots/2;
+  for(let p=1;p<=r1Count;p++){
+    rows.push({bracket_id:br.id,round:1,position:p,best_of:1,status:'pending',
+      match_type:'winners',entry_a_id:null,entry_b_id:null,
+      score_a:null,score_b:null,winner_id:null,loser_id:null});
   }
 
   // Rounds 2..totalRounds — placeholders
@@ -490,10 +471,9 @@ async function propagate(){
           if(lNxt[f]!==m.loser_id){await db.from('bracket_matches').update({[f]:m.loser_id}).eq('id',lNxt.id);lNxt[f]=m.loser_id;}
         }
       }
-      // Winners champion → grand final A / 3rd place semi
-      if(m.round===maxWR){
-        if(gf&&m.winner_id&&gf.entry_a_id!==m.winner_id){await db.from('bracket_matches').update({entry_a_id:m.winner_id}).eq('id',gf.id);gf.entry_a_id=m.winner_id;}
-        if(tfM&&m.loser_id&&tfM.entry_a_id!==m.loser_id){await db.from('bracket_matches').update({entry_a_id:m.loser_id}).eq('id',tfM.id);tfM.entry_a_id=m.loser_id;}
+      // Winners champion → grand final A (double elim only)
+      if(m.round===maxWR&&gf&&m.winner_id&&gf.entry_a_id!==m.winner_id){
+        await db.from('bracket_matches').update({entry_a_id:m.winner_id}).eq('id',gf.id);gf.entry_a_id=m.winner_id;
       }
     }
     if(m.match_type==='losers'&&m.winner_id){
@@ -513,8 +493,6 @@ async function propagate(){
         if(br.entry_a_id!==m.entry_a_id||br.entry_b_id!==m.entry_b_id)
           await db.from('bracket_matches').update({entry_a_id:m.entry_a_id,entry_b_id:m.entry_b_id,status:'pending'}).eq('id',br.id);
       }
-      // 3rd place B slot from grand final loser
-      if(tfM&&m.loser_id&&tfM.entry_b_id!==m.loser_id){await db.from('bracket_matches').update({entry_b_id:m.loser_id}).eq('id',tfM.id);}
     }
     // 3rd place: loser of semi-finals
     if(m.match_type==='winners'&&m.round===maxWR-1&&tfM){
@@ -526,6 +504,59 @@ async function propagate(){
   const{data:refreshed}=await db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
     .order('round',{ascending:true}).order('position',{ascending:true});
   MATCHES=refreshed||[];
+}
+
+// ── SLOT ASSIGNMENT (Round 1 dropdowns) ─────────
+// value: '' = clear · 'BYE' = bye · else team id.
+async function assignSlot(matchId, field, value){
+  const m=MATCHES.find(x=>x.id===matchId);
+  if(!m)return;
+  const oldId=m[field];
+  // If the old value was a bye entry, delete that bye row.
+  const oldBye=BYES.find(b=>b.id===oldId);
+
+  let newId=null;
+  if(value==='BYE'){
+    const{data:bye}=await db.from('bracket_entries').insert({
+      bracket_id:BRACKET.id,session_id:SID,team_name:'BYE',is_bye:true
+    }).select().single();
+    newId=bye.id;
+  }else if(value){
+    newId=value;
+  }
+
+  await db.from('bracket_matches').update({[field]:newId}).eq('id',matchId);
+  if(oldBye)await db.from('bracket_entries').delete().eq('id',oldBye.id);
+
+  // Re-evaluate bye auto-completion for this match.
+  const{data:fresh}=await db.from('bracket_matches').select('*').eq('id',matchId).single();
+  await checkByeAutoComplete(fresh);
+  await loadAll();
+  await propagate();
+  render();
+}
+
+async function checkByeAutoComplete(m){
+  if(!m||!m.entry_a_id||!m.entry_b_id)return resetIfByeCompleted(m);
+  const aBye=BYES.some(b=>b.id===m.entry_a_id)||false;
+  const bBye=BYES.some(b=>b.id===m.entry_b_id)||false;
+  // Need fresh bye list including a just-created bye
+  const{data:ent}=await db.from('bracket_entries').select('id,is_bye').in('id',[m.entry_a_id,m.entry_b_id]);
+  const byeA=ent?.find(e=>e.id===m.entry_a_id)?.is_bye;
+  const byeB=ent?.find(e=>e.id===m.entry_b_id)?.is_bye;
+  if(byeA&&!byeB){
+    await db.from('bracket_matches').update({winner_id:m.entry_b_id,loser_id:m.entry_a_id,status:'completed'}).eq('id',m.id);
+  }else if(byeB&&!byeA){
+    await db.from('bracket_matches').update({winner_id:m.entry_a_id,loser_id:m.entry_b_id,status:'completed'}).eq('id',m.id);
+  }else if(m.status==='completed'&&m.score_a==null){
+    // Was a bye auto-win, now both real teams → back to pending
+    await db.from('bracket_matches').update({winner_id:null,loser_id:null,status:'pending'}).eq('id',m.id);
+  }
+}
+async function resetIfByeCompleted(m){
+  if(m&&m.status==='completed'&&m.score_a==null){
+    await db.from('bracket_matches').update({winner_id:null,loser_id:null,status:'pending'}).eq('id',m.id);
+  }
 }
 
 async function doRecord(matchId,sA,sB,eAId,eBId){
@@ -642,8 +673,9 @@ function renderBracket(){
 function confirmGenerate(type){
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
     <div class="modal">
-      <h2>Generate ${type==='double_elim'?'Double Elimination':'Single Elimination'} Bracket?</h2>
-      <p class="modal-sub">${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. Teams are seeded in the order they appear on the Teams tab. The best team should be seed #1.<br><br>
+      <h2>Generate Single Elimination Bracket?</h2>
+      <p class="modal-sub">${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. The bracket starts EMPTY —
+      you pick which team goes in each Round-1 slot using the dropdowns on the bracket. A team can only be placed once.<br><br>
       ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}</p>
       <div class="ma">
         <button class="no" onclick="CM()">Cancel</button>
@@ -690,10 +722,27 @@ function buildNCAABracket(){
   const maxR = wM.reduce((a,m)=>Math.max(a,m.round),0);
   const isDbl= BRACKET.bracket_type==='double_elim';
 
-  // team lookup
+  // team lookup (real teams + bye entries)
   const eMap={};
   TEAMS.forEach(t=>{eMap[t.id]=t});
+  BYES.forEach(b=>{eMap[b.id]=b});
   function E(id){return id?eMap[id]:null}
+
+  // Teams already placed in a Round-1 slot (for dropdown exclusion)
+  const usedIds=new Set();
+  wM.filter(m=>m.round===1).forEach(m=>{
+    if(m.entry_a_id&&!BYES.some(b=>b.id===m.entry_a_id))usedIds.add(m.entry_a_id);
+    if(m.entry_b_id&&!BYES.some(b=>b.id===m.entry_b_id))usedIds.add(m.entry_b_id);
+  });
+
+  // Court assignment — first `court_count` playable pending matches
+  const courtCount=SESSION?.court_count||1;
+  const playable=MATCHES.filter(m=>
+    m.status==='pending'&&m.entry_a_id&&m.entry_b_id&&
+    !BYES.some(b=>b.id===m.entry_a_id)&&!BYES.some(b=>b.id===m.entry_b_id)
+  ).sort((a,b)=>a.round-b.round||a.position-b.position);
+  const courtOf={};
+  playable.slice(0,courtCount).forEach((m,i)=>{courtOf[m.id]=i+1});
 
   // ── Constants ──────────────────────────────
   const BW=128, BH=26, GAP=4, CG=52, PX=14, PY=24, LH=16;
@@ -795,8 +844,35 @@ function buildNCAABracket(){
         return out;
       }
 
-      s += box(tyA, eA, done?m.score_a:null, wA, done&&!wA);
-      s += box(tyB, eB, done?m.score_b:null, wB, done&&!wB);
+      // Round 1 + not completed-with-score → dropdown team pickers
+      const isR1Editable = (r===1 && m.score_a==null);
+      if(isR1Editable){
+        s += slotSelect(x,tyA,m.id,'entry_a_id',m.entry_a_id);
+        s += slotSelect(x,tyB,m.id,'entry_b_id',m.entry_b_id);
+      }else{
+        s += box(tyA, eA, done?m.score_a:null, wA, done&&!wA);
+        s += box(tyB, eB, done?m.score_b:null, wB, done&&!wB);
+      }
+
+      // dropdown builder — SVG rect + foreignObject <select>
+      function slotSelect(bx,by,mid,field,curId){
+        const curIsBye=BYES.some(b=>b.id===curId);
+        const opts=['<option value="">— select team —</option>']
+          .concat(TEAMS.filter(t=>t.id===curId||!usedIds.has(t.id))
+            .map(t=>`<option value="${t.id}" ${t.id===curId?'selected':''}>${esc(t.team_name)}</option>`))
+          .concat([`<option value="BYE" ${curIsBye?'selected':''}>BYE</option>`]);
+        return `<rect x="${bx}" y="${by}" width="${BW}" height="${BH}" rx="3"
+            fill="var(--surface-raised)" stroke="${curId?'var(--court-paint)':'var(--border-soft)'}" stroke-width="1"/>
+          <foreignObject x="${bx+2}" y="${by+1}" width="${BW-4}" height="${BH-2}">
+            <select xmlns="http://www.w3.org/1999/xhtml"
+              style="width:100%;height:${BH-2}px;min-height:0;font-size:11px;font-weight:600;
+                background:transparent;border:none;color:${curId?'var(--ink)':'var(--bench-slate)'};
+                padding:0 2px;cursor:pointer;font-family:Inter,sans-serif"
+              onchange="assignSlot('${mid}','${field}',this.value)">
+              ${opts.join('')}
+            </select>
+          </foreignObject>`;
+      }
 
       // Connector lines: right edge → vertical → horizontal to next col midY
       const lx  = x+BW;           // right edge of boxes
@@ -809,12 +885,24 @@ function buildNCAABracket(){
           stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
       }
 
-      // Click target (transparent rect over match area)
+      // Click target (transparent rect over match area) — skipped on
+      // editable R1 rows so it doesn't block the dropdowns; those get a
+      // narrow strip over the connector area instead.
       if(canClick){
-        s+=`<rect x="${x}" y="${tyA}" width="${BW+(r<maxR?CG:0)}" height="${PAIR}"
-          fill="transparent" style="cursor:pointer" ${clickOn}/>`;
-        // hover highlight via title tooltip
-        s+=`<title>Click to enter score</title>`;
+        if(isR1Editable){
+          s+=`<rect x="${x+BW}" y="${tyA}" width="${r<maxR?CG:14}" height="${PAIR}"
+            fill="transparent" style="cursor:pointer" ${clickOn}><title>Enter score</title></rect>`;
+        }else{
+          s+=`<rect x="${x}" y="${tyA}" width="${BW+(r<maxR?CG:0)}" height="${PAIR}"
+            fill="transparent" style="cursor:pointer" ${clickOn}><title>Enter score</title></rect>`;
+        }
+      }
+
+      // ▶ Court assignment label under playable matches
+      if(courtOf[m.id]){
+        s+=`<text x="${x+BW/2}" y="${tyB+BH+11}" text-anchor="middle" font-size="9"
+          font-weight="800" fill="var(--optic-yellow)" font-family="Inter,sans-serif"
+          letter-spacing=".5">▶ COURT ${courtOf[m.id]}</text>`;
       }
 
       // Bo selector (foreignObject above top box)
