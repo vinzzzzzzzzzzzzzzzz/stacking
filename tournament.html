@@ -611,11 +611,13 @@ function openMatchHub(matchId){
 }
 
 async function playOnCourt(matchId,cn){
-  await db.from('bracket_matches').update({court_label:String(cn),status:'in_progress',started_at:new Date().toISOString()}).eq('id',matchId);
+  const{error}=await db.from('bracket_matches').update({court_label:String(cn),status:'in_progress',started_at:new Date().toISOString()}).eq('id',matchId);
+  if(error){alert('Failed: '+error.message+(/court_label|started_at/.test(error.message)?'\n\nRun the ALTER TABLE SQL for court_label/started_at columns.':''));return}
   CM();await loadAll();render();
 }
 async function queueOnCourt(matchId,cn){
-  await db.from('bracket_matches').update({court_label:String(cn),status:'pending'}).eq('id',matchId);
+  const{error}=await db.from('bracket_matches').update({court_label:String(cn),status:'pending'}).eq('id',matchId);
+  if(error){alert('Failed: '+error.message+(/court_label|started_at/.test(error.message)?'\n\nRun the ALTER TABLE SQL for court_label/started_at columns.':''));return}
   CM();await loadAll();render();
 }
 async function unassignCourt(matchId){
@@ -744,10 +746,21 @@ async function saveGames(matchId,bo){
   const sB=bo===1?games[0].b:winsB;
   const freedCourt=m.court_label;
 
-  await db.from('bracket_matches').update({
+  const{error:updErr}=await db.from('bracket_matches').update({
     games,score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
     status:'completed',ended_at:new Date().toISOString()
   }).eq('id',matchId);
+  if(updErr){
+    if(/games|court_label|started_at/.test(updErr.message||'')){
+      document.getElementById('gErr').textContent='Database missing columns — run in Supabase SQL Editor: '+
+        "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS games jsonb DEFAULT '[]'; "+
+        "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS court_label text; "+
+        "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS started_at timestamptz;";
+    }else{
+      document.getElementById('gErr').textContent='Save failed: '+updErr.message;
+    }
+    return;
+  }
   await propagate();          // winner advances to next bracket slot
   await promoteQueue(freedCourt); // next queued match on this court goes LIVE
   CM();
