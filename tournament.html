@@ -521,6 +521,163 @@ async function propagate(){
   MATCHES=refreshed||[];
 }
 
+// ── MATCH HUB — court assignment, queueing, result entry ──
+function matchLabel(m){
+  const a=[...TEAMS,...BYES].find(t=>t.id===m.entry_a_id);
+  const b=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
+  return `${a?esc(a.team_name):'TBD'} vs ${b?esc(b.team_name):'TBD'}`;
+}
+
+function openMatchHub(matchId){
+  const m=MATCHES.find(x=>x.id===matchId);
+  if(!m)return;
+  const courtCount=SESSION?.court_count||1;
+  const isLive=m.status==='in_progress';
+  const isQueued=m.status==='pending'&&m.court_label;
+
+  let courtRows='';
+  for(let cn=1;cn<=courtCount;cn++){
+    const live=MATCHES.find(x=>x.court_label===String(cn)&&x.status==='in_progress');
+    const queued=MATCHES.filter(x=>x.court_label===String(cn)&&x.status==='pending'&&x.id!==m.id);
+    const mine=m.court_label===String(cn);
+    let stateTxt = live ? `LIVE: ${matchLabel(live)}` : 'Court free';
+    if(queued.length)stateTxt+=` · ${queued.length} queued`;
+    let btn='';
+    if(mine){
+      btn=`<button class="btn btn-red btn-sm" onclick="unassignCourt('${m.id}')">✕ Remove from Court ${cn}</button>`;
+    }else if(!live){
+      btn=`<button class="btn btn-yellow btn-sm" onclick="playOnCourt('${m.id}',${cn})">▶ Play now on Court ${cn}</button>`;
+    }else{
+      btn=`<button class="btn btn-ghost btn-sm" onclick="queueOnCourt('${m.id}',${cn})">⏳ Queue on Court ${cn}</button>`;
+    }
+    courtRows+=`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-soft)">
+      <div style="flex:1"><div style="font-weight:700;font-size:12px">Court ${cn}</div>
+        <div style="font-size:10px;color:var(--bench-slate)">${stateTxt}</div></div>
+      ${btn}
+    </div>`;
+  }
+
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>${matchLabel(m)}</h2>
+      <p class="modal-sub">
+        Best of ${m.best_of||1}
+        ${isLive?` · <span style="color:var(--optic-yellow);font-weight:700">▶ LIVE on Court ${m.court_label}</span>`:''}
+        ${isQueued?` · <span style="color:var(--waiting-blue);font-weight:700">⏳ Queued on Court ${m.court_label}</span>`:''}
+      </p>
+      <div style="margin-bottom:14px">${courtRows}</div>
+      <div class="ma">
+        <button class="no" onclick="CM()">Close</button>
+        <button class="ok" onclick="CM();openScoreModal('${m.id}')">📋 Enter Result</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+async function playOnCourt(matchId,cn){
+  await db.from('bracket_matches').update({court_label:String(cn),status:'in_progress',started_at:new Date().toISOString()}).eq('id',matchId);
+  CM();await loadAll();render();
+}
+async function queueOnCourt(matchId,cn){
+  await db.from('bracket_matches').update({court_label:String(cn),status:'pending'}).eq('id',matchId);
+  CM();await loadAll();render();
+}
+async function unassignCourt(matchId){
+  await db.from('bracket_matches').update({court_label:null,status:'pending',started_at:null}).eq('id',matchId);
+  CM();await loadAll();render();
+}
+// When a court frees up, promote its first queued match to LIVE.
+async function promoteQueue(courtLabel){
+  if(!courtLabel)return;
+  const next=MATCHES.filter(m=>m.court_label===courtLabel&&m.status==='pending'&&
+      m.entry_a_id&&m.entry_b_id)
+    .sort((a,b)=>a.round-b.round||a.position-b.position)[0];
+  if(next)await db.from('bracket_matches').update({status:'in_progress',started_at:new Date().toISOString()}).eq('id',next.id);
+}
+
+// ── GAME-BY-GAME SCORE ENTRY (Bo1/3/5/7) ──
+function openScoreModal(matchId){
+  const m=MATCHES.find(x=>x.id===matchId);
+  if(!m)return;
+  const a=[...TEAMS,...BYES].find(t=>t.id===m.entry_a_id);
+  const b=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
+  const bo=m.best_of||1;
+  const need=Math.ceil(bo/2);
+  const prev=Array.isArray(m.games)?m.games:[];
+
+  let rows='';
+  for(let g=1;g<=bo;g++){
+    const pg=prev[g-1]||{};
+    rows+=`<div style="display:grid;grid-template-columns:56px 1fr 16px 1fr;gap:8px;align-items:center;margin-bottom:8px">
+      <span style="font-size:10px;font-weight:800;color:var(--bench-slate);text-transform:uppercase">Game ${g}</span>
+      <input type="number" min="0" id="gA${g}" value="${pg.a??''}" placeholder="—"
+        style="font-size:20px;font-weight:800;text-align:center;font-family:var(--font-mono);min-height:40px;
+        background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--ink)">
+      <span style="text-align:center;color:var(--bench-slate)">–</span>
+      <input type="number" min="0" id="gB${g}" value="${pg.b??''}" placeholder="—"
+        style="font-size:20px;font-weight:800;text-align:center;font-family:var(--font-mono);min-height:40px;
+        background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--ink)">
+    </div>`;
+  }
+
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>Enter Result</h2>
+      <p class="modal-sub">${esc(a?.team_name||'?')} vs ${esc(b?.team_name||'?')} · Best of ${bo}
+        ${bo>1?` — first to ${need} games. Leave unplayed games blank.`:''}</p>
+      <div style="display:grid;grid-template-columns:56px 1fr 16px 1fr;gap:8px;margin-bottom:4px">
+        <span></span>
+        <span style="font-size:10px;font-weight:700;color:var(--bench-slate);text-align:center;text-transform:uppercase">${esc(a?.team_name||'A')}</span>
+        <span></span>
+        <span style="font-size:10px;font-weight:700;color:var(--bench-slate);text-align:center;text-transform:uppercase">${esc(b?.team_name||'B')}</span>
+      </div>
+      ${rows}
+      <div class="err" id="gErr"></div>
+      <div class="ma">
+        <button class="no" onclick="CM()">Cancel</button>
+        <button class="ok" onclick="saveGames('${m.id}',${bo})">Save Result</button>
+      </div>
+    </div>
+  </div>`);
+  document.getElementById('gA1')?.focus();
+}
+
+async function saveGames(matchId,bo){
+  const m=MATCHES.find(x=>x.id===matchId);
+  const need=Math.ceil(bo/2);
+  const games=[];let winsA=0,winsB=0,ptsA=0,ptsB=0;
+  for(let g=1;g<=bo;g++){
+    const va=document.getElementById('gA'+g)?.value,vb=document.getElementById('gB'+g)?.value;
+    if(va===''&&vb==='')continue;
+    const a=parseInt(va,10),b=parseInt(vb,10);
+    if(isNaN(a)||isNaN(b)){document.getElementById('gErr').textContent=`Game ${g}: enter both scores or leave both blank.`;return}
+    if(a===b){document.getElementById('gErr').textContent=`Game ${g}: cannot be tied.`;return}
+    games.push({a,b});ptsA+=a;ptsB+=b;
+    if(a>b)winsA++;else winsB++;
+  }
+  if(games.length===0){document.getElementById('gErr').textContent='Enter at least one game.';return}
+  if(winsA<need&&winsB<need){document.getElementById('gErr').textContent=`No winner yet — someone needs ${need} game win${need>1?'s':''}.`;return}
+  if(winsA>=need&&winsB>=need){document.getElementById('gErr').textContent='Both teams cannot reach the winning count.';return}
+
+  const winnerId=winsA>winsB?m.entry_a_id:m.entry_b_id;
+  const loserId =winsA>winsB?m.entry_b_id:m.entry_a_id;
+  // score_a/b displayed on the bracket:
+  //   Bo1 → the game points (e.g. 11–9)
+  //   Bo3+ → games won (e.g. 2–1)
+  const sA=bo===1?games[0].a:winsA;
+  const sB=bo===1?games[0].b:winsB;
+  const freedCourt=m.court_label;
+
+  await db.from('bracket_matches').update({
+    games,score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
+    status:'completed',ended_at:new Date().toISOString()
+  }).eq('id',matchId);
+  await propagate();
+  await promoteQueue(freedCourt);
+  CM();
+  await loadAll();render();
+}
+
 // ── SLOT ASSIGNMENT (Round 1 dropdowns) ─────────
 // value: '' = clear · 'BYE' = bye · else team id.
 async function assignSlot(matchId, field, value){
@@ -588,7 +745,8 @@ async function doReverse(matchId){
   const m=MATCHES.find(x=>x.id===matchId);
   if(!m)return;
   await db.from('bracket_matches').update({
-    score_a:null,score_b:null,winner_id:null,loser_id:null,status:'pending',ended_at:null
+    score_a:null,score_b:null,winner_id:null,loser_id:null,status:'pending',ended_at:null,
+    games:[],court_label:null,started_at:null
   }).eq('id',matchId);
   // Clear downstream
   for(const x of MATCHES){
@@ -760,14 +918,18 @@ function buildNCAABracket(){
     if(m.entry_b_id&&!BYES.some(b=>b.id===m.entry_b_id))usedIds.add(m.entry_b_id);
   });
 
-  // Court assignment — first `court_count` playable pending matches
+  // REAL court state from court_label:
+  //   in_progress + court_label → LIVE on that court
+  //   pending + court_label     → QUEUED on that court
   const courtCount=SESSION?.court_count||1;
-  const playable=MATCHES.filter(m=>
-    m.status==='pending'&&m.entry_a_id&&m.entry_b_id&&
-    !BYES.some(b=>b.id===m.entry_a_id)&&!BYES.some(b=>b.id===m.entry_b_id)
-  ).sort((a,b)=>a.round-b.round||a.position-b.position);
-  const courtOf={};
-  playable.slice(0,courtCount).forEach((m,i)=>{courtOf[m.id]=i+1});
+  const liveOn={},queuePos={};
+  for(let cn=1;cn<=courtCount;cn++){
+    const live=MATCHES.find(m=>m.court_label===String(cn)&&m.status==='in_progress');
+    if(live)liveOn[live.id]=cn;
+    MATCHES.filter(m=>m.court_label===String(cn)&&m.status==='pending')
+      .sort((a,b)=>a.round-b.round||a.position-b.position)
+      .forEach((m,i)=>{queuePos[m.id]={court:cn,pos:i+1}});
+  }
 
   // ── Constants ──────────────────────────────
   const BW=128, BH=26, GAP=4, CG=52, PX=14, PY=24, LH=16;
@@ -829,7 +991,7 @@ function buildNCAABracket(){
       const wB   = done && m.winner_id===m.entry_b_id;
       const canClick = eA && eB && !eA.is_bye && !eB.is_bye && !done;
       const clickOn = canClick
-        ? `onclick="openMatchModal('${m.id}','${esc(eA.team_name)}','${esc(eB.team_name)}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`
+        ? `onclick="openMatchHub('${m.id}')"`
         : '';
 
       // Helper: one team box
@@ -923,11 +1085,15 @@ function buildNCAABracket(){
         }
       }
 
-      // ▶ Court assignment label under playable matches
-      if(courtOf[m.id]){
+      // Court state annotations under the match pair
+      if(liveOn[m.id]){
         s+=`<text x="${x+BW/2}" y="${tyB+BH+11}" text-anchor="middle" font-size="9"
           font-weight="800" fill="var(--optic-yellow)" font-family="Inter,sans-serif"
-          letter-spacing=".5">▶ COURT ${courtOf[m.id]}</text>`;
+          letter-spacing=".5">▶ COURT ${liveOn[m.id]} · LIVE</text>`;
+      }else if(queuePos[m.id]){
+        s+=`<text x="${x+BW/2}" y="${tyB+BH+11}" text-anchor="middle" font-size="9"
+          font-weight="700" fill="var(--waiting-blue)" font-family="Inter,sans-serif"
+          letter-spacing=".5">⏳ Q${queuePos[m.id].pos} · COURT ${queuePos[m.id].court}</text>`;
       }
 
       // Bo selector (foreignObject above top box)
@@ -1040,7 +1206,7 @@ function buildFlatMatch(m, label){
         background:${w?'rgba(78,203,126,.12)':'var(--surface-raised)'};
         border:1.5px solid ${w?'rgba(78,203,126,.4)':'var(--border-soft)'};
         border-radius:4px;${l?'opacity:.5':''}${canClick?';cursor:pointer':''};"
-        ${canClick?`onclick="openMatchModal('${m.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"`:''}>
+        ${canClick?`onclick="openMatchHub('${m.id}')"`:''}>
         <span style="flex:1;font-size:12px;font-weight:${w?700:500};
           color:${!e?'var(--bench-slate)':w?'var(--winner-green)':'var(--ink)'}">
           ${e?esc(e.team_name):'TBD'}
@@ -1112,7 +1278,7 @@ function buildLosersSection(lM){
       if(canClick)
         svg+=`<rect x="${x}" y="${tyA}" width="${BW+(r<maxLR?CG:0)}" height="${BH*2+GAP}"
           fill="transparent" style="cursor:pointer"
-          onclick="openMatchModal('${m.id}','${esc(eA?.team_name||'')}','${esc(eB?.team_name||'')}','${m.entry_a_id}','${m.entry_b_id}',${m.best_of||1})"/>`;
+          onclick="openMatchHub('${m.id}')"/>`;
       if(done)
         svg+=`<text x="${x+BW-2}" y="${tyA-3}" font-size="8" font-weight="700"
           fill="var(--fault-coral)" text-anchor="end" style="cursor:pointer;opacity:.75"
@@ -1163,10 +1329,14 @@ function renderScoreboard(){
   for(const m of done){
     const isA_w=m.winner_id===m.entry_a_id;
     const wId=m.winner_id,lId=isA_w?m.entry_b_id:m.entry_a_id;
-    const wScore=isA_w?m.score_a:m.score_b;
-    const lScore=isA_w?m.score_b:m.score_a;
-    if(stats[wId]){const s=stats[wId];s.w++;s.gp++;s.pf+=wScore||0;s.pa+=lScore||0}
-    if(stats[lId]){const s=stats[lId];s.l++;s.gp++;s.pf+=lScore||0;s.pa+=wScore||0}
+    // Points tally: sum every game's points (Bo3 counts all games).
+    let ptsA=0,ptsB=0;
+    if(Array.isArray(m.games)&&m.games.length){
+      for(const g of m.games){ptsA+=g.a||0;ptsB+=g.b||0}
+    }else{ptsA=m.score_a||0;ptsB=m.score_b||0}
+    const wScore=isA_w?ptsA:ptsB, lScore=isA_w?ptsB:ptsA;
+    if(stats[wId]){const s=stats[wId];s.w++;s.gp++;s.pf+=wScore;s.pa+=lScore}
+    if(stats[lId]){const s=stats[lId];s.l++;s.gp++;s.pf+=lScore;s.pa+=wScore}
   }
 
   const sorted=Object.values(stats).filter(s=>s.gp>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa)||a.l-b.l);
@@ -1228,7 +1398,8 @@ function renderScoreboard(){
 // ════════════════════════════════════════════
 // MODALS — MATCH SCORE ENTRY
 // ════════════════════════════════════════════
-function openMatchModal(matchId,nameA,nameB,eAId,eBId,bestOf){
+function openMatchModal(matchId){return openMatchHub(matchId)}
+function _legacyScoreModal(matchId,nameA,nameB,eAId,eBId,bestOf){
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
     <div class="modal">
       <h2>Enter Score</h2>
