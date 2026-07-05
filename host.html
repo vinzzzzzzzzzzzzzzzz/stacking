@@ -1208,6 +1208,36 @@ const SessionAPI = (() => {
     await tryRefillCourt(courtId, sessionId);
   }
 
+  /**
+   * START QUEUING — randomize the order of all currently-waiting players.
+   * Assigns staggered timestamps in shuffled order, then fills every open
+   * court. Players arriving after this get became_free_at = now, which is
+   * later than every shuffled timestamp → they join the back of the queue.
+   */
+  async function shuffleQueue(sessionId) {
+    const { data: waiting } = await supabaseClient.from('players')
+      .select('id').eq('session_id', sessionId).eq('status', 'waiting');
+    if (!waiting || waiting.length === 0) return 0;
+
+    const shuffled = shuffleArray(waiting);
+    // Base the stagger in the past so late arrivals (= now) queue behind.
+    const base = Date.now() - shuffled.length * 10 - 1000;
+    for (let i = 0; i < shuffled.length; i++) {
+      await supabaseClient.from('players')
+        .update({ became_free_at: new Date(base + i * 10).toISOString() })
+        .eq('id', shuffled[i].id);
+    }
+
+    // Fill every open court from the freshly shuffled queue.
+    const { data: courts } = await supabaseClient.from('courts')
+      .select('id, status').eq('session_id', sessionId).eq('status', 'open')
+      .order('court_number', { ascending: true });
+    for (const c of courts || []) {
+      await tryRefillCourt(c.id, sessionId);
+    }
+    return shuffled.length;
+  }
+
   async function tryRefillCourt(courtId, sessionId) {
     const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (!court || court.status === 'in_progress') return null;
@@ -1475,7 +1505,7 @@ const SessionAPI = (() => {
     verifySessionPassword, finishSession, deleteSession, getMatchCount,
     preRegisterPlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
-    createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt,
+    createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
     correctMatchResult, getRecentMatches,
@@ -2035,6 +2065,15 @@ function copyShareMessage(url, referenceCode) {
   setTimeout(() => { event.target.textContent = '💬 Copy for Chat'; }, 1500);
 }
 
+async function handleShuffleQueue() {
+  if (!confirm('Shuffle all waiting players into a random queue order and fill open courts?')) return;
+  try {
+    const n = await SessionAPI.shuffleQueue(activeSession.id);
+    if (n === 0) { alert('No waiting players to shuffle. Mark players as Arrived first.'); return; }
+    await renderActiveTab();
+  } catch (err) { alert(err.message || 'Could not shuffle queue.'); }
+}
+
 // ============================================================
 // ROSTER TAB
 // ============================================================
@@ -2059,6 +2098,22 @@ async function rosterTabHtml() {
           <option value="advanced">Advanced</option>
         </select>
         <button onclick="handlePreRegister()">+ Add to List</button>
+      </div>
+    </div>
+
+    <div class="card" style="border:1px solid rgba(215,242,61,0.2);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0 0 4px;">🔀 Start Queuing</h2>
+          <p style="font-size:12px;color:var(--resting-slate);margin:0;">
+            Shuffles all waiting players into a random queue order — so early arrivals don't just play each other.
+            New arrivals after this join the back of the queue automatically.
+          </p>
+        </div>
+        <button onclick="handleShuffleQueue()"
+          style="background:var(--optic-yellow);color:var(--optic-yellow-ink);border:none;padding:10px 18px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:44px;flex-shrink:0;">
+          🔀 Shuffle Queue &amp; Fill Courts
+        </button>
       </div>
     </div>
 
