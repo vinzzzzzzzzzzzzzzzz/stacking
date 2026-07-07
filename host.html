@@ -1527,26 +1527,44 @@ const SessionAPI = (() => {
    */
   async function deleteSession(sessionId) {
     const session = await getSession(sessionId);
+    // Active sessions are auto-finished then deleted (no separate step needed).
     if (session.status === 'active') {
-      throw new Error('This session is still active. Finish it first before deleting.');
+      await supabaseClient.from('sessions')
+        .update({ status: 'completed', ended_at: new Date().toISOString() })
+        .eq('id', sessionId);
     }
 
-    // Delete children in safe order (most-dependent first).
+    // 1. Clear FK references FROM courts TO teams so teams can be deleted.
+    //    (courts.team_a_id / team_b_id point at teams — must null them first.)
+    await supabaseClient.from('courts')
+      .update({ team_a_id: null, team_b_id: null, status: 'open' })
+      .eq('session_id', sessionId);
+
+    // 2. Tournament children first (bracket_matches → bracket_entries → brackets).
+    const { data: brackets } = await supabaseClient.from('brackets')
+      .select('id').eq('session_id', sessionId);
+    for (const b of brackets || []) {
+      await supabaseClient.from('bracket_matches').delete().eq('bracket_id', b.id);
+      await supabaseClient.from('bracket_entries').delete().eq('bracket_id', b.id);
+    }
+    await supabaseClient.from('bracket_entries').delete().eq('session_id', sessionId);
+    await supabaseClient.from('brackets').delete().eq('session_id', sessionId);
+
+    // 3. Open-play children in safe order (most-dependent first).
     const tables = [
       'matches',
       'tournament_matchups',
       'manual_queue',
       'rest_requests',
       'messages',
+      'courts',   // deleted BEFORE teams now (court refs already nulled)
       'teams',
       'players',
-      'courts',
     ];
     for (const table of tables) {
       const { error } = await supabaseClient.from(table)
         .delete().eq('session_id', sessionId);
-      // Some tables may not have session_id (unlikely but guard anyway).
-      if (error && error.code !== 'PGRST116') throw error;
+      if (error && error.code !== 'PGRST116' && error.code !== '42P01') throw error;
     }
 
     const { error } = await supabaseClient.from('sessions').delete().eq('id', sessionId);
@@ -1749,6 +1767,8 @@ async function renderSessionList() {
             ${s.session_type === 'tournament'
               ? `<a href="tournament.html?session=${s.id}" style="background:rgba(215,242,61,0.15);color:var(--optic-yellow);border:1px solid rgba(215,242,61,0.3);padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;min-height:40px;">🏆 Manage</a>`
               : `<button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;" onclick="openSession('${s.id}')">Open</button>`}
+            <button onclick="handleFinishFromList('${s.id}','${escapeHtml(s.name)}')" style="background:var(--surface-raised);color:var(--ink);border:1px solid var(--border-soft);padding:8px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Finish session">✓ Finish</button>
+            <button onclick="promptDeleteSession('${s.id}','${escapeHtml(s.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Delete permanently">🗑</button>
           </div>
         </div>
       `).join('') : '<p style="color:var(--resting-slate);font-size:13px;">No active sessions yet.</p>'}
@@ -1950,6 +1970,14 @@ async function showDeleteConfirmModal(sessionId, sessionName) {
       </div>
     </div>
   `);
+}
+
+async function handleFinishFromList(sessionId, sessionName) {
+  if (!confirm(`Finish "${sessionName}"? It will move to Recently Finished. You can still view or delete it after.`)) return;
+  try {
+    await SessionAPI.finishSession(sessionId);
+    await renderSessionList();
+  } catch (err) { alert(err.message || 'Could not finish session.'); }
 }
 
 async function confirmDeleteSession(sessionId) {
