@@ -856,7 +856,7 @@ function generateReferenceCode() {
 // ============================================================
 const SessionAPI = (() => {
 
-  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled }) {
+  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled, deuceEnabled }) {
     if (!currentHost?.id) {
       throw new Error('Not logged in — please log out and sign in again.');
     }
@@ -880,6 +880,7 @@ const SessionAPI = (() => {
         open_play_mode: sessionType === 'open_play' ? 'automated' : null,
         scoring_mode: 'win_loss',
         points_to_win: 11,
+        deuce_enabled: deuceEnabled !== false,
         reference_code: referenceCode,
         host_id: currentHost.id,
       };
@@ -1090,11 +1091,11 @@ const SessionAPI = (() => {
     }
   }
 
-  async function logMatchResult(courtId, winnerTeamId, loserScore) {
-    // loserScore: integer the losing team scored. Winner always gets 11,
-    // unless loserScore >= 10 (deuce territory) in which case winner gets
-    // loserScore + 2 (standard pickleball deuce rule).
-    const winnerScore = loserScore >= 10 ? loserScore + 2 : 11;
+  async function logMatchResult(courtId, winnerTeamId, loserScore, deuceEnabled = true) {
+    // loserScore: integer the losing team scored.
+    // Deuce ON  → winner = loserScore+2 when loserScore>=10, else 11.
+    // Deuce OFF → winner is always 11 (loser capped at 10 by the input).
+    const winnerScore = (deuceEnabled && loserScore >= 10) ? loserScore + 2 : 11;
 
     const { data: court, error } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
     if (error) throw error;
@@ -1261,9 +1262,25 @@ const SessionAPI = (() => {
     const resultTier = p =>
       p.last_match_result === 'won' ? 0 :
       p.last_match_result === 'lost' ? 2 : 1;
-    const pool = (rawPool || []).slice().sort((a, b) =>
+    let pool = (rawPool || []).slice().sort((a, b) =>
       resultTier(a) - resultTier(b) ||
       new Date(a.became_free_at) - new Date(b.became_free_at));
+
+    // ── Loser-starvation safety valve ──
+    // If the longest-waiting loser has been in the queue beyond the
+    // threshold (default 12 min) AND there aren't enough losers to form
+    // their own group of 4 (so tiers keep them stuck behind fresh winners),
+    // promote the oldest losers to the front so they don't wait forever.
+    const STARVE_MS = 12 * 60 * 1000;
+    const losers = pool.filter(p => p.last_match_result === 'lost');
+    const nonLosers = pool.filter(p => p.last_match_result !== 'lost');
+    if (losers.length > 0 && losers.length < 4) {
+      const oldestLoserAge = Date.now() - new Date(losers[0].became_free_at).getTime();
+      if (oldestLoserAge >= STARVE_MS) {
+        // Promote starved losers ahead of everyone else for this fill.
+        pool = [...losers, ...nonLosers];
+      }
+    }
 
     const teamSize = session.format === 'doubles' ? 2 : 1;
     const decision = window.StackingEngine.decideNextMatchFromPool(pool || [], teamSize);
@@ -1351,7 +1368,8 @@ const SessionAPI = (() => {
     const oldLoserScore = match.winner_team_id === match.team_a_id
       ? match.team_b_score : match.team_a_score;
     const resolvedLoserScore  = newLoserScore !== null ? newLoserScore : (oldLoserScore ?? 0);
-    const resolvedWinnerScore = resolvedLoserScore >= 10 ? resolvedLoserScore + 2 : 11;
+    const _deuce = activeSession?.deuce_enabled !== false;
+    const resolvedWinnerScore = (_deuce && resolvedLoserScore >= 10) ? resolvedLoserScore + 2 : 11;
 
     // Guard: nothing to do.
     const noWinnerChange = match.winner_team_id === finalWinnerTeamId;
@@ -1734,6 +1752,12 @@ async function renderSessionList() {
           <div class="field"><label>Format</label>
             <select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select>
           </div>
+          <div class="field"><label>Scoring</label>
+            <select id="newDeuce">
+              <option value="on">Deuce ON — win by 2 (10-10 → 12-10…)</option>
+              <option value="off">Deuce OFF — straight to 11</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -1819,9 +1843,11 @@ async function handleCreateSession() {
   } else {
     format = document.getElementById('newFormat').value;
   }
+  const deuceEnabled = _newSessionType === 'tournament' ? false
+    : (document.getElementById('newDeuce')?.value !== 'off');
 
   try {
-    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division });
+    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division, deuceEnabled });
     await openSession(session.id);
   } catch (err) {
     errorEl.textContent = err.message;
@@ -1914,6 +1940,9 @@ async function openSession(sessionId) {
   activeSession = await SessionAPI.getSession(sessionId);
   activeTab = 'roster';
   _prevHostCourtStates = {};
+  // Restore one-time shuffle lock for this session.
+  try { _queueStarted = localStorage.getItem('istackyyy_qstart_' + sessionId) === '1'; }
+  catch { _queueStarted = false; }
   renderConsole();
   subscribeRealtime();
   startHostTimerLoop();
@@ -2066,13 +2095,22 @@ function copyShareMessage(url, referenceCode) {
 }
 
 async function handleShuffleQueue() {
-  if (!confirm('Shuffle all waiting players into a random queue order and fill open courts?')) return;
+  if (_queueStarted) {
+    alert('Queuing has already started for this session — players are stacking automatically now. Shuffle is a one-time action.');
+    return;
+  }
+  if (!confirm('Shuffle all waiting players into a random queue order and fill open courts?\n\nThis is a ONE-TIME action — after this, everyone stacks by the win/loss queue automatically.')) return;
   try {
     const n = await SessionAPI.shuffleQueue(activeSession.id);
     if (n === 0) { alert('No waiting players to shuffle. Mark players as Arrived first.'); return; }
+    _queueStarted = true;
+    try { localStorage.setItem('istackyyy_qstart_' + activeSession.id, '1'); } catch {}
     await renderActiveTab();
   } catch (err) { alert(err.message || 'Could not shuffle queue.'); }
 }
+
+// Per-session flag — true once the host has shuffled/started queuing.
+let _queueStarted = false;
 
 // ============================================================
 // ROSTER TAB
@@ -2106,13 +2144,14 @@ async function rosterTabHtml() {
         <div>
           <h2 style="margin:0 0 4px;">🔀 Start Queuing</h2>
           <p style="font-size:12px;color:var(--resting-slate);margin:0;">
-            Shuffles all waiting players into a random queue order — so early arrivals don't just play each other.
-            New arrivals after this join the back of the queue automatically.
+            ${_queueStarted
+              ? 'Queuing has started — players now stack automatically by the win/loss queue. New arrivals join the back of the line.'
+              : "Shuffles all waiting players into a random order and fills courts — so early arrivals don't just play each other. One-time action."}
           </p>
         </div>
-        <button onclick="handleShuffleQueue()"
-          style="background:var(--optic-yellow);color:var(--optic-yellow-ink);border:none;padding:10px 18px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:44px;flex-shrink:0;">
-          🔀 Shuffle Queue &amp; Fill Courts
+        <button onclick="handleShuffleQueue()" ${_queueStarted ? 'disabled' : ''}
+          style="background:${_queueStarted ? 'var(--surface-hover)' : 'var(--optic-yellow)'};color:${_queueStarted ? 'var(--resting-slate)' : 'var(--optic-yellow-ink)'};border:none;padding:10px 18px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:44px;flex-shrink:0;${_queueStarted ? 'cursor:not-allowed;' : ''}">
+          ${_queueStarted ? '✓ Queuing Started' : '🔀 Shuffle Queue &amp; Fill Courts'}
         </button>
       </div>
     </div>
@@ -2398,27 +2437,34 @@ async function showLoserScoreModal() {
 }
 
 function updateWinnerDisplay() {
+  const deuceOn = activeSession?.deuce_enabled !== false;
   const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
-  // Any non-negative integer is valid — no upper cap during deuce.
-  const loserScore = isNaN(raw) || raw < 0 ? 0 : raw;
-  const isDeuce = loserScore >= 10;
-  // Standard pickleball: win by 2. Normal game ends at 11.
-  // Deuce: if loser reached 10, winner needs loserScore + 2.
-  // e.g. loser=10 → winner=12, loser=11 → winner=13, loser=16 → winner=18
+  let loserScore = isNaN(raw) || raw < 0 ? 0 : raw;
+  // Deuce OFF: loser can never reach 11 — clamp to 10.
+  if (!deuceOn && loserScore > 10) {
+    loserScore = 10;
+    document.getElementById('loserScoreInput').value = 10;
+  }
+  const isDeuce = deuceOn && loserScore >= 10;
   const winnerScore = isDeuce ? loserScore + 2 : 11;
   document.getElementById('winnerScoreDisplay').textContent = winnerScore;
   const noteEl = document.getElementById('deuceNote');
   noteEl.textContent = isDeuce ? `Deuce — ${winnerScore}–${loserScore}` : '';
+  const limitEl = document.getElementById('scoreLimitNote');
+  if (limitEl) limitEl.textContent = deuceOn ? '0 – 9 normal · 10+ deuce' : '0 – 10 · winner always 11 (no deuce)';
 }
 
 async function confirmLoserScore() {
   if (_resultInFlight) return;
 
   const raw = parseInt(document.getElementById('loserScoreInput').value, 10);
-  // Only guard: must be a non-negative integer. No upper limit — deuce games
-  // can go to any score as long as winner leads by exactly 2.
+  const deuceOn = activeSession?.deuce_enabled !== false;
   if (isNaN(raw) || raw < 0) {
     document.getElementById('scoreEntryError').textContent = 'Enter a valid score (0 or higher).';
+    return;
+  }
+  if (!deuceOn && raw > 10) {
+    document.getElementById('scoreEntryError').textContent = 'Deuce is off — losing score must be 10 or below.';
     return;
   }
 
@@ -2438,7 +2484,7 @@ async function confirmLoserScore() {
 
 async function finalizeResult(loserScore) {
   // Save the match result first (stats written, match row inserted).
-  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, loserScore);
+  await SessionAPI.logMatchResult(resultFlowCourt.id, resultFlowWinnerTeamId, loserScore, activeSession?.deuce_enabled !== false);
 
   // Now show the per-player disposition step.
   // Court stays in_progress until the host confirms everyone's fate —
