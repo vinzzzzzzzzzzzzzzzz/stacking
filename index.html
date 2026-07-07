@@ -767,10 +767,10 @@ function renderQueues(players) {
 
   // Unified pool — tiered: winners first, then fresh players, then losers;
   // FIFO within each tier (matches the host console stacking engine).
-  const _tier = p => p.last_match_result === 'won' ? 0 : p.last_match_result === 'lost' ? 2 : 1;
+  // Queue display mirrors the engine: pure FIFO by became_free_at.
   const waiting = players
     .filter(p => p.status === 'waiting')
-    .sort((a, b) => _tier(a) - _tier(b) || new Date(a.became_free_at) - new Date(b.became_free_at));
+    .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
 
   const resting  = players.filter(p => p.status === 'resting');
   const expected = players.filter(p => p.status === 'expected');
@@ -947,10 +947,9 @@ function handleFindMe() {
   } else if (player.status === 'expected') {
     resultEl.textContent = 'On the list — mark Arrived with your host';
   } else if (player.status === 'waiting') {
-    const _t = p => p.last_match_result === 'won' ? 0 : p.last_match_result === 'lost' ? 2 : 1;
     const waitingSorted = _playersCache
       .filter(p => p.status === 'waiting')
-      .sort((a, b) => _t(a) - _t(b) || new Date(a.became_free_at) - new Date(b.became_free_at));
+      .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
     const idx = waitingSorted.findIndex(p => p.id === player.id);
     resultEl.textContent = idx >= 0 ? `#${idx + 1} in the queue` : 'In the queue';
   } else {
