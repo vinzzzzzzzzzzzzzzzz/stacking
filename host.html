@@ -1217,26 +1217,49 @@ const SessionAPI = (() => {
    */
   async function shuffleQueue(sessionId) {
     const { data: waiting } = await supabaseClient.from('players')
-      .select('id').eq('session_id', sessionId).eq('status', 'waiting');
+      .select('id, skill_tier').eq('session_id', sessionId).eq('status', 'waiting');
     if (!waiting || waiting.length === 0) return 0;
 
-    const shuffled = shuffleArray(waiting);
-    // Base the stagger in the past so late arrivals (= now) queue behind.
-    const base = Date.now() - shuffled.length * 10 - 1000;
-    for (let i = 0; i < shuffled.length; i++) {
-      await supabaseClient.from('players')
-        .update({ became_free_at: new Date(base + i * 10).toISOString() })
-        .eq('id', shuffled[i].id);
+    // CATEGORY-BALANCED SHUFFLE:
+    // Group players by skill tier, shuffle WITHIN each tier, then lay the
+    // tiers back-to-back in the queue. Because courts fill 4 at a time from
+    // the front, adjacent same-tier players naturally produce
+    // beginner-vs-beginner / intermediate-vs-intermediate / adv-vs-adv
+    // matchups when the counts allow. Where a tier doesn't divide evenly,
+    // the leftover players sit next to the neighbouring tier and the
+    // skill-balancing engine handles the mixed group of 4.
+    const TIER_ORDER = ['beginner', 'intermediate', 'advanced', 'open'];
+    const byTier = {};
+    for (const p of waiting) {
+      const t = p.skill_tier || 'open';
+      (byTier[t] = byTier[t] || []).push(p);
+    }
+    const ordered = [];
+    // Known tiers first, in a sensible order; any unknown tiers appended after.
+    const seen = new Set();
+    for (const t of TIER_ORDER) {
+      if (byTier[t]) { ordered.push(...shuffleArray(byTier[t])); seen.add(t); }
+    }
+    for (const t of Object.keys(byTier)) {
+      if (!seen.has(t)) ordered.push(...shuffleArray(byTier[t]));
     }
 
-    // Fill every open court from the freshly shuffled queue.
+    // Stagger timestamps in the past so late arrivals (= now) queue behind.
+    const base = Date.now() - ordered.length * 10 - 1000;
+    for (let i = 0; i < ordered.length; i++) {
+      await supabaseClient.from('players')
+        .update({ became_free_at: new Date(base + i * 10).toISOString() })
+        .eq('id', ordered[i].id);
+    }
+
+    // Fill every open court from the freshly ordered queue.
     const { data: courts } = await supabaseClient.from('courts')
       .select('id, status').eq('session_id', sessionId).eq('status', 'open')
       .order('court_number', { ascending: true });
     for (const c of courts || []) {
       await tryRefillCourt(c.id, sessionId);
     }
-    return shuffled.length;
+    return ordered.length;
   }
 
   async function tryRefillCourt(courtId, sessionId) {
@@ -2232,8 +2255,10 @@ async function handleArrived(playerId) {
   try {
     await SessionAPI.markArrived(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
-    // Immediately try to fill any open court now that there may be enough players.
-    if (activeTab === 'roster') {
+    // Only auto-fill courts AFTER the host has started queuing (pressed Shuffle).
+    // Before that, arrivals just sit in the waiting list so the host can
+    // shuffle/balance them all at once — arriving ≠ playing.
+    if (_queueStarted && activeTab === 'roster') {
       const courts = await SessionAPI.getCourts(activeSession.id);
       for (const court of courts) {
         if (court.status === 'open') {
@@ -2241,6 +2266,7 @@ async function handleArrived(playerId) {
           catch (e) { /* non-fatal */ }
         }
       }
+      document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
     }
   } catch (err) { alert(err.message || 'Could not mark as arrived.'); }
 }
@@ -2275,11 +2301,14 @@ async function renderCourtsTab(panel) {
     SessionAPI.getPlayers(activeSession.id),
   ]);
 
-  // Auto-fill any open courts from the waiting pool.
-  for (const court of courts) {
-    if (court.status === 'open') {
-      try { await SessionAPI.tryRefillCourt(court.id, activeSession.id); }
-      catch (e) { console.error(`Refill court ${court.court_number}:`, e.message); }
+  // Auto-fill any open courts from the waiting pool — but ONLY once the
+  // host has started queuing. Before that, courts stay empty on purpose.
+  if (_queueStarted) {
+    for (const court of courts) {
+      if (court.status === 'open') {
+        try { await SessionAPI.tryRefillCourt(court.id, activeSession.id); }
+        catch (e) { console.error(`Refill court ${court.court_number}:`, e.message); }
+      }
     }
   }
   const freshCourts = await SessionAPI.getCourts(activeSession.id);
