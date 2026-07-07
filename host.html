@@ -801,18 +801,46 @@ function decideSkillBalancedTeams(group) {
 function decideNextMatchFromPool(players, teamSize) {
   const needed = teamSize * 2;
   if (!players || players.length < needed) return null;
-  // Strict order for WHO plays — only the next `needed` players
-  // (pool is already tiered: winners → fresh → losers, FIFO within tier).
-  const group = players.slice(0, needed);
   if (teamSize === 1) {
-    return { teamAPlayerIds: [group[0].id], teamBPlayerIds: [group[1].id] };
+    return { teamAPlayerIds: [players[0].id], teamBPlayerIds: [players[1].id] };
   }
 
-  // WINNING PAIR vs WINNING PAIR:
-  // Winners of the same match share an identical became_free_at timestamp.
-  // If the next 4 are all winners forming exactly two timestamp-pairs,
-  // keep each winning pair together as a team instead of re-splitting.
-  // Same rule for losers (losing pair vs losing pair further down the queue).
+  // pool is pure FIFO (longest-waiting first). The front player is the
+  // ANCHOR — their result type decides how we fill the group of 4:
+  //   fresh anchor  → take the next 4 players regardless of result
+  //                   (a clean fresh group plays; a winner/loser only
+  //                    gets pulled in if the fresh run is shorter than 4).
+  //   winner anchor → group with other winners first, then backfill with
+  //                   FRESH players. Never pull in losers.
+  //   loser anchor  → group with other losers first, then backfill with
+  //                   FRESH players. Never pull in winners.
+  // This gives: waiting fresh play together while they last; once fresh
+  // run out, waiting winners grab fresh late-arrivals to complete their
+  // group (and losers likewise) — winning/losing pairs never mix.
+  const anchor = players[0];
+  const anchorResult = anchor.last_match_result || null; // 'won' | 'lost' | null
+
+  const isFresh  = p => !p.last_match_result;
+  const sameSide = p => p.last_match_result === anchorResult;
+
+  let group;
+  if (!anchorResult) {
+    // Fresh anchor — pure FIFO, next 4 whoever they are.
+    group = players.slice(0, needed);
+  } else {
+    // Winner/loser anchor: same-side players first (FIFO), then fresh fill.
+    const sameSidePlayers = players.filter(sameSide);
+    const freshPlayers    = players.filter(isFresh);
+    group = [...sameSidePlayers, ...freshPlayers].slice(0, needed);
+    // If still short (not enough same-side + fresh), fall back to raw FIFO.
+    if (group.length < needed) group = players.slice(0, needed);
+  }
+  if (group.length < needed) return null;
+
+  // WINNING PAIR vs WINNING PAIR (and losing pair vs losing pair):
+  // teammates from the same finished match share an identical
+  // became_free_at timestamp. If the group is all one result type and
+  // forms exactly two timestamp-pairs, keep each pair together.
   const allSameResult = group.every(p => p.last_match_result === 'won') ||
                         group.every(p => p.last_match_result === 'lost');
   if (allSameResult) {
@@ -1272,35 +1300,30 @@ const SessionAPI = (() => {
     // TIERED ORDER (professional stacking):
     //   Tier 0: last match WON      — winners group to the front
     //   Tier 1: fresh / no result   — new arrivals next
-    //   Tier 2: last match LOST     — losers group behind
-    // Within each tier: FIFO by became_free_at.
-    // Result: winners play winners as much as possible
-    // (e.g. courts finish 1,2|3,4 and 5,8|6,7 → queue = 1,2,5,8,3,4,6,7).
+    //   FIFO by became_free_at — the longest-waiting player is always next.
+    //   Shuffled arrivals get old timestamps (front); late arrivals get
+    //   now (back); winners get now; losers get now+1ms.
+    // Result (won/lost/fresh) is used ONLY to avoid mixing winners with
+    // losers when a clean group can be formed — NOT to jump the queue.
     const { data: rawPool } = await supabaseClient.from('players')
       .select('id, became_free_at, last_match_result, skill_tier')
       .eq('session_id', court.session_id)
       .eq('status', 'waiting')
       .order('became_free_at', { ascending: true });
 
-    const resultTier = p =>
-      p.last_match_result === 'won' ? 0 :
-      p.last_match_result === 'lost' ? 2 : 1;
     let pool = (rawPool || []).slice().sort((a, b) =>
-      resultTier(a) - resultTier(b) ||
       new Date(a.became_free_at) - new Date(b.became_free_at));
 
     // ── Loser-starvation safety valve ──
     // If the longest-waiting loser has been in the queue beyond the
-    // threshold (default 12 min) AND there aren't enough losers to form
-    // their own group of 4 (so tiers keep them stuck behind fresh winners),
-    // promote the oldest losers to the front so they don't wait forever.
+    // threshold (default 12 min) and can't form their own group, pull them
+    // to the very front for this fill so they don't wait forever.
     const STARVE_MS = 12 * 60 * 1000;
     const losers = pool.filter(p => p.last_match_result === 'lost');
     const nonLosers = pool.filter(p => p.last_match_result !== 'lost');
     if (losers.length > 0 && losers.length < 4) {
       const oldestLoserAge = Date.now() - new Date(losers[0].became_free_at).getTime();
       if (oldestLoserAge >= STARVE_MS) {
-        // Promote starved losers ahead of everyone else for this fill.
         pool = [...losers, ...nonLosers];
       }
     }
