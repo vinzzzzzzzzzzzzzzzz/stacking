@@ -423,11 +423,11 @@
   /* ══════════════════════════════════════════
      COURT CARDS
   ══════════════════════════════════════════ */
-  .courts-host-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(252px, 1fr)); gap: 14px; }
+  .courts-host-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(252px, 1fr)); gap: 14px; justify-content: center; }
   .court-host-card {
     background: var(--surface); border-radius: var(--radius);
     box-shadow: var(--shadow-card); border: 1px solid var(--border-card);
-    overflow: hidden; cursor: pointer;
+    overflow: hidden; cursor: pointer; max-width: 420px; width: 100%; margin: 0 auto;
     transition: transform var(--dur-fast) var(--ease-bounce), box-shadow var(--dur-fast) var(--ease-settle);
   }
   .court-host-card:hover  { transform: translateY(-3px) scale(1.012); box-shadow: var(--shadow-raised); }
