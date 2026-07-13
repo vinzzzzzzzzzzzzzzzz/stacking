@@ -297,7 +297,7 @@
   .paddle-chip-shape { width: 100%; aspect-ratio: 48/64; position: relative; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.38)); }
   .paddle-chip-shape svg { width: 100%; height: 100%; display: block; color: var(--line-paint); }
   .paddle-chip-name { position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%); width: 74%; font-size: 12px; font-weight: 800; color: var(--court-paint-deep); text-align: center; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
-  .paddle-chip-face { position: absolute; top: 1.5%; left: 50%; transform: translateX(-50%); width: 76%; aspect-ratio: 1; border-radius: 50%; overflow: hidden; background: var(--line-paint); display: flex; align-items: center; justify-content: center; }
+  .paddle-chip-face { position: absolute; top: 3.125%; left: 8.333%; width: 83.333%; height: 75%; border-radius: 50%; overflow: hidden; background: var(--line-paint); display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1.5px rgba(0,0,0,0.15); }
   .paddle-chip-face img { width: 100%; height: 100%; object-fit: cover; }
   .paddle-chip-face .initials { font-size: 17px; font-weight: 800; color: #fff; }
   .paddle-chip-name-out { font-size: 11px; font-weight: 700; color: var(--line-paint); text-align: center; line-height: 1.1; max-width: 78px; word-break: break-word; }
@@ -701,17 +701,25 @@ async function refreshAll() {
 // ============================================================
 function colorFromName(name){const s=String(name||'?');let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;return `hsl(${h},52%,42%)`;}
 function initialsFromName(name){const p=String(name||'').trim().split(/\s+/).filter(Boolean);if(!p.length)return '?';if(p.length===1)return p[0].slice(0,2).toUpperCase();return (p[0][0]+p[p.length-1][0]).toUpperCase();}
+let _paddleGripCounter = 0;
 function paddleChip(player) {
   const name = typeof player === 'string' ? player : (player?.name || '—');
   const photo = typeof player === 'string' ? null : (player?.photo_url || null);
   const face = photo
     ? `<div class="paddle-chip-face"><img src="${photo}" alt=""></div>`
     : `<div class="paddle-chip-face" style="background:${colorFromName(name)}"><span class="initials">${initialsFromName(name)}</span></div>`;
+  const gid = `pgrip${_paddleGripCounter++}`;
   return `<div class="paddle-chip">
     <div class="paddle-chip-shape">
       <svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/>
-        <ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/>
+        <defs>
+          <pattern id="${gid}" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(52)">
+            <rect width="3.2" height="3.2" fill="currentColor"/>
+            <line x1="0" y1="0" x2="0" y2="3.2" stroke="#000" stroke-opacity="0.22" stroke-width="1.1"/>
+          </pattern>
+        </defs>
+        <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid})"/>
+        <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="none" stroke="#000" stroke-opacity="0.18" stroke-width="0.6"/>
       </svg>
       ${face}
     </div>
@@ -1049,11 +1057,25 @@ function _tLogoChip(team,px){px=px||22;const url=team&&team.logo_url;
   const nm=(team&&team.team_name)||'?';
   return `<span style="width:${px}px;height:${px}px;border-radius:5px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;background:${colorFromName(nm)};color:#fff;font-weight:800;font-size:${Math.round(px*0.42)}px;vertical-align:middle">${initialsFromName(nm)}</span>`;}
 // Paddle-shaped face (matches open play + tournament host paddle visual exactly).
-function _tPaddleSvg(){return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/><ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/></svg>`;}
+let _tPaddleGripCounter=0;
+function _tPaddleSvg(){
+  const gid=`stgrip${_tPaddleGripCounter++}`;
+  return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <pattern id="${gid}" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(52)">
+        <rect width="3.2" height="3.2" fill="currentColor"/>
+        <line x1="0" y1="0" x2="0" y2="3.2" stroke="#000" stroke-opacity="0.22" stroke-width="1.1"/>
+      </pattern>
+    </defs>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid})"/>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="none" stroke="#000" stroke-opacity="0.18" stroke-width="0.6"/>
+  </svg>`;
+}
 function _tFace(name,photo,px){px=px||52;
+  const faceBase='position:absolute;top:3.125%;left:8.333%;width:83.333%;height:75%;border-radius:50%;overflow:hidden;box-shadow:inset 0 0 0 1.5px rgba(0,0,0,0.15)';
   const face = photo
-    ? `<div style="position:absolute;top:1.5%;left:50%;transform:translateX(-50%);width:76%;aspect-ratio:1;border-radius:50%;overflow:hidden;background:var(--line-tape)"><img src="${photo}" style="width:100%;height:100%;object-fit:cover"></div>`
-    : `<div style="position:absolute;top:1.5%;left:50%;transform:translateX(-50%);width:76%;aspect-ratio:1;border-radius:50%;overflow:hidden;background:${colorFromName(name)};display:flex;align-items:center;justify-content:center"><span style="font-size:13px;font-weight:800;color:#fff">${initialsFromName(name)}</span></div>`;
+    ? `<div style="${faceBase};background:var(--line-tape)"><img src="${photo}" style="width:100%;height:100%;object-fit:cover"></div>`
+    : `<div style="${faceBase};background:${colorFromName(name)};display:flex;align-items:center;justify-content:center"><span style="font-size:13px;font-weight:800;color:#fff">${initialsFromName(name)}</span></div>`;
   return `<div style="display:flex;flex-direction:column;align-items:center;width:${px}px;gap:3px">
     <div style="width:100%;aspect-ratio:48/64;position:relative;filter:drop-shadow(0 2px 5px rgba(0,0,0,0.4));color:var(--line-tape)">${_tPaddleSvg()}${face}</div>
   </div>`;}
