@@ -247,11 +247,11 @@
   .container { max-width: 1200px; margin: 0 auto; padding: 20px 18px; position: relative; z-index: 1; }
 
   /* ── Court cards ── */
-  .courts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 16px; margin-bottom: 28px; }
+  .courts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 16px; margin-bottom: 28px; justify-content: center; }
   .court-card {
     background: var(--surface); border-radius: var(--radius);
     box-shadow: var(--shadow-card); border: 1px solid var(--border-card);
-    overflow: hidden;
+    overflow: hidden; max-width: 420px; width: 100%; margin: 0 auto;
     transition: transform var(--dur-fast) var(--ease-bounce), box-shadow var(--dur-fast) var(--ease-settle);
   }
   .court-card:hover { transform: translateY(-3px) scale(1.01); box-shadow: var(--shadow-raised); }
@@ -1221,6 +1221,8 @@ function renderTournamentView(){
   function _tMatchStageLabel(m){
     if(!m)return'';
     if(m.match_type==='third_place')return'🥉 Battle for 3rd';
+    if(m.match_type==='final')return'🏆 Final';
+    if(m.match_type==='round_robin')return`Round ${m.round}`;
     if(m.match_type==='winners')return _tRoundLabel(m.round,maxRAll);
     return'';
   }
@@ -1244,7 +1246,7 @@ function renderTournamentView(){
       <div class="court-card${live?' court-active':''}">
         <div class="court-label">
           <span class="num">Court ${cn}</span>
-          ${live?`<span style="font-size:9px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em">▶ LIVE${stage?' · '+stage.toUpperCase():''} · Bo${live.best_of||1}</span>`:`<span class="court-timer idle">OPEN</span>`}
+          ${live?`<span style="display:flex;align-items:center;gap:8px;"><span style="font-size:9px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em">▶ LIVE${stage?' · '+stage.toUpperCase():''} · Bo${live.best_of||1}</span><span class="court-timer" data-start="${live.started_at||''}">00:00</span></span>`:`<span class="court-timer idle">OPEN</span>`}
         </div>
         ${live?_tBanner(teamA,false):''}
         <div class="court-diagram">
@@ -1272,7 +1274,7 @@ function renderTournamentView(){
   // ── Standings ──
   const doneReal=_tMatches.filter(m=>m.status==='completed'&&m.score_a!=null);
   const stats={};
-  _tTeams.forEach(t=>{stats[t.id]={name:t.team_name,w:0,l:0,pf:0,pa:0}});
+  _tTeams.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,w:0,l:0,pf:0,pa:0}});
   for(const m of doneReal){
     let pA=0,pB=0;
     if(Array.isArray(m.games)&&m.games.length)for(const g of m.games){pA+=g.a||0;pB+=g.b||0}
@@ -1283,7 +1285,46 @@ function renderTournamentView(){
   const standings=Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
 
   // ── Live bracket — same connected SVG tree as the host view ──
-  const bracketSvg = buildReadOnlyBracket();
+  // Round robin gets a crosstable instead (no single-elim tree to draw).
+  const isRR = _tBracket?.bracket_type === 'round_robin';
+  let bracketSection;
+  if (isRR) {
+    const rrMatches = _tMatches.filter(m => m.match_type === 'round_robin');
+    const finalM = _tMatches.find(m => m.match_type === 'final');
+    const doneCount = rrMatches.filter(m => m.status === 'completed').length;
+    const order = standings.length ? standings : _tTeams.map(t=>({id:t.id,name:t.team_name}));
+    const findRRMatch = (a,b) => rrMatches.find(m => (m.entry_a_id===a&&m.entry_b_id===b)||(m.entry_a_id===b&&m.entry_b_id===a));
+    const crosstable = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr><th style="text-align:left;padding:5px"></th>${order.map((t,i)=>`<th style="text-align:center;padding:5px;min-width:34px">${i+1}</th>`).join('')}</tr></thead>
+      <tbody>${order.map((rowT,ri)=>`<tr>
+        <td style="text-align:left;padding:5px;font-weight:700;white-space:nowrap">${ri+1}. ${escapeHtml(rowT.name)}</td>
+        ${order.map((colT,ci)=>{
+          if(ri===ci)return `<td style="text-align:center;color:var(--resting-slate)">—</td>`;
+          const m=findRRMatch(rowT.id,colT.id);
+          if(!m)return `<td style="text-align:center;color:var(--resting-slate);opacity:.4">·</td>`;
+          if(m.status!=='completed')return `<td style="text-align:center;color:var(--waiting-blue)">•</td>`;
+          const won=m.winner_id===rowT.id;
+          const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
+          return `<td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'} ${score}</td>`;
+        }).join('')}
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+    const finalHtml = finalM
+      ? `<div style="margin-top:12px;padding:10px 12px;background:var(--surface-raised);border-radius:8px;border:1px solid rgba(215,242,61,.3)">
+          <div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.06em;margin-bottom:6px">🏆 FINAL</div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px">
+            <span style="flex:1;font-weight:${finalM.winner_id===finalM.entry_a_id?'800':'600'}">${escapeHtml(_tEnt(finalM.entry_a_id)?.team_name||'TBD')}</span>
+            <span style="font-family:var(--font-mono);color:var(--resting-slate)">${finalM.status==='completed'?`${finalM.score_a}–${finalM.score_b}`:finalM.status==='in_progress'?'▶ LIVE':'vs'}</span>
+            <span style="flex:1;text-align:right;font-weight:${finalM.winner_id===finalM.entry_b_id?'800':'600'}">${escapeHtml(_tEnt(finalM.entry_b_id)?.team_name||'TBD')}</span>
+          </div>
+        </div>`
+      : doneCount===rrMatches.length&&rrMatches.length>0
+        ? `<p style="font-size:12px;color:var(--resting-slate);margin-top:10px">Round robin complete — Final coming up next.</p>`
+        : `<p style="font-size:11px;color:var(--resting-slate);margin-top:10px">${doneCount} of ${rrMatches.length} round robin matches played.</p>`;
+    bracketSection = `${crosstable}${finalHtml}`;
+  } else {
+    bracketSection = buildReadOnlyBracket() || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Bracket not generated yet.</p>`;
+  }
 
   el.innerHTML=`
     <div style="text-align:center;margin-bottom:14px">
@@ -1292,8 +1333,8 @@ function renderTournamentView(){
 
     <!-- 1. BRACKET — the headline of a tournament view -->
     <div class="card" style="margin-bottom:16px;overflow-x:auto">
-      <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">Live Bracket</h3>
-      ${bracketSvg || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Bracket not generated yet.</p>`}
+      <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">${isRR?'Round Robin Standings':'Live Bracket'}</h3>
+      ${bracketSection}
     </div>
 
     <!-- 2. COURTS — who is playing right now -->
