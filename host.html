@@ -674,6 +674,15 @@ function toggleTheme() {
 }
 applyThemeIcon();
 
+// Password show/hide toggle for the eye (👁) button on password fields.
+function togglePasswordVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  btn.textContent = showing ? '👁' : '🙈';
+}
+
 // ============================================================
 // SUPABASE
 // ============================================================
@@ -2482,19 +2491,24 @@ async function handleAvatarPick(inputEl, targetId, previewEl) {
   try {
     const dataUrl = await compressImageFile(file);
     document.getElementById(targetId).value = dataUrl;
+    // previewEl is the inner preview SPAN only — the file/hidden inputs
+    // live as siblings outside it, so this never destroys them.
     previewEl.innerHTML = `<img src="${dataUrl}" alt="">`;
   } catch (err) { alert(err.message || 'Could not process image.'); }
 }
 // Reusable avatar-upload widget markup.
+// CRITICAL: the preview (photo/initials) lives in its own inner <span id="preview_...">
+// so handleAvatarPick can safely replace ONLY that span's innerHTML without ever
+// touching the sibling <input type="file"> or <input type="hidden"> that hold the data.
 function avatarUploadWidget(targetId, currentUrl, name) {
   const inner = currentUrl
     ? `<img src="${currentUrl}" alt="">`
     : (name
         ? `<span class="init-fill" style="background:${colorFromName(name)};width:100%;height:100%;display:flex;align-items:center;justify-content:center;">${initialsFromName(name)}</span>`
         : `<span class="ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>PHOTO</span>`);
-  return `<label class="avatar-upload" id="prev_${targetId}">
-    ${inner}
-    <input type="file" accept="image/*" onchange="handleAvatarPick(this,'${targetId}',document.getElementById('prev_${targetId}'))">
+  return `<label class="avatar-upload" id="wrap_${targetId}">
+    <span id="preview_${targetId}" style="display:contents">${inner}</span>
+    <input type="file" accept="image/*" onchange="handleAvatarPick(this,'${targetId}',document.getElementById('preview_${targetId}'))">
     <input type="hidden" id="${targetId}" value="${currentUrl || ''}">
   </label>`;
 }
