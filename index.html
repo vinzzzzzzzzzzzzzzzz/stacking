@@ -1215,32 +1215,58 @@ function renderTournamentView(){
     return;
   }
 
-  // ── Courts ──
+  // ── Courts — full court diagram, same visual language as open play ──
+  const wMAll=_tMatches.filter(m=>m.match_type==='winners');
+  const maxRAll=wMAll.reduce((a,m)=>Math.max(a,m.round),0);
+  function _tMatchStageLabel(m){
+    if(!m)return'';
+    if(m.match_type==='third_place')return'🥉 Battle for 3rd';
+    if(m.match_type==='winners')return _tRoundLabel(m.round,maxRAll);
+    return'';
+  }
+  // Team banner strip: logo + team name, mirrored per side.
+  function _tBanner(team,mirror){
+    if(!team)return `<div style="font-size:10px;font-weight:700;color:var(--resting-slate);text-align:center;padding:3px 0">TBD</div>`;
+    return `<div style="display:flex;align-items:center;justify-content:${mirror?'flex-end':'flex-start'};gap:6px;padding:3px 6px;font-size:11px;font-weight:800;${mirror?'flex-direction:row-reverse':''}">
+      ${_tLogoChip(team,18)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(team.team_name)}</span>
+    </div>`;
+  }
   let courtsHtml='';
   for(let cn=1;cn<=courtCount;cn++){
     const live=_tMatches.find(m=>m.court_label===String(cn)&&m.status==='in_progress');
     const queued=_tMatches.filter(m=>m.court_label===String(cn)&&m.status==='pending')
       .sort((a,b)=>a.round-b.round||a.position-b.position);
-    let inner;
-    if(live){
-      const a=_tEnt(live.entry_a_id),b=_tEnt(live.entry_b_id);
-      inner=`<div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.06em;margin-bottom:8px">▶ LIVE · Bo${live.best_of||1}</div>
-        <div style="display:flex;align-items:center;justify-content:center;gap:7px"><span style="font-weight:800;font-size:15px">${escapeHtml(a?.team_name||'?')}</span></div>
-        ${_tPlayers(a)}
-        <div style="font-size:11px;color:var(--resting-slate);margin:6px 0">vs</div>
-        <div style="display:flex;align-items:center;justify-content:center;gap:7px"><span style="font-weight:800;font-size:15px">${escapeHtml(b?.team_name||'?')}</span></div>
-        ${_tPlayers(b)}`;
-    }else{
-      inner=`<div style="font-size:12px;color:var(--resting-slate)">Court open</div>`;
-    }
-    if(queued.length){
-      inner+=`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-soft);font-size:10px;color:var(--resting-slate)">
-        ⏳ Up next: ${queued.slice(0,2).map(q=>{
-          const a=_tEnt(q.entry_a_id),b=_tEnt(q.entry_b_id);
-          return escapeHtml((a?.team_name||'TBD')+' vs '+(b?.team_name||'TBD'));
-        }).join(' · ')}${queued.length>2?` · +${queued.length-2} more`:''}</div>`;
-    }
-    courtsHtml+=`<div class="card" style="padding:14px">${`<div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--resting-slate);margin-bottom:8px">Court ${cn}</div>`+inner}</div>`;
+    const teamA=live?_tEnt(live.entry_a_id):null, teamB=live?_tEnt(live.entry_b_id):null;
+    const sideA=live?[teamA&&teamA.player1_name&&paddleChip({name:teamA.player1_name,photo_url:teamA.player1_photo}),teamA&&teamA.player2_name&&paddleChip({name:teamA.player2_name,photo_url:teamA.player2_photo})].filter(Boolean).join(''):'';
+    const sideB=live?[teamB&&teamB.player1_name&&paddleChip({name:teamB.player1_name,photo_url:teamB.player1_photo}),teamB&&teamB.player2_name&&paddleChip({name:teamB.player2_name,photo_url:teamB.player2_photo})].filter(Boolean).join(''):'';
+    const stage=live?_tMatchStageLabel(live):'';
+    courtsHtml+=`
+      <div class="court-card${live?' court-active':''}">
+        <div class="court-label">
+          <span class="num">Court ${cn}</span>
+          ${live?`<span style="font-size:9px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em">▶ LIVE${stage?' · '+stage.toUpperCase():''} · Bo${live.best_of||1}</span>`:`<span class="court-timer idle">OPEN</span>`}
+        </div>
+        ${live?_tBanner(teamA,false):''}
+        <div class="court-diagram">
+          <div class="court-side">${sideA}</div>
+          <div class="kitchen-line-top"></div>
+          <div class="centerline-top"></div>
+          <div class="net-line">
+            ${live?`<svg class="net-ball" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="currentColor"/></svg>`:''}
+          </div>
+          <div class="kitchen-line-bottom"></div>
+          <div class="centerline-bottom"></div>
+          <div class="court-side">${sideB}</div>
+          ${!live?'<div class="empty-court-msg">Court Open</div>':''}
+        </div>
+        ${live?_tBanner(teamB,true):''}
+        ${queued.length?`<div style="padding:6px 10px;font-size:10px;color:var(--resting-slate);border-top:1px solid var(--border-soft)">
+          ⏳ Up next: ${queued.slice(0,2).map(q=>{
+            const a=_tEnt(q.entry_a_id),b=_tEnt(q.entry_b_id);
+            const st=_tMatchStageLabel(q);
+            return escapeHtml((a?.team_name||'TBD')+' vs '+(b?.team_name||'TBD'))+(st?` <span style="opacity:.7">(${st})</span>`:'');
+          }).join(' · ')}${queued.length>2?` · +${queued.length-2} more`:''}</div>`:''}
+      </div>`;
   }
 
   // ── Standings ──
