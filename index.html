@@ -621,6 +621,7 @@ async function loadSession(sessionId) {
     if (session.session_type === 'tournament') {
       await refreshTournament();
       subscribeTournamentRealtime();
+      startTimerLoop();
       return;
     }
     renderShell();
