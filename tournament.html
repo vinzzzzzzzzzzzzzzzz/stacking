@@ -274,10 +274,12 @@ body{position:relative;z-index:1;overflow-x:hidden}
   font-family:var(--font-display);text-transform:uppercase}
 
 /* ── Live Court Diagram (mirrors open-play host court view) ── */
-.court-diag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:16px}
-.court-diag-card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-card);overflow:hidden;cursor:pointer;transition:transform var(--dur-fast) var(--ease-bounce)}
+.court-diag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:16px;justify-content:center}
+.court-diag-card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-card);overflow:hidden;cursor:pointer;transition:transform var(--dur-fast) var(--ease-bounce);max-width:420px;width:100%;margin:0 auto}
 .court-diag-card:hover{transform:translateY(-2px)}
 .court-diag-label{background:var(--court-paint-deep);color:var(--line-paint);padding:9px 13px;font-weight:700;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(242,244,240,0.06)}
+.t-court-timer{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:var(--optic-yellow);font-variant-numeric:tabular-nums;letter-spacing:0.05em}
+.t-court-timer.idle{color:var(--bench-slate);font-weight:500;font-size:11px;letter-spacing:0.08em}
 .court-diag-banner{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:11px;font-weight:800;background:var(--surface-hover)}
 .court-diag-banner.mirror{flex-direction:row-reverse;text-align:right}
 .court-diag{background:linear-gradient(175deg,var(--court-paint) 0%,var(--court-paint-deep) 100%);aspect-ratio:5/4;position:relative;display:flex;flex-direction:column;padding:10px;overflow:hidden}
@@ -503,6 +505,29 @@ function seededPairs(size){
   return result;
 }
 
+// ── Round Robin scheduling (circle method) ──
+// Produces N-1 rounds (N even) or N rounds (N odd, one bye per round) where
+// every team plays every other team exactly once, never twice in one round.
+function buildRoundRobinPairings(teamIds){
+  let arr=teamIds.slice();
+  const hasBye=arr.length%2!==0;
+  if(hasBye)arr.push(null); // null = bye slot for this round
+  const n=arr.length, rounds=n-1, half=n/2;
+  const pairings=[]; // {round, position, entry_a_id, entry_b_id}
+  for(let r=0;r<rounds;r++){
+    let pos=1;
+    for(let i=0;i<half;i++){
+      const a=arr[i], b=arr[n-1-i];
+      if(a!=null&&b!=null){
+        pairings.push({round:r+1,position:pos++,entry_a_id:a,entry_b_id:b});
+      }
+    }
+    // Rotate: keep arr[0] fixed, rotate the rest clockwise.
+    arr=[arr[0],arr[n-1],...arr.slice(1,n-1)];
+  }
+  return pairings;
+}
+
 async function generateBracket(type){
   // Remove old bracket if exists
   if(BRACKET){
@@ -514,6 +539,41 @@ async function generateBracket(type){
 
   const n=TEAMS.length;
   if(n<2)throw new Error('Add at least 2 teams first.');
+
+  if(type==='round_robin'){
+    if(n>16)throw new Error('Maximum 16 teams supported for round robin. Remove '+(n-16)+' team(s).');
+    const{data:br,error:brErr}=await db.from('brackets').insert({
+      session_id:SID,name:'Round Robin',bracket_type:'round_robin',total_slots:n,best_of:1,status:'active'
+    }).select().single();
+    if(brErr||!br)throw new Error('Could not create bracket: '+(brErr?.message||'unknown error'));
+    BRACKET=br;
+
+    // Round robin — every team plays every other team once. Unlike single
+    // elimination, matches are PRE-FILLED at generation time (no manual
+    // dropdown seeding step) since the pairing is fully determined.
+    const pairings=buildRoundRobinPairings(TEAMS.map(t=>t.id));
+    const rows=pairings.map(p=>({
+      bracket_id:br.id,round:p.round,position:p.position,best_of:1,status:'pending',
+      match_type:'round_robin',entry_a_id:p.entry_a_id,entry_b_id:p.entry_b_id,
+      score_a:null,score_b:null,winner_id:null,loser_id:null,
+    }));
+    const{error:mErr}=await db.from('bracket_matches').insert(rows);
+    if(mErr){
+      if(/match_type|loser_id/.test(mErr.message||'')){
+        throw new Error('Database is missing tournament columns. Run this in Supabase SQL Editor:\n\n'+
+          'ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS match_type text DEFAULT \'winners\';\n'+
+          'ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS loser_id uuid REFERENCES bracket_entries(id);');
+      }
+      throw new Error('Could not create matches: '+mErr.message);
+    }
+    const{data:fresh}=await db.from('bracket_matches').select('*').eq('bracket_id',br.id)
+      .order('round',{ascending:true}).order('position',{ascending:true});
+    MATCHES=fresh||[];
+    // Immediately start filling every open court from the schedule.
+    await autoFillRRCourts();
+    return;
+  }
+
   if(n>16)throw new Error('Maximum 16 teams supported. Remove '+(n-16)+' team(s).');
   // Bracket model: 2→2, 3-4→4, 5-8→8, 9-16→16 slots.
   // Non-power-of-2 counts (e.g. 6, 12) fill the extra slots with BYE
@@ -760,6 +820,40 @@ async function promoteQueue(courtLabel){
   if(next)await db.from('bracket_matches').update({status:'in_progress',started_at:new Date().toISOString()}).eq('id',next.id);
 }
 
+// ── Round Robin auto-stacking ──
+// Fills every open court directly from the schedule (round order first),
+// skipping any match whose team is already mid-match on another court —
+// a team obviously can't play two matches at once. Called right after
+// generating the schedule, and again after every round-robin/final result
+// is saved so the next match auto-fills the freed court.
+async function autoFillRRCourts(){
+  if(!BRACKET||BRACKET.bracket_type!=='round_robin')return;
+  const courtCount=SESSION?.court_count||1;
+  const busyTeamIds=new Set(
+    MATCHES.filter(m=>m.status==='in_progress')
+      .flatMap(m=>[m.entry_a_id,m.entry_b_id])
+  );
+  const occupiedCourts=new Set(
+    MATCHES.filter(m=>m.status==='in_progress').map(m=>m.court_label)
+  );
+  const pending=MATCHES.filter(m=>m.status==='pending'&&!m.court_label&&m.entry_a_id&&m.entry_b_id)
+    .sort((a,b)=>a.round-b.round||a.position-b.position);
+
+  for(let cn=1;cn<=courtCount;cn++){
+    if(occupiedCourts.has(String(cn)))continue; // court already live
+    const next=pending.find(m=>!busyTeamIds.has(m.entry_a_id)&&!busyTeamIds.has(m.entry_b_id));
+    if(!next)continue; // nothing playable right now (remaining matches involve busy teams)
+    await db.from('bracket_matches').update({
+      court_label:String(cn),status:'in_progress',started_at:new Date().toISOString(),
+    }).eq('id',next.id);
+    busyTeamIds.add(next.entry_a_id);busyTeamIds.add(next.entry_b_id);
+    pending.splice(pending.indexOf(next),1);
+  }
+  const{data:fresh}=await db.from('bracket_matches').select('*').eq('bracket_id',BRACKET.id)
+    .order('round',{ascending:true}).order('position',{ascending:true});
+  if(fresh)MATCHES=fresh;
+}
+
 // ── GAME-BY-GAME SCORE ENTRY (Bo1/3/5/7) ──
 function openScoreModal(matchId){
   const m=MATCHES.find(x=>x.id===matchId);
@@ -890,6 +984,7 @@ async function saveGames(matchId,bo){
   }
   await propagate();          // winner advances to next bracket slot
   await promoteQueue(freedCourt); // next queued match on this court goes LIVE
+  await autoFillRRCourts();   // round robin: auto-stack the next scheduled match
   CM();
   await loadAll();render();   // bracket, scoreboard, standings all refresh
 }
@@ -964,6 +1059,14 @@ async function doReverse(matchId){
     score_a:null,score_b:null,winner_id:null,loser_id:null,status:'pending',ended_at:null,
     games:[],court_label:null,started_at:null
   }).eq('id',matchId);
+  // Downstream-clearing only applies to single/double-elim advancement —
+  // round_robin and final matches have FIXED team assignments from the
+  // schedule, not propagated ones, so wiping other matches' entry ids
+  // here would destroy the rest of the schedule for that team.
+  if(m.match_type==='round_robin'||m.match_type==='final'){
+    await propagate();
+    return;
+  }
   // Clear downstream
   for(const x of MATCHES){
     if(x.entry_a_id===m.winner_id||x.entry_b_id===m.winner_id||x.entry_a_id===m.loser_id||x.entry_b_id===m.loser_id){
@@ -1007,13 +1110,28 @@ function renderCourtsTab(){
         <div class="court-diag-footer">${queued?`${queued} match${queued>1?'es':''} queued for this court`:'Waiting for a match'}</div>`;
     }
     cards+=`<div class="court-diag-card" ${live?`onclick="openScoreModal('${live.id}')"`:''}>
-      <div class="court-diag-label"><span>COURT ${cn}</span>${live?'<span style="color:var(--optic-yellow)">●</span>':''}</div>
+      <div class="court-diag-label"><span>COURT ${cn}</span>${live?`<span class="t-court-timer" data-start="${live.started_at||''}">00:00</span>`:'<span class="t-court-timer idle">OPEN</span>'}</div>
       ${body}
     </div>`;
   }
   const anyLive=MATCHES.some(m=>m.status==='in_progress');
+  startTournamentTimerLoop();
   return `<div class="court-diag-grid">${cards}</div>
     ${!anyLive?`<div class="empty"><div class="empty-icon">🎾</div><div class="empty-title">No matches on court yet</div><p>Assign a match from the Bracket tab to see it here.</p></div>`:''}`;
+}
+let _tournTimerInterval=null;
+function startTournamentTimerLoop(){
+  if(_tournTimerInterval)clearInterval(_tournTimerInterval);
+  _tournTimerInterval=setInterval(()=>{
+    document.querySelectorAll('.t-court-timer[data-start]').forEach(el=>{
+      const start=el.getAttribute('data-start');
+      if(!start){el.textContent='OPEN';return}
+      const elapsed=Math.max(0,Math.floor((Date.now()-new Date(start).getTime())/1000));
+      const mins=String(Math.floor(elapsed/60)).padStart(2,'0');
+      const secs=String(elapsed%60).padStart(2,'0');
+      el.textContent=`${mins}:${secs}`;
+    });
+  },1000);
 }
 
 // ════════════════════════════════════════════
@@ -1121,28 +1239,41 @@ function renderBracket(){
       ${TEAMS.length>16?`<p style="font-size:12px;color:var(--fault-coral);font-weight:700;margin:0 0 12px">⚠ Max 16 teams — remove ${TEAMS.length-16} team(s) before generating.</p>`:''}
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-yellow" ${TEAMS.length>16?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="confirmGenerate('single_elim')">Generate Single Elimination Draw →</button>
+        <button class="btn btn-ghost" ${TEAMS.length>16?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="confirmGenerate('round_robin')">🔁 Generate Round Robin →</button>
       </div>
       <p style="font-size:11px;color:var(--bench-slate);margin:12px 0 0">
         Standard single elimination — lose once, you're out. Winners advance toward the Final for 🥇 gold and 🥈 silver;
-        the two semifinal losers meet in the 🥉 3rd-place match. Each match has its own Best-of (Bo1/3/5/7) selector.
+        the two semifinal losers meet in the 🥉 3rd-place match. Each match has its own Best-of (Bo1/3/5/7) selector.<br><br>
+        <strong>Round robin</strong> — every team plays every other team once (${TEAMS.length} teams → ${TEAMS.length*(TEAMS.length-1)/2} total matches).
+        Matches auto-fill your courts as they free up. Once every match is played, the top 2 teams by standings meet in a Final for gold/silver — 3rd place is automatically awarded 🥉 Bronze.
       </p>
     </div>`;
   }
+
+  // Round robin gets its own view: crosstable + round list + finals control.
+  if(BRACKET.bracket_type==='round_robin')return renderRoundRobinView();
 
   // Build the visual bracket
   return buildNCAABracket();
 }
 
 function confirmGenerate(type){
+  const isRR=type==='round_robin';
+  const title=isRR?'Generate Round Robin Schedule?':'Generate Single Elimination Bracket?';
+  const body=isRR
+    ? `${TEAMS.length} teams → ${TEAMS.length*(TEAMS.length-1)/2} total matches, everyone plays everyone once.
+       Matches are pre-scheduled and auto-fill your courts as they free up — no manual seeding needed.<br><br>
+       ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}`
+    : `${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. The bracket starts EMPTY —
+       you pick which team goes in each Round-1 slot using the dropdowns on the bracket. A team can only be placed once.<br><br>
+       ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}`;
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
     <div class="modal">
-      <h2>Generate Single Elimination Bracket?</h2>
-      <p class="modal-sub">${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. The bracket starts EMPTY —
-      you pick which team goes in each Round-1 slot using the dropdowns on the bracket. A team can only be placed once.<br><br>
-      ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}</p>
+      <h2>${title}</h2>
+      <p class="modal-sub">${body}</p>
       <div class="ma">
         <button class="no" onclick="CM()">Cancel</button>
-        <button class="ok-y" onclick="CM();doGenerate('${type}')">Generate Draw</button>
+        <button class="ok-y" onclick="CM();doGenerate('${type}')">Generate ${isRR?'Schedule':'Draw'}</button>
       </div>
     </div>
   </div>`);
@@ -1589,6 +1720,134 @@ function roundLabel(r,total){
   if(rem===2)return'Semifinal';
   if(rem===3)return'Quarterfinal';
   return`Round ${r}`;
+}
+
+// ════════════════════════════════════════════
+// RENDER — ROUND ROBIN VIEW (crosstable + rounds + finals)
+// ════════════════════════════════════════════
+function computeStandings(){
+  const stats={};
+  TEAMS.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,seed:t.seed,w:0,l:0,pf:0,pa:0,gp:0}});
+  const rrDone=MATCHES.filter(m=>m.match_type==='round_robin'&&m.status==='completed'&&m.winner_id);
+  for(const m of rrDone){
+    const isA_w=m.winner_id===m.entry_a_id;
+    let ptsA=0,ptsB=0;
+    if(Array.isArray(m.games)&&m.games.length){for(const g of m.games){ptsA+=g.a||0;ptsB+=g.b||0}}
+    else{ptsA=m.score_a||0;ptsB=m.score_b||0}
+    const wId=m.winner_id,lId=isA_w?m.entry_b_id:m.entry_a_id;
+    const wScore=isA_w?ptsA:ptsB,lScore=isA_w?ptsB:ptsA;
+    if(stats[wId]){const s=stats[wId];s.w++;s.gp++;s.pf+=wScore;s.pa+=lScore}
+    if(stats[lId]){const s=stats[lId];s.l++;s.gp++;s.pf+=lScore;s.pa+=wScore}
+  }
+  return Object.values(stats).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa)||a.l-b.l);
+}
+
+function renderRoundRobinView(){
+  const rrMatches=MATCHES.filter(m=>m.match_type==='round_robin');
+  const finalM=MATCHES.find(m=>m.match_type==='final');
+  const doneCount=rrMatches.filter(m=>m.status==='completed').length;
+  const allDone=doneCount===rrMatches.length&&rrMatches.length>0;
+  const standings=computeStandings();
+  const maxRound=rrMatches.reduce((a,m)=>Math.max(a,m.round),0);
+
+  // ── Crosstable: rows/cols ordered by current standing ──
+  const order=standings.length?standings:TEAMS.map(t=>({id:t.id,name:t.team_name}));
+  const findMatch=(idA,idB)=>rrMatches.find(m=>
+    (m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
+  let matrixHtml=`<div class="scroll-x"><table class="stbl" style="font-size:11px">
+    <thead><tr><th style="text-align:left">Team</th>${order.map((t,i)=>`<th style="text-align:center;min-width:38px">${i+1}</th>`).join('')}</tr></thead>
+    <tbody>${order.map((rowT,ri)=>`<tr>
+      <td style="text-align:left;font-weight:700;white-space:nowrap">${ri+1}. ${esc(rowT.name)}</td>
+      ${order.map((colT,ci)=>{
+        if(ri===ci)return `<td style="text-align:center;color:var(--bench-slate)">—</td>`;
+        const m=findMatch(rowT.id,colT.id);
+        if(!m)return `<td style="text-align:center;color:var(--bench-slate);opacity:.4">·</td>`;
+        if(m.status!=='completed')return `<td style="text-align:center;color:var(--waiting-blue)" title="Not played yet">•</td>`;
+        const won=m.winner_id===rowT.id;
+        const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
+        return `<td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'} ${score}</td>`;
+      }).join('')}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+
+  // ── Round-by-round match list ──
+  let roundsHtml='';
+  for(let r=1;r<=maxRound;r++){
+    const ms=rrMatches.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    roundsHtml+=`<div style="margin-bottom:12px">
+      <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.06em;margin-bottom:6px">Round ${r}</div>
+      ${ms.map(m=>{
+        const eA=[...TEAMS,...BYES].find(t=>t.id===m.entry_a_id),eB=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
+        const done=m.status==='completed';
+        const wA=done&&m.winner_id===m.entry_a_id;
+        const live=m.status==='in_progress';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:5px;font-size:12px;${live?'border:1px solid rgba(215,242,61,.4)':''}">
+          <span style="font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
+          <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
+          <span style="font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
+          ${live?`<span style="margin-left:auto;font-size:10px;color:var(--optic-yellow);font-weight:700">Court ${esc(m.court_label)}</span>`:''}
+          ${done?`<button style="margin-left:auto;font-size:9px;color:var(--fault-coral);background:none;border:none;cursor:pointer;min-height:0;padding:0;font-weight:700" onclick="openReverseModal('${m.id}')">↺ Reverse</button>`:''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // ── Finals control ──
+  let finalsHtml='';
+  if(finalM){
+    const eA=TEAMS.find(t=>t.id===finalM.entry_a_id),eB=TEAMS.find(t=>t.id===finalM.entry_b_id);
+    const done=finalM.status==='completed';
+    const wA=done&&finalM.winner_id===finalM.entry_a_id;
+    finalsHtml=`<div class="card" style="margin-bottom:12px;border:1px solid rgba(215,242,61,.3)">
+      <h2 style="margin-bottom:10px">🏆 Final</h2>
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-raised);border-radius:var(--radius-sm)">
+        <span style="flex:1;font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${done&&wA?'🥇 ':''}${esc(eA?.team_name||'TBD')}</span>
+        <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${finalM.score_a}–${finalM.score_b}`:finalM.status==='in_progress'?'▶ LIVE':'vs'}</span>
+        <span style="flex:1;text-align:right;font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${done&&!wA?'🥇 ':''}${esc(eB?.team_name||'TBD')}</span>
+      </div>
+      ${done?`<p style="font-size:12px;color:var(--bench-slate);margin:10px 0 0">🥈 Runner-up: ${esc(wA?eB?.team_name:eA?.team_name)} · 🥉 Bronze: ${esc(standings[2]?.name||'—')} (3rd in round robin standings)</p>`
+        :`<p style="font-size:11px;color:var(--bench-slate);margin:10px 0 0">Enter the result from the Courts tab once this match is assigned and played.</p>`}
+    </div>`;
+  }else if(allDone){
+    finalsHtml=`<div class="card" style="margin-bottom:12px;border:1px solid rgba(215,242,61,.3)">
+      <h2 style="margin-bottom:8px">🏆 Round Robin Complete</h2>
+      <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px">
+        All ${rrMatches.length} matches played. Top 2 by standings: <strong style="color:var(--ink)">${esc(standings[0]?.name)}</strong> vs <strong style="color:var(--ink)">${esc(standings[1]?.name)}</strong> —
+        ready to play the Final for gold/silver. 3rd place, <strong style="color:var(--ink)">${esc(standings[2]?.name||'—')}</strong>, is automatically awarded 🥉 Bronze — no match needed.
+      </p>
+      <button class="btn btn-yellow" onclick="generateFinal()">Generate Final Match →</button>
+    </div>`;
+  }else{
+    finalsHtml=`<div class="card" style="margin-bottom:12px">
+      <p style="font-size:12px;color:var(--bench-slate);margin:0">📋 ${doneCount} of ${rrMatches.length} round robin matches played. The Final unlocks once every match is complete.</p>
+    </div>`;
+  }
+
+  return `
+    ${finalsHtml}
+    <div class="card" style="margin-bottom:12px">
+      <h2 style="margin-bottom:10px">Crosstable</h2>
+      <p style="font-size:11px;color:var(--bench-slate);margin:0 0 10px">Rows/columns ranked by current standing. W/L + score from each team's perspective. · = not yet scheduled, • = scheduled but not played.</p>
+      ${matrixHtml}
+    </div>
+    <div class="card"><h2 style="margin-bottom:10px">Schedule</h2>${roundsHtml}</div>
+  `;
+}
+
+async function generateFinal(){
+  const standings=computeStandings();
+  if(standings.length<2){alert('Need at least 2 teams with results to generate a final.');return}
+  const[top1,top2]=standings;
+  const maxRRRound=MATCHES.filter(m=>m.match_type==='round_robin').reduce((a,m)=>Math.max(a,m.round),0);
+  const{error}=await db.from('bracket_matches').insert({
+    bracket_id:BRACKET.id,round:maxRRRound+1,position:1,best_of:1,status:'pending',
+    match_type:'final',entry_a_id:top1.id,entry_b_id:top2.id,
+    score_a:null,score_b:null,winner_id:null,loser_id:null,
+  });
+  if(error){alert('Could not create final: '+error.message);return}
+  await loadAll();
+  await autoFillRRCourts();
+  await loadAll();render();
 }
 
 // ════════════════════════════════════════════
