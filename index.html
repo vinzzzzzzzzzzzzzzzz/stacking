@@ -32,6 +32,7 @@
     --line-tape: #F2F4F0;
     --bench-slate: #6B7872;
     --fault-coral: #FF7A5C;
+    --line: rgba(242,244,240,0.18);
 
     --bg: var(--night-court);
     --surface: #181F1D;
@@ -68,6 +69,7 @@
     --line-tape: #15201C;
     --bench-slate: #8E9B97;
     --fault-coral: #D9523A;
+    --line: rgba(21,32,28,0.2);
     --bg: var(--night-court);
     --surface: #FAFAF7;
     --surface-raised: #FFFFFF;
@@ -1046,17 +1048,162 @@ function _tLogoChip(team,px){px=px||22;const url=team&&team.logo_url;
   if(url)return `<span style="width:${px}px;height:${px}px;border-radius:5px;overflow:hidden;display:inline-flex;flex-shrink:0;vertical-align:middle"><img src="${url}" style="width:100%;height:100%;object-fit:cover"></span>`;
   const nm=(team&&team.team_name)||'?';
   return `<span style="width:${px}px;height:${px}px;border-radius:5px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;background:${colorFromName(nm)};color:#fff;font-weight:800;font-size:${Math.round(px*0.42)}px;vertical-align:middle">${initialsFromName(nm)}</span>`;}
-function _tFace(name,photo,px){px=px||34;
-  if(photo)return `<span style="width:${px}px;height:${px}px;border-radius:50%;overflow:hidden;display:inline-flex"><img src="${photo}" style="width:100%;height:100%;object-fit:cover"></span>`;
-  return `<span style="width:${px}px;height:${px}px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:${colorFromName(name)};color:#fff;font-weight:800;font-size:${Math.round(px*0.36)}px">${initialsFromName(name)}</span>`;}
+// Paddle-shaped face (matches open play + tournament host paddle visual exactly).
+function _tPaddleSvg(){return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/><ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/></svg>`;}
+function _tFace(name,photo,px){px=px||52;
+  const face = photo
+    ? `<div style="position:absolute;top:1.5%;left:50%;transform:translateX(-50%);width:76%;aspect-ratio:1;border-radius:50%;overflow:hidden;background:var(--line-tape)"><img src="${photo}" style="width:100%;height:100%;object-fit:cover"></div>`
+    : `<div style="position:absolute;top:1.5%;left:50%;transform:translateX(-50%);width:76%;aspect-ratio:1;border-radius:50%;overflow:hidden;background:${colorFromName(name)};display:flex;align-items:center;justify-content:center"><span style="font-size:13px;font-weight:800;color:#fff">${initialsFromName(name)}</span></div>`;
+  return `<div style="display:flex;flex-direction:column;align-items:center;width:${px}px;gap:3px">
+    <div style="width:100%;aspect-ratio:48/64;position:relative;filter:drop-shadow(0 2px 5px rgba(0,0,0,0.4));color:var(--line-tape)">${_tPaddleSvg()}${face}</div>
+  </div>`;}
 function _tPlayers(team){if(!team)return'';const ps=[{n:team.player1_name,p:team.player1_photo},{n:team.player2_name,p:team.player2_photo}].filter(x=>x.n);
   if(!ps.length)return'';
-  return `<div style="display:flex;gap:8px;justify-content:center;margin-top:6px">${ps.map(x=>`<div style="display:flex;flex-direction:column;align-items:center;gap:2px">${_tFace(x.n,x.p,34)}<span style="font-size:9px;color:var(--resting-slate);max-width:56px;text-align:center;line-height:1.05;word-break:break-word">${escapeHtml(x.n)}</span></div>`).join('')}</div>`;}
+  return `<div style="display:flex;gap:8px;justify-content:center;margin-top:6px">${ps.map(x=>`<div style="display:flex;flex-direction:column;align-items:center;gap:2px">${_tFace(x.n,x.p,52)}<span style="font-size:9px;color:var(--resting-slate);max-width:56px;text-align:center;line-height:1.05;word-break:break-word">${escapeHtml(x.n)}</span></div>`).join('')}</div>`;}
 function _tGamesStr(m){
   if(Array.isArray(m.games)&&m.games.length)return m.games.map(g=>`${g.a}–${g.b}`).join(', ');
   if(m.score_a!=null)return `${m.score_a}–${m.score_b}`;
   return '';
 }
+function _tRoundLabel(r,total){const rem=total-r+1;return rem===1?'Final':rem===2?'Semifinal':rem===3?'Quarterfinal':'Round '+r}
+
+// Read-only SVG bracket tree — visually matches the host's connected bracket
+// exactly (same geometry/constants), with all edit controls (dropdowns,
+// Bo-selector, reverse, reset) stripped since spectators can't edit.
+function buildReadOnlyBracket(){
+  const wM=_tMatches.filter(m=>m.match_type==='winners').sort((a,b)=>a.round-b.round||a.position-b.position);
+  const tfM=_tMatches.find(m=>m.match_type==='third_place');
+  const maxR=wM.reduce((a,m)=>Math.max(a,m.round),0);
+  if(!maxR)return '';
+
+  const courtCount=currentSession?.court_count||1;
+  const liveOn={},queuePos={};
+  for(let cn=1;cn<=courtCount;cn++){
+    const live=_tMatches.find(m=>m.court_label===String(cn)&&m.status==='in_progress');
+    if(live)liveOn[live.id]=cn;
+    _tMatches.filter(m=>m.court_label===String(cn)&&m.status==='pending')
+      .sort((a,b)=>a.round-b.round||a.position-b.position)
+      .forEach((m,i)=>{queuePos[m.id]={court:cn,pos:i+1}});
+  }
+
+  const BW=128,BH=26,GAP=4,CG=52,PX=14,PY=24,LH=16;
+  const PAIR=BH*2+GAP, R1SP=PAIR+18;
+  const r1Matches=wM.filter(m=>m.round===1), R1N=r1Matches.length;
+
+  const cy={};
+  for(let r=1;r<=maxR;r++){
+    cy[r]={};
+    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
+      if(r===1){cy[r][m.position]=PY+LH+(m.position-1)*R1SP+PAIR/2}
+      else{
+        const pA=2*m.position-1,pB=2*m.position;
+        const yA=cy[r-1]?.[pA],yB=cy[r-1]?.[pB];
+        cy[r][m.position]=(yA!=null&&yB!=null)?(yA+yB)/2:PY+LH+PAIR/2;
+      }
+    }
+  }
+  const SVG_H=Math.max(200,PY+LH+R1N*R1SP+PY);
+  const CHAMP_X=PX+maxR*(BW+CG), CHAMP_W=BW+16, SVG_W=CHAMP_X+CHAMP_W+PX;
+
+  let s='';
+  for(let r=1;r<=maxR;r++){
+    const x=PX+(r-1)*(BW+CG);
+    s+=`<text x="${x+BW/2}" y="${PY+11}" text-anchor="middle" font-size="9" font-weight="800"
+      fill="var(--bench-slate)" font-family="Inter,sans-serif" letter-spacing="1">${_tRoundLabel(r,maxR).toUpperCase()}</text>`;
+  }
+
+  for(let r=1;r<=maxR;r++){
+    const x=PX+(r-1)*(BW+CG);
+    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
+      const midY=cy[r][m.position]??(PY+LH+PAIR/2);
+      const tyA=midY-BH-GAP/2, tyB=midY+GAP/2;
+      const eA=_tEnt(m.entry_a_id), eB=_tEnt(m.entry_b_id);
+      const done=m.status==='completed';
+      const wA=done&&m.winner_id===m.entry_a_id, wB=done&&m.winner_id===m.entry_b_id;
+
+      function box(ty,e,score,isW,isL){
+        const isBye=e?.is_bye,isTBD=!e;
+        const fill=isW?'rgba(78,203,126,.16)':'var(--surface-raised)';
+        const stroke=isW?'rgba(78,203,126,.55)':(isL?'rgba(242,244,240,.05)':'var(--border-soft)');
+        const nameColor=isTBD||isBye?'var(--bench-slate)':isW?'var(--winner-green)':isL?'rgba(242,244,240,.38)':'var(--ink)';
+        const nameText=isBye?'BYE':isTBD?'TBD':escapeHtml(e.team_name);
+        const nameStyle=(isBye||isTBD)?'font-style="italic"':'';
+        const nameW=BW-(e?.seed?22:14)-(score!=null?24:6);
+        let out=`<rect x="${x}" y="${ty}" width="${BW}" height="${BH}" rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>`;
+        if(e&&!e.is_bye&&e.seed)out+=`<text x="${x+5}" y="${ty+BH/2+4}" font-size="8" fill="var(--bench-slate)" font-family="'JetBrains Mono',monospace">${e.seed}</text>`;
+        const nx=x+(e?.seed?18:8);
+        const uid=`ci${m.id.replace(/-/g,'').slice(0,8)}_${ty|0}`;
+        out+=`<clipPath id="${uid}"><rect x="${nx}" y="${ty+2}" width="${nameW}" height="${BH-4}"/></clipPath>
+          <text x="${nx}" y="${ty+BH/2+4}" font-size="11" font-weight="${isW?700:500}" fill="${nameColor}"
+            font-family="Inter,sans-serif" ${nameStyle} clip-path="url(#${uid})">${nameText}</text>`;
+        if(score!=null)out+=`<text x="${x+BW-4}" y="${ty+BH/2+4}" font-size="11" font-weight="700"
+          fill="${isW?'var(--winner-green)':'var(--bench-slate)'}" text-anchor="end" font-family="'JetBrains Mono',monospace">${score}</text>`;
+        return out;
+      }
+      s+=box(tyA,eA,done?m.score_a:null,wA,done&&!wA);
+      s+=box(tyB,eB,done?m.score_b:null,wB,done&&!wB);
+
+      const lx=x+BW,lyA=tyA+BH/2,lyB=tyB+BH/2;
+      s+=`<line x1="${lx}" y1="${lyA}" x2="${lx}" y2="${lyB}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      if(r<maxR)s+=`<line x1="${lx}" y1="${midY}" x2="${x+BW+CG}" y2="${midY}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+
+      if(liveOn[m.id]){
+        s+=`<text x="${x+BW/2}" y="${tyB+BH+11}" text-anchor="middle" font-size="9" font-weight="800"
+          fill="var(--optic-yellow)" font-family="Inter,sans-serif" letter-spacing=".5">▶ COURT ${liveOn[m.id]} · LIVE</text>`;
+      }else if(queuePos[m.id]){
+        s+=`<text x="${x+BW/2}" y="${tyB+BH+11}" text-anchor="middle" font-size="9" font-weight="700"
+          fill="var(--waiting-blue)" font-family="Inter,sans-serif" letter-spacing=".5">⏳ Q${queuePos[m.id].pos} · COURT ${queuePos[m.id].court}</text>`;
+      }
+      if(m.best_of>1){
+        s+=`<text x="${x}" y="${tyA-6}" font-size="9" font-weight="700" fill="var(--bench-slate)" font-family="Inter,sans-serif">Bo${m.best_of}</text>`;
+      }
+    }
+  }
+
+  const champY=cy[maxR]?.[1]??SVG_H/2;
+  const finalM=wM.find(m=>m.round===maxR);
+  const champion=finalM?.winner_id?_tEnt(finalM.winner_id):null;
+  const lastRX=PX+(maxR-1)*(BW+CG)+BW;
+  s+=`<line x1="${lastRX}" y1="${champY}" x2="${CHAMP_X}" y2="${champY}" stroke="var(--line)" stroke-width="1.5"/>`;
+  s+=`<rect x="${CHAMP_X}" y="${champY-BH/2}" width="${CHAMP_W}" height="${BH}" rx="4"
+    fill="${champion?'rgba(215,242,61,.14)':'var(--surface-raised)'}"
+    stroke="${champion?'rgba(215,242,61,.5)':'var(--border-soft)'}" stroke-width="${champion?1.5:1}"/>`;
+  s+=`<text x="${CHAMP_X+8}" y="${champY+5}" font-size="11" font-weight="700"
+    fill="${champion?'var(--optic-yellow)':'var(--bench-slate)'}" font-style="${champion?'normal':'italic'}"
+    font-family="Inter,sans-serif">${champion?escapeHtml(champion.team_name):'Champion TBD'}</text>`;
+  s+=`<text x="${CHAMP_X+CHAMP_W/2}" y="${champY-BH/2-5}" text-anchor="middle" font-size="9" font-weight="800"
+    fill="var(--optic-yellow)" font-family="Inter,sans-serif" letter-spacing="1">🏆 CHAMPION</text>`;
+
+  const svgEl=`<svg width="${SVG_W}" height="${SVG_H}" viewBox="0 0 ${SVG_W} ${SVG_H}" xmlns="http://www.w3.org/2000/svg"
+    style="display:block;min-width:${SVG_W}px;max-width:100%"><style>rect{transition:fill .12s}text{user-select:none}</style>${s}</svg>`;
+
+  // 3rd place — read-only flat card
+  let thirdHtml='';
+  if(tfM){
+    const eA=_tEnt(tfM.entry_a_id),eB=_tEnt(tfM.entry_b_id);
+    const done=tfM.status==='completed';
+    const wA=done&&tfM.winner_id===tfM.entry_a_id, wB=done&&tfM.winner_id===tfM.entry_b_id;
+    const rows=[{e:eA,sc:tfM.score_a,w:wA,l:done&&!wA},{e:eB,sc:tfM.score_b,w:wB,l:done&&!wB}];
+    thirdHtml=`<div style="margin-top:14px;padding:12px 14px;border-top:1px solid var(--border-soft)">
+      <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.07em;margin-bottom:8px">🥉 3rd Place Match</div>
+      <div style="display:inline-flex;flex-direction:column;gap:3px">
+        ${rows.map(({e,sc,w,l})=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 12px;min-width:220px;
+          background:${w?'rgba(78,203,126,.12)':'var(--surface-raised)'};border:1.5px solid ${w?'rgba(78,203,126,.4)':'var(--border-soft)'};
+          border-radius:4px;${l?'opacity:.5':''}">
+          <span style="flex:1;font-size:12px;font-weight:${w?700:500};color:${!e?'var(--bench-slate)':w?'var(--winner-green)':'var(--ink)'}">${e?escapeHtml(e.team_name):'TBD'}</span>
+          ${sc!=null?`<span style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:${w?'var(--winner-green)':'var(--bench-slate)'}">${sc}</span>`:''}
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  return `<div style="overflow:auto;-webkit-overflow-scrolling:touch;background:var(--surface);
+    border:1px solid var(--border-card);border-radius:var(--radius);padding:14px 10px;box-shadow:var(--shadow-card)">
+    ${svgEl}</div>${thirdHtml}`;
+}
+
 
 function renderTournamentView(){
   const el=document.getElementById('mainContent');
@@ -1109,36 +1256,8 @@ function renderTournamentView(){
   }
   const standings=Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
 
-  // ── Simple live bracket (rounds as columns of match cards) ──
-  const wM=_tMatches.filter(m=>m.match_type==='winners');
-  const maxR=wM.reduce((a,m)=>Math.max(a,m.round),0);
-  const tf=_tMatches.find(m=>m.match_type==='third_place');
-  function rn(r){const rem=maxR-r+1;return rem===1?'Final':rem===2?'Semifinal':rem===3?'Quarterfinal':'Round '+r}
-  function mCard(m){
-    const a=_tEnt(m.entry_a_id),b=_tEnt(m.entry_b_id);
-    const wA=m.winner_id&&m.winner_id===m.entry_a_id,wB=m.winner_id&&m.winner_id===m.entry_b_id;
-    const games=_tGamesStr(m);
-    const state=m.status==='in_progress'?`<span style="color:var(--optic-yellow);font-weight:800">▶ C${m.court_label}</span>`
-      :m.court_label&&m.status==='pending'?`<span style="color:var(--waiting-blue)">⏳ C${m.court_label}</span>`:'';
-    const row=(e,isW)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;${isW?'background:rgba(78,203,126,.1)':''}">
-      <span style="display:flex;align-items:center;gap:6px;min-width:0"><span>${e&&!e.is_bye?_tLogoChip(e,16):''}</span><span style="font-size:11px;font-weight:${isW?800:500};color:${!e?'var(--resting-slate)':e.is_bye?'var(--resting-slate)':isW?'var(--winner-green)':'var(--ink)'};${!e||e.is_bye?'font-style:italic':''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e?escapeHtml(e.team_name):'TBD'}</span></span>
-    </div>`;
-    return `<div style="border:1px solid var(--border-soft);border-radius:6px;background:var(--surface-raised);margin-bottom:8px;overflow:hidden">
-      <div style="display:flex;justify-content:space-between;padding:2px 8px;font-size:9px;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">
-        <span>Bo${m.best_of||1}</span>${state}
-      </div>
-      ${row(a,wA)}${row(b,wB)}
-      ${games?`<div style="padding:3px 8px;font-size:10px;font-family:var(--font-mono);color:var(--resting-slate);border-top:1px solid var(--border-soft)">${games}</div>`:''}
-    </div>`;
-  }
-  let bracketCols='';
-  for(let r=1;r<=maxR;r++){
-    const ms=wM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
-    bracketCols+=`<div style="flex:1;min-width:150px">
-      <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--resting-slate);text-align:center;padding:4px 0;border-bottom:1px solid var(--border-soft);margin-bottom:8px">${rn(r)}</div>
-      ${ms.map(mCard).join('')}
-    </div>`;
-  }
+  // ── Live bracket — same connected SVG tree as the host view ──
+  const bracketSvg = buildReadOnlyBracket();
 
   el.innerHTML=`
     <div style="text-align:center;margin-bottom:14px">
@@ -1148,9 +1267,7 @@ function renderTournamentView(){
     <!-- 1. BRACKET — the headline of a tournament view -->
     <div class="card" style="margin-bottom:16px;overflow-x:auto">
       <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">Live Bracket</h3>
-      <div style="display:flex;gap:10px;min-width:max-content;align-items:flex-start">${bracketCols}</div>
-      ${tf&&(tf.entry_a_id||tf.entry_b_id)?`<div style="margin-top:10px;max-width:220px">
-        <div style="font-size:9px;font-weight:800;text-transform:uppercase;color:var(--resting-slate);margin-bottom:4px">🥉 3rd Place</div>${mCard(tf)}</div>`:''}
+      ${bracketSvg || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Bracket not generated yet.</p>`}
     </div>
 
     <!-- 2. COURTS — who is playing right now -->
