@@ -480,9 +480,14 @@
   /* Legacy name-inside-paddle (kept for fallback safety, not used when photo layout active) */
   .court-host-paddle-name { position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%); width: 74%; font-size: 10px; font-weight: 800; color: var(--court-paint-deep); text-align: center; line-height: 1.15; }
   /* Photo-as-paddle-face: the circular image sits in the paddle head */
-  .paddle-face { position: absolute; top: 1.5%; left: 50%; transform: translateX(-50%);
-    width: 76%; aspect-ratio: 1; border-radius: 50%; overflow: hidden;
-    background: var(--line-paint); display: flex; align-items: center; justify-content: center; }
+  /* Photo-as-paddle-face: sized to EXACTLY match the paddle SVG's ellipse
+     bounding box (cx24 cy26 rx20 ry24 in a 48x64 viewBox → left 8.33%,
+     top 3.125%, width 83.33%, height 75%) so the photo fills the whole
+     paddle head with zero white ring showing around the edge. */
+  .paddle-face { position: absolute; top: 3.125%; left: 8.333%;
+    width: 83.333%; height: 75%; border-radius: 50%; overflow: hidden;
+    background: var(--line-paint); display: flex; align-items: center; justify-content: center;
+    box-shadow: inset 0 0 0 1.5px rgba(0,0,0,0.15); }
   .paddle-face img { width: 100%; height: 100%; object-fit: cover; }
   .paddle-face .initials { font-size: 15px; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
   /* Name OUTSIDE + below the paddle, on the player's side */
@@ -2527,8 +2532,21 @@ async function renderCourtsTab(panel) {
   `;
 }
 
+let _paddleGripCounter = 0;
 function paddleSvg() {
-  return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="20" y="46" width="8" height="16" rx="3" fill="currentColor" opacity="0.85"/><ellipse cx="24" cy="26" rx="20" ry="24" fill="currentColor"/></svg>`;
+  // Unique pattern id per call — inline SVG <defs> ids share the document's
+  // global namespace, so a fixed id would collide across multiple paddles.
+  const gid = `grip${_paddleGripCounter++}`;
+  return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <pattern id="${gid}" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(52)">
+        <rect width="3.2" height="3.2" fill="currentColor"/>
+        <line x1="0" y1="0" x2="0" y2="3.2" stroke="#000" stroke-opacity="0.22" stroke-width="1.1"/>
+      </pattern>
+    </defs>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid})"/>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="none" stroke="#000" stroke-opacity="0.18" stroke-width="0.6"/>
+  </svg>`;
 }
 
 // ============================================================
