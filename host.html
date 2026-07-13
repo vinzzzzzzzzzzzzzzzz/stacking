@@ -409,14 +409,15 @@
   .status-left     { background: var(--bench-slate); opacity: 0.55; }
 
   /* ── Roster action buttons — ≥44px on mobile ── */
-  .arrive-btn, .rest-btn, .back-btn { border: none; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; min-height: 36px; cursor: pointer; }
+  .arrive-btn, .rest-btn, .back-btn, .edit-btn { border: none; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; min-height: 36px; cursor: pointer; }
   .arrive-btn { background: var(--winner-green); color: white; }
   .rest-btn   { background: var(--bench-slate); color: white; }
   .back-btn   { background: var(--waiting-blue); color: white; }
+  .edit-btn   { background: transparent; color: var(--optic-yellow); border: 1px solid rgba(215,242,61,0.35) !important; }
   .remove-btn { background: none; border: none; color: var(--fault-coral); font-size: 12px; font-weight: 700; min-height: 36px; padding: 5px 8px; cursor: pointer; }
   .roster-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   @media (max-width: 768px) {
-    .arrive-btn, .rest-btn, .back-btn, .remove-btn { min-height: 44px; font-size: 13px; }
+    .arrive-btn, .rest-btn, .back-btn, .edit-btn, .remove-btn { min-height: 44px; font-size: 13px; }
   }
 
   /* ══════════════════════════════════════════
@@ -780,9 +781,29 @@ function decideSkillBalancedTeams(group) {
     { a: [0,3], b: [1,2] },
   ];
 
+  // ── Recent-opponent avoidance ──
+  // Don't immediately rematch someone you just played against. This is a
+  // SOFT preference: if every possible split would force a rematch (only
+  // happens when the pool isn't evenly divisible by 4 and the same players
+  // keep circling back), we allow it rather than deadlock the queue.
+  function recentOpponentIds(p) {
+    return Array.isArray(p.recent_opponent_ids) ? p.recent_opponent_ids : [];
+  }
+  function rematchCount(s) {
+    let count = 0;
+    for (const i of s.a) for (const j of s.b) {
+      const pi = group[i], pj = group[j];
+      if (recentOpponentIds(pi).includes(pj.id) || recentOpponentIds(pj).includes(pi.id)) count++;
+    }
+    return count;
+  }
+
   // Score each split — LOWER is better.
-  // Primary:  absolute rank-sum difference between the two teams.
-  // Secondary: number of same-tier pairs on the SAME team (0 = spread out = better).
+  // Primary:   rematch count (avoid facing your last opponent at all costs
+  //            unless every split forces it — then it's a tie and skill
+  //            balance decides).
+  // Secondary: absolute rank-sum difference between the two teams.
+  // Tertiary:  number of same-tier pairs on the SAME team (0 = spread out).
   function scoreSplit(s) {
     const sumA = s.a.reduce((acc, i) => acc + ranks[i], 0);
     const sumB = s.b.reduce((acc, i) => acc + ranks[i], 0);
@@ -790,7 +811,7 @@ function decideSkillBalancedTeams(group) {
     const clumped =
       (ranks[s.a[0]] === ranks[s.a[1]] ? 1 : 0) +
       (ranks[s.b[0]] === ranks[s.b[1]] ? 1 : 0);
-    return diff * 10 + clumped;
+    return rematchCount(s) * 1000 + diff * 10 + clumped;
   }
 
   const scores = splits.map(s => scoreSplit(s));
@@ -799,20 +820,12 @@ function decideSkillBalancedTeams(group) {
   // Collect ALL splits that tie for best score.
   const bestSplits = splits.filter((_, i) => scores[i] === best);
 
-  // When multiple splits tie (common when all tiers are equal/open),
-  // shuffle the group and re-pick so partners are random.
-  // We shuffle the GROUP itself (not the splits array), then re-evaluate
-  // with the same split shapes on the shuffled order — this randomises
-  // which physical players land in which positions of each split.
-  let chosen;
-  if (bestSplits.length > 1) {
-    // Shuffle then always take the first split shape — the shuffle makes
-    // it random without needing to pick a random split index.
-    const shuffled = shuffleArray(group);
-    chosen = { a: [0,1], b: [2,3], group: shuffled };
-  } else {
-    chosen = { ...bestSplits[0], group };
-  }
+  // When multiple splits tie (common when all tiers are equal/open, or when
+  // rematch-count ties too), pick RANDOMLY among the tied splits themselves
+  // — never reshuffle the raw group, since that would re-randomize who
+  // faces whom and could silently reintroduce a rematch the scoring above
+  // just worked to avoid.
+  const chosen = { ...bestSplits[Math.floor(Math.random() * bestSplits.length)], group };
 
   let teamAIds = chosen.a.map(i => chosen.group[i].id);
   let teamBIds = chosen.b.map(i => chosen.group[i].id);
@@ -1036,6 +1049,25 @@ const SessionAPI = (() => {
     return data;
   }
 
+  // Edit an existing player's name, tier, and/or photo.
+  async function updatePlayer(playerId, { name, skillTier, photoUrl } = {}) {
+    const row = {};
+    if (name != null)     row.name = name.trim();
+    if (skillTier != null) row.skill_tier = skillTier;
+    if (photoUrl != null)  row.photo_url = photoUrl;
+    const { data, error } = await supabaseClient.from('players').update(row).eq('id', playerId).select().single();
+    if (error) {
+      if (/photo_url/.test(error.message || '')) {
+        delete row.photo_url;
+        const retry = await supabaseClient.from('players').update(row).eq('id', playerId).select().single();
+        if (retry.error) throw retry.error;
+        return retry.data;
+      }
+      throw error;
+    }
+    return data;
+  }
+
   /**
    * Mark a player as arrived — sets status 'waiting' and stamps
    * became_free_at NOW so they enter the FIFO pool at the current time.
@@ -1242,6 +1274,12 @@ const SessionAPI = (() => {
     const tsWinner = new Date(nowMs).toISOString();
     const tsLoser  = new Date(nowMs + 1).toISOString();
 
+    // Recent-opponent tracking: each player's "who did I just face" list is
+    // the OTHER side's player ids from this match — used by the stacking
+    // engine to avoid an immediate rematch next time a court frees up.
+    const winnerIdsThisMatch = decisions.filter(d => d.wasWinner).map(d => d.playerId);
+    const loserIdsThisMatch  = decisions.filter(d => !d.wasWinner).map(d => d.playerId);
+
     for (const { playerId, outcome, wasWinner } of decisions) {
       // Re-fetch to check if they were pre-flagged left mid-match.
       const { data: current } = await supabaseClient.from('players')
@@ -1250,19 +1288,27 @@ const SessionAPI = (() => {
 
       const ts = wasWinner ? tsWinner : tsLoser;
       const lastResult = wasWinner ? 'won' : 'lost';
+      const opponentIds = wasWinner ? loserIdsThisMatch : winnerIdsThisMatch;
 
+      let row;
       if (outcome === 'queue') {
-        await supabaseClient.from('players').update({
-          status: 'waiting', became_free_at: ts, last_match_result: lastResult,
-        }).eq('id', playerId);
+        row = { status: 'waiting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds };
       } else if (outcome === 'rest') {
-        await supabaseClient.from('players').update({
-          status: 'resting', last_match_result: lastResult,
-        }).eq('id', playerId);
+        row = { status: 'resting', last_match_result: lastResult, recent_opponent_ids: opponentIds };
       } else if (outcome === 'left') {
-        await supabaseClient.from('players').update({
-          status: 'left', last_match_result: lastResult,
-        }).eq('id', playerId);
+        row = { status: 'left', last_match_result: lastResult, recent_opponent_ids: opponentIds };
+      } else {
+        continue;
+      }
+
+      // CRITICAL: recent_opponent_ids requires a migration the host may not
+      // have run yet. If the column is missing, Postgres rejects the WHOLE
+      // update (status/timestamp included) — so retry without it rather
+      // than silently breaking the core queue-placement flow.
+      const { error } = await supabaseClient.from('players').update(row).eq('id', playerId);
+      if (error && /recent_opponent_ids/.test(error.message || '')) {
+        delete row.recent_opponent_ids;
+        await supabaseClient.from('players').update(row).eq('id', playerId);
       }
     }
 
@@ -1347,11 +1393,21 @@ const SessionAPI = (() => {
     //   now (back); winners get now; losers get now+1ms.
     // Result (won/lost/fresh) is used ONLY to avoid mixing winners with
     // losers when a clean group can be formed — NOT to jump the queue.
-    const { data: rawPool } = await supabaseClient.from('players')
-      .select('id, became_free_at, last_match_result, skill_tier')
+    let { data: rawPool, error: poolErr } = await supabaseClient.from('players')
+      .select('id, became_free_at, last_match_result, skill_tier, recent_opponent_ids')
       .eq('session_id', court.session_id)
       .eq('status', 'waiting')
       .order('became_free_at', { ascending: true });
+    // Graceful fallback if the recent-opponent-avoidance migration hasn't
+    // been run yet — refill still works, it just can't avoid rematches.
+    if (poolErr && /recent_opponent_ids/.test(poolErr.message || '')) {
+      const retry = await supabaseClient.from('players')
+        .select('id, became_free_at, last_match_result, skill_tier')
+        .eq('session_id', court.session_id)
+        .eq('status', 'waiting')
+        .order('became_free_at', { ascending: true });
+      rawPool = retry.data;
+    }
 
     let pool = (rawPool || []).slice().sort((a, b) =>
       new Date(a.became_free_at) - new Date(b.became_free_at));
@@ -1627,7 +1683,7 @@ const SessionAPI = (() => {
   return {
     createSession, getSession, getSessionByReferenceCode, getMySessions,
     verifySessionPassword, finishSession, deleteSession, getMatchCount,
-    preRegisterPlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
+    preRegisterPlayer, updatePlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
     createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
@@ -2288,6 +2344,7 @@ async function rosterTabHtml() {
                 <td>${p.skill_tier !== 'open' ? p.skill_tier : '—'}</td>
                 <td class="roster-actions">
                   <button class="arrive-btn" onclick="handleArrived('${p.id}')">✓ Arrived</button>
+                  <button class="edit-btn" onclick="openEditPlayerModal('${p.id}')">✎ Edit</button>
                   <button class="remove-btn" onclick="handleRemovePlayer('${p.id}')">Remove</button>
                 </td>
               </tr>
@@ -2327,13 +2384,14 @@ function rosterActionButtons(p) {
   // It stamps a fresh became_free_at so they enter the pool at the back of the line.
   const backBtn  = `<button class="back-btn" onclick="handleReturnToQueue('${p.id}')">↩ Back to Queue</button>`;
   const restBtn  = `<button class="rest-btn" onclick="handleRestManually('${p.id}')">Rest</button>`;
+  const editBtn  = `<button class="edit-btn" onclick="openEditPlayerModal('${p.id}')">✎ Edit</button>`;
   const leaveBtn = `<button class="remove-btn" onclick="handleRemovePlayer('${p.id}')">Mark Left</button>`;
 
-  if (p.status === 'left')    return backBtn; // greyed row — only action is returning
-  if (p.status === 'resting') return `${backBtn}${leaveBtn}`;
-  if (p.status === 'playing') return leaveBtn; // can't rest mid-match, but CAN mark left (guarded in API)
+  if (p.status === 'left')    return `${editBtn}${backBtn}`; // greyed row — only action is returning
+  if (p.status === 'resting') return `${editBtn}${backBtn}${leaveBtn}`;
+  if (p.status === 'playing') return `${editBtn}${leaveBtn}`; // can't rest mid-match, but CAN mark left (guarded in API)
   // waiting / expected-but-arrived
-  return `${restBtn}${leaveBtn}`;
+  return `${editBtn}${restBtn}${leaveBtn}`;
 }
 
 async function handlePreRegister() {
@@ -2373,6 +2431,52 @@ async function handleRemovePlayer(playerId) {
     await SessionAPI.removePlayer(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
   } catch (err) { alert(err.message || 'Could not remove player.'); }
+}
+
+// ── Edit Player (name, tier, photo) ──
+async function openEditPlayerModal(playerId) {
+  const players = await SessionAPI.getAllPlayersIncludingLeft(activeSession.id);
+  const p = players.find(x => x.id === playerId);
+  if (!p) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="editPlayerModal">
+      <div class="modal-box">
+        <h2>Edit Player</h2>
+        <p class="modal-sub">Update ${escapeHtml(p.name)}'s name, tier, or photo.</p>
+        <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;">
+          ${avatarUploadWidget('editPlayerPhoto', p.photo_url || '', p.name)}
+          <div style="flex:1;">
+            <div class="field"><label>Name</label><input type="text" id="editPlayerName" value="${escapeHtml(p.name)}"></div>
+            <div class="field"><label>Tier</label>
+              <select id="editPlayerTier">
+                <option value="open" ${p.skill_tier === 'open' ? 'selected' : ''}>No tier / Open</option>
+                <option value="beginner" ${p.skill_tier === 'beginner' ? 'selected' : ''}>Beginner</option>
+                <option value="intermediate" ${p.skill_tier === 'intermediate' ? 'selected' : ''}>Intermediate</option>
+                <option value="advanced" ${p.skill_tier === 'advanced' ? 'selected' : ''}>Advanced</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="auth-error" id="editPlayerError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('editPlayerModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="handleSaveEditPlayer('${playerId}')">Save</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function handleSaveEditPlayer(playerId) {
+  const name = document.getElementById('editPlayerName').value.trim();
+  const tier = document.getElementById('editPlayerTier').value;
+  const photo = document.getElementById('editPlayerPhoto')?.value || null;
+  const errEl = document.getElementById('editPlayerError');
+  if (!name) { errEl.textContent = 'Name cannot be empty.'; return; }
+  try {
+    await SessionAPI.updatePlayer(playerId, { name, skillTier: tier, photoUrl: photo });
+    document.getElementById('editPlayerModal').remove();
+    document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
+  } catch (err) { errEl.textContent = err.message || 'Could not save changes.'; }
 }
 
 async function handleRestManually(playerId) {
