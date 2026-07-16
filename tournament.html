@@ -359,6 +359,7 @@ const db=supabase.createClient(SURL,SKEY);
 const SID=new URLSearchParams(location.search).get('session');
 
 let SESSION=null, TEAMS=[], BYES=[], MATCHES=[], BRACKET=null;
+window._showGroupStageResults=false; // toggle: group-stage crosstables vs finals bracket tree
 let activeTab='teams';
 
 function copyShareLink(btn){
@@ -525,7 +526,50 @@ function seededPairs(size){
   return result;
 }
 
-// ── Round Robin scheduling (circle method) ──
+// Splits teams into N balanced groups using snake distribution (1→A,2→B,3→C,
+// then wraps back C→B→A) so seed strength gets spread evenly across groups
+// rather than just chunking them in order (which would put all the top
+// seeds in group A).
+function splitIntoGroups(teamIds, groupCount){
+  const groups=Array.from({length:groupCount},()=>[]);
+  let g=0, dir=1;
+  for(const id of teamIds){
+    groups[g].push(id);
+    if(groupCount>1){
+      g+=dir;
+      if(g===groupCount){g=groupCount-1;dir=-1;}
+      else if(g<0){g=0;dir=1;}
+    }
+  }
+  return groups;
+}
+
+// Standard bracket seeding order (1v4,2v3 for a 4-bracket; 1v8,4v5,2v7,3v6
+// for an 8-bracket, etc.) — keeps the strongest seeds apart for as long as
+// possible. Returns an array of seed-numbers (1-indexed) in R1 slot order.
+function standardSeedOrder(size){
+  if(size<=2)return[1,2];
+  const half=standardSeedOrder(size/2);
+  const out=[];
+  for(const p of half){out.push(p);out.push(size+1-p);}
+  return out;
+}
+
+// Takes each group's standings and interleaves qualifiers rank-tier by
+// rank-tier (all group winners first, then all runners-up, etc.) — this is
+// what makes the pairing scale past 2 groups: with 2 groups it reduces to
+// exactly "1st plays 1st, 2nd plays 2nd" like the reference example, and
+// with more groups it naturally extends the same idea.
+function crossSeedQualifiers(advancePerGroup){
+  const groupStandings=computeAllGroupStandings();
+  const qualifiers=[];
+  for(let tier=0;tier<advancePerGroup;tier++){
+    for(const{standings}of groupStandings){
+      if(standings[tier])qualifiers.push(standings[tier]);
+    }
+  }
+  return qualifiers; // seed 1 = qualifiers[0], seed 2 = qualifiers[1], ...
+}
 // Produces N-1 rounds (N even) or N rounds (N odd, one bye per round) where
 // every team plays every other team exactly once, never twice in one round.
 function buildRoundRobinPairings(teamIds){
@@ -562,22 +606,42 @@ async function generateBracket(type){
 
   if(type==='round_robin'){
     if(n>16)throw new Error('Maximum 16 teams supported for round robin. Remove '+(n-16)+' team(s).');
+    const groupCount=Math.max(1,Math.min(8,parseInt(window._rrGroupCount,10)||1));
+    if(groupCount>1&&n/groupCount<2)throw new Error(`${groupCount} groups needs at least ${groupCount*2} teams (${n/groupCount|0} per group won't work).`);
     const{data:br,error:brErr}=await db.from('brackets').insert({
-      session_id:SID,name:'Round Robin',bracket_type:'round_robin',total_slots:n,best_of:1,status:'active'
+      session_id:SID,name:'Round Robin',bracket_type:'round_robin',total_slots:n,best_of:1,status:'active',group_count:groupCount
     }).select().single();
-    if(brErr||!br)throw new Error('Could not create bracket: '+(brErr?.message||'unknown error'));
+    if(brErr||!br){
+      if(/group_count/.test(brErr?.message||'')){
+        throw new Error('Database is missing the group_count column. Run this in Supabase SQL Editor:\n\nALTER TABLE brackets ADD COLUMN IF NOT EXISTS group_count integer DEFAULT 1;');
+      }
+      throw new Error('Could not create bracket: '+(brErr?.message||'unknown error'));
+    }
     BRACKET=br;
 
-    // Round robin — every team plays every other team once. Unlike single
-    // elimination, matches are PRE-FILLED at generation time (no manual
-    // dropdown seeding step) since the pairing is fully determined.
-    const pairings=buildRoundRobinPairings(TEAMS.map(t=>t.id));
-    const rows=pairings.map(p=>({
-      bracket_id:br.id,round:p.round,position:p.position,best_of:1,status:'pending',
-      match_type:'round_robin',entry_a_id:p.entry_a_id,entry_b_id:p.entry_b_id,
-      score_a:null,score_b:null,winner_id:null,loser_id:null,
-    }));
-    const{error:mErr}=await db.from('bracket_matches').insert(rows);
+    // Round robin — every team plays every other team ONCE WITHIN ITS GROUP.
+    // Matches are PRE-FILLED at generation time (no manual dropdown seeding
+    // step) since the pairing is fully determined by the schedule.
+    const groups=splitIntoGroups(TEAMS.map(t=>t.id),groupCount);
+    const rows=[];
+    groups.forEach((groupTeamIds,gi)=>{
+      const pairings=buildRoundRobinPairings(groupTeamIds);
+      for(const p of pairings){
+        rows.push({
+          bracket_id:br.id,round:p.round,position:p.position,best_of:1,status:'pending',
+          match_type:'round_robin',group_num:groupCount>1?gi+1:null,
+          entry_a_id:p.entry_a_id,entry_b_id:p.entry_b_id,
+          score_a:null,score_b:null,winner_id:null,loser_id:null,
+        });
+      }
+    });
+    let{error:mErr}=await db.from('bracket_matches').insert(rows);
+    if(mErr&&/group_num/.test(mErr.message||'')){
+      // Migration not run yet — drop group_num and retry so at least a
+      // single ungrouped round robin still works.
+      rows.forEach(r=>delete r.group_num);
+      ({error:mErr}=await db.from('bracket_matches').insert(rows));
+    }
     if(mErr){
       if(/match_type|loser_id/.test(mErr.message||'')){
         throw new Error('Database is missing tournament columns. Run this in Supabase SQL Editor:\n\n'+
@@ -856,7 +920,7 @@ async function autoFillRRCourts(){
   const occupiedCourts=new Set(
     MATCHES.filter(m=>m.status==='in_progress').map(m=>m.court_label)
   );
-  const pending=MATCHES.filter(m=>m.status==='pending'&&!m.court_label&&m.entry_a_id&&m.entry_b_id)
+  const pending=MATCHES.filter(m=>m.match_type==='round_robin'&&m.status==='pending'&&!m.court_label&&m.entry_a_id&&m.entry_b_id)
     .sort((a,b)=>a.round-b.round||a.position-b.position);
 
   for(let cn=1;cn<=courtCount;cn++){
@@ -1313,11 +1377,35 @@ async function doChangeFormat(){
 function confirmGenerate(type){
   const isRR=type==='round_robin';
   const title=isRR?'Generate Round Robin Schedule?':'Generate Single Elimination Bracket?';
-  const body=isRR
-    ? `${TEAMS.length} teams → ${TEAMS.length*(TEAMS.length-1)/2} total matches, everyone plays everyone once.
-       Matches are pre-scheduled and auto-fill your courts as they free up — no manual seeding needed.<br><br>
-       ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}`
-    : `${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. The bracket starts EMPTY —
+  if(isRR){
+    // How many groups can this team count actually support? Each group
+    // needs at least 2 teams, so cap options at floor(n/2), max 8.
+    const n=TEAMS.length;
+    const maxGroups=Math.max(1,Math.min(8,Math.floor(n/2)));
+    const groupOptions=Array.from({length:maxGroups},(_,i)=>i+1)
+      .map(g=>`<option value="${g}">${g===1?'1 group — everyone plays everyone':`${g} groups`}</option>`).join('');
+    M(`<div class="overlay" onclick="if(event.target===this)CM()">
+      <div class="modal">
+        <h2>${title}</h2>
+        <p class="modal-sub">${n} teams, everyone plays everyone once <em>within their group</em>.
+          Matches are pre-scheduled and auto-fill your courts as they free up — no manual seeding needed.<br><br>
+          ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}</p>
+        <div class="field"><label>Number of Groups</label>
+          <select id="rrGroupCountSelect">${groupOptions}</select>
+        </div>
+        <p style="font-size:11px;color:var(--bench-slate);margin:6px 0 0">
+          Splitting into groups shortens the round robin — good when you have a lot of teams and limited time.
+          Once every group finishes, the top teams from each group cross into a Final bracket (Semifinal → Final → 3rd Place).
+        </p>
+        <div class="ma">
+          <button class="no" onclick="CM()">Cancel</button>
+          <button class="ok-y" onclick="window._rrGroupCount=document.getElementById('rrGroupCountSelect').value;CM();doGenerate('round_robin')">Generate Schedule</button>
+        </div>
+      </div>
+    </div>`);
+    return;
+  }
+  const body=`${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. The bracket starts EMPTY —
        you pick which team goes in each Round-1 slot using the dropdowns on the bracket. A team can only be placed once.<br><br>
        ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}`;
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
@@ -1326,7 +1414,7 @@ function confirmGenerate(type){
       <p class="modal-sub">${body}</p>
       <div class="ma">
         <button class="no" onclick="CM()">Cancel</button>
-        <button class="ok-y" onclick="CM();doGenerate('${type}')">Generate ${isRR?'Schedule':'Draw'}</button>
+        <button class="ok-y" onclick="CM();doGenerate('${type}')">Generate Draw</button>
       </div>
     </div>
   </div>`);
@@ -1778,10 +1866,15 @@ function roundLabel(r,total){
 // ════════════════════════════════════════════
 // RENDER — ROUND ROBIN VIEW (crosstable + rounds + finals)
 // ════════════════════════════════════════════
-function computeStandings(){
+function computeStandings(groupNum){
   const stats={};
-  TEAMS.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,seed:t.seed,w:0,l:0,pf:0,pa:0,gp:0}});
-  const rrDone=MATCHES.filter(m=>m.match_type==='round_robin'&&m.status==='completed'&&m.winner_id);
+  const teamsInScope=groupNum==null?TEAMS:TEAMS.filter(t=>{
+    // A team belongs to this group if any of its round_robin matches carry
+    // this group_num — teams don't store their own group directly.
+    return MATCHES.some(m=>m.match_type==='round_robin'&&m.group_num===groupNum&&(m.entry_a_id===t.id||m.entry_b_id===t.id));
+  });
+  teamsInScope.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,seed:t.seed,w:0,l:0,pf:0,pa:0,gp:0}});
+  const rrDone=MATCHES.filter(m=>m.match_type==='round_robin'&&m.status==='completed'&&m.winner_id&&(groupNum==null||m.group_num===groupNum));
   for(const m of rrDone){
     const isA_w=m.winner_id===m.entry_a_id;
     let ptsA=0,ptsB=0;
@@ -1794,148 +1887,224 @@ function computeStandings(){
   }
   return Object.values(stats).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa)||a.l-b.l);
 }
+// Returns [{groupNum, standings}] for every group present in the bracket
+// (or a single entry with groupNum=null if this round robin isn't grouped).
+function computeAllGroupStandings(){
+  const groupNums=[...new Set(MATCHES.filter(m=>m.match_type==='round_robin'&&m.group_num!=null).map(m=>m.group_num))].sort((a,b)=>a-b);
+  if(!groupNums.length)return[{groupNum:null,standings:computeStandings(null)}];
+  return groupNums.map(gn=>({groupNum:gn,standings:computeStandings(gn)}));
+}
 
 function renderRoundRobinView(){
   const rrMatches=MATCHES.filter(m=>m.match_type==='round_robin');
-  const finalM=MATCHES.find(m=>m.match_type==='final');
-  const doneCount=rrMatches.filter(m=>m.status==='completed').length;
-  const allDone=doneCount===rrMatches.length&&rrMatches.length>0;
-  const standings=computeStandings();
-  const maxRound=rrMatches.reduce((a,m)=>Math.max(a,m.round),0);
+  const finalsExist=MATCHES.some(m=>m.match_type==='winners');
+  const groupStandings=computeAllGroupStandings();
+  const isGrouped=groupStandings.length>1||groupStandings[0]?.groupNum!=null;
+  const allGroupsDone=groupStandings.every(({groupNum})=>{
+    const gms=rrMatches.filter(m=>groupNum==null||m.group_num===groupNum);
+    return gms.length>0&&gms.every(m=>m.status==='completed');
+  });
+  const smallestGroupSize=Math.min(...groupStandings.map(g=>g.standings.length||1));
 
-  // ── Leaderboard strip — creative standings, not just a plain table ──
   const teamById2=id=>TEAMS.find(t=>t.id===id);
   const medal=(i)=>i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
-  let leaderboardHtml=`<div style="display:flex;flex-direction:column;gap:6px">`;
-  standings.forEach((s,i)=>{
-    const t=teamById2(s.id);
-    const winPct=s.gp?Math.round(s.w/s.gp*100):0;
-    const diff=s.pf-s.pa;
-    const isTop3=i<3;
-    leaderboardHtml+=`<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius-sm);
-      background:${isTop3?'linear-gradient(90deg,rgba(215,242,61,.09),transparent)':'var(--surface-raised)'};
-      border:1px solid ${isTop3?'rgba(215,242,61,.22)':'var(--border-soft)'};position:relative;overflow:hidden">
-      <span style="font-size:${i<3?'18px':'12px'};font-weight:800;width:28px;text-align:center;flex-shrink:0;color:${i<3?'var(--optic-yellow)':'var(--bench-slate)'}">${medal(i)}</span>
-      ${logoChip(t,26)}
-      <span style="flex:1;font-weight:700;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</span>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--bench-slate);flex-shrink:0">${s.w}-${s.l}</span>
-      <span style="font-family:var(--font-mono);font-size:11px;font-weight:700;flex-shrink:0;width:38px;text-align:right;color:${diff>=0?'var(--winner-green)':'var(--fault-coral)'}">${diff>=0?'+':''}${diff}</span>
-      <div style="position:absolute;left:0;bottom:0;height:2px;width:${winPct}%;background:${isTop3?'var(--optic-yellow)':'var(--bench-slate)'};opacity:.5"></div>
-    </div>`;
-  });
-  leaderboardHtml+=`</div>`;
 
-  // ── Crosstable: rows/cols ordered by current standing, with team logos + colored cells ──
-  const order=standings.length?standings:TEAMS.map(t=>({id:t.id,name:t.team_name}));
-  const findMatch=(idA,idB)=>rrMatches.find(m=>
-    (m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
-  let matrixHtml=`<div class="scroll-x"><table style="border-collapse:collapse;font-size:11px;width:100%">
-    <thead><tr>
-      <th style="text-align:left;padding:6px 8px"></th>
-      ${order.map((t,i)=>`<th style="text-align:center;padding:4px;min-width:40px">${logoChip(teamById2(t.id),22)}</th>`).join('')}
-    </tr></thead>
-    <tbody>${order.map((rowT,ri)=>`<tr>
-      <td style="text-align:left;padding:6px 8px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px">
-        <span style="color:var(--bench-slate);font-family:var(--font-mono);font-size:10px;width:16px">${ri+1}</span>${logoChip(teamById2(rowT.id),18)}<span style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(rowT.name)}</span>
-      </td>
-      ${order.map((colT,ci)=>{
-        if(ri===ci)return `<td style="text-align:center;padding:4px;background:var(--surface-hover);opacity:.5">·</td>`;
-        const m=findMatch(rowT.id,colT.id);
-        if(!m)return `<td style="text-align:center;padding:4px;color:var(--bench-slate);opacity:.35">·</td>`;
-        if(m.status!=='completed')return `<td style="text-align:center;padding:4px;color:var(--waiting-blue);background:rgba(94,151,255,.08)" title="Not played yet">•</td>`;
-        const won=m.winner_id===rowT.id;
-        const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
-        return `<td style="text-align:center;padding:4px 2px;font-family:var(--font-mono);font-weight:700;border-radius:4px;
-          background:${won?'rgba(78,203,126,.14)':'rgba(255,122,92,.1)'};color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'}<br><span style="font-size:9px;opacity:.85">${score}</span></td>`;
-      }).join('')}
-    </tr>`).join('')}</tbody>
-  </table></div>`;
+  // ── Renders one group's leaderboard + crosstable (reused for every group) ──
+  function renderOneGroup(groupNum,standings,label){
+    let leaderboardHtml=`<div style="display:flex;flex-direction:column;gap:6px">`;
+    standings.forEach((s,i)=>{
+      const t=teamById2(s.id);
+      const winPct=s.gp?Math.round(s.w/s.gp*100):0;
+      const diff=s.pf-s.pa;
+      const isTop=i<Math.min(2,standings.length);
+      leaderboardHtml+=`<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius-sm);
+        background:${isTop?'linear-gradient(90deg,rgba(215,242,61,.09),transparent)':'var(--surface-raised)'};
+        border:1px solid ${isTop?'rgba(215,242,61,.22)':'var(--border-soft)'};position:relative;overflow:hidden">
+        <span style="font-size:${i<3?'18px':'12px'};font-weight:800;width:28px;text-align:center;flex-shrink:0;color:${i<3?'var(--optic-yellow)':'var(--bench-slate)'}">${medal(i)}</span>
+        ${logoChip(t,26)}
+        <span style="flex:1;font-weight:700;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name)}</span>
+        <span style="font-family:var(--font-mono);font-size:12px;color:var(--bench-slate);flex-shrink:0">${s.w}-${s.l}</span>
+        <span style="font-family:var(--font-mono);font-size:11px;font-weight:700;flex-shrink:0;width:38px;text-align:right;color:${diff>=0?'var(--winner-green)':'var(--fault-coral)'}">${diff>=0?'+':''}${diff}</span>
+        <div style="position:absolute;left:0;bottom:0;height:2px;width:${winPct}%;background:${isTop?'var(--optic-yellow)':'var(--bench-slate)'};opacity:.5"></div>
+      </div>`;
+    });
+    leaderboardHtml+=`</div>`;
 
-  // ── Round-by-round match list ──
-  let roundsHtml='';
-  for(let r=1;r<=maxRound;r++){
-    const ms=rrMatches.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
-    roundsHtml+=`<div style="margin-bottom:12px">
-      <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.06em;margin-bottom:6px">Round ${r}</div>
-      ${ms.map(m=>{
-        const eA=[...TEAMS,...BYES].find(t=>t.id===m.entry_a_id),eB=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
-        const done=m.status==='completed';
-        const wA=done&&m.winner_id===m.entry_a_id;
-        const live=m.status==='in_progress';
-        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:5px;font-size:12px;${live?'border:1px solid rgba(215,242,61,.4)':''}">
-          <span style="font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
-          <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
-          <span style="font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
-          ${live?`<span style="margin-left:auto;font-size:10px;color:var(--optic-yellow);font-weight:700">Court ${esc(m.court_label)}</span>`:''}
-          ${done?`<button style="margin-left:auto;font-size:9px;color:var(--fault-coral);background:none;border:none;cursor:pointer;min-height:0;padding:0;font-weight:700" onclick="openReverseModal('${m.id}')">↺ Reverse</button>`:''}
-        </div>`;
-      }).join('')}
+    const groupMatches=rrMatches.filter(m=>groupNum==null||m.group_num===groupNum);
+    const order=standings.length?standings:[];
+    const findMatch=(idA,idB)=>groupMatches.find(m=>
+      (m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
+    const matrixHtml=`<div class="scroll-x"><table style="border-collapse:collapse;font-size:11px;width:100%">
+      <thead><tr><th style="text-align:left;padding:6px 8px"></th>${order.map(t=>`<th style="text-align:center;padding:4px;min-width:40px">${logoChip(teamById2(t.id),22)}</th>`).join('')}</tr></thead>
+      <tbody>${order.map((rowT,ri)=>`<tr>
+        <td style="text-align:left;padding:6px 8px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px">
+          <span style="color:var(--bench-slate);font-family:var(--font-mono);font-size:10px;width:16px">${ri+1}</span>${logoChip(teamById2(rowT.id),18)}<span style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(rowT.name)}</span>
+        </td>
+        ${order.map((colT,ci)=>{
+          if(ri===ci)return `<td style="text-align:center;padding:4px;background:var(--surface-hover);opacity:.5">·</td>`;
+          const m=findMatch(rowT.id,colT.id);
+          if(!m)return `<td style="text-align:center;padding:4px;color:var(--bench-slate);opacity:.35">·</td>`;
+          if(m.status!=='completed')return `<td style="text-align:center;padding:4px;color:var(--waiting-blue);background:rgba(94,151,255,.08)" title="Not played yet">•</td>`;
+          const won=m.winner_id===rowT.id;
+          const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
+          return `<td style="text-align:center;padding:4px 2px;font-family:var(--font-mono);font-weight:700;border-radius:4px;
+            background:${won?'rgba(78,203,126,.14)':'rgba(255,122,92,.1)'};color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'}<br><span style="font-size:9px;opacity:.85">${score}</span></td>`;
+        }).join('')}
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+
+    const maxR=groupMatches.reduce((a,m)=>Math.max(a,m.round),0);
+    let roundsHtml='';
+    for(let r=1;r<=maxR;r++){
+      const ms=groupMatches.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+      if(!ms.length)continue;
+      roundsHtml+=`<div style="margin-bottom:12px">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.06em;margin-bottom:6px">Round ${r}</div>
+        ${ms.map(m=>{
+          const eA=[...TEAMS,...BYES].find(t=>t.id===m.entry_a_id),eB=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
+          const done=m.status==='completed';
+          const wA=done&&m.winner_id===m.entry_a_id;
+          const live=m.status==='in_progress';
+          return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:5px;font-size:12px;${live?'border:1px solid rgba(215,242,61,.4)':''}">
+            <span style="font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
+            <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
+            <span style="font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
+            ${live?`<span style="margin-left:auto;font-size:10px;color:var(--optic-yellow);font-weight:700">Court ${esc(m.court_label)}</span>`:''}
+            ${done?`<button style="margin-left:auto;font-size:9px;color:var(--fault-coral);background:none;border:none;cursor:pointer;min-height:0;padding:0;font-weight:700" onclick="openReverseModal('${m.id}')">↺ Reverse</button>`:''}
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+
+    return `<div class="card" style="margin-bottom:12px">
+      <h2 style="margin-bottom:10px">${label} — Standings</h2>
+      ${standings.length?leaderboardHtml:`<p style="font-size:12px;color:var(--bench-slate);margin:0">No completed matches yet.</p>`}
+      <h3 style="margin:16px 0 8px;font-size:13px">Crosstable</h3>
+      ${matrixHtml}
+      <h3 style="margin:16px 0 8px;font-size:13px">Schedule</h3>
+      ${roundsHtml}
     </div>`;
   }
 
-  // ── Finals control ──
-  let finalsHtml='';
-  if(finalM){
-    const eA=TEAMS.find(t=>t.id===finalM.entry_a_id),eB=TEAMS.find(t=>t.id===finalM.entry_b_id);
-    const done=finalM.status==='completed';
-    const wA=done&&finalM.winner_id===finalM.entry_a_id;
-    finalsHtml=`<div class="card" style="margin-bottom:12px;border:1px solid rgba(215,242,61,.3)">
-      <h2 style="margin-bottom:10px">🏆 Final</h2>
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-raised);border-radius:var(--radius-sm)">
-        <span style="flex:1;font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${done&&wA?'🥇 ':''}${esc(eA?.team_name||'TBD')}</span>
-        <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${finalM.score_a}–${finalM.score_b}`:finalM.status==='in_progress'?'▶ LIVE':'vs'}</span>
-        <span style="flex:1;text-align:right;font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${done&&!wA?'🥇 ':''}${esc(eB?.team_name||'TBD')}</span>
+  // ── If the Finals bracket already exists, show that instead (same tree
+  // as single elimination — no separate renderer needed) with a toggle
+  // back to the group-stage results for reference. ──
+  if(finalsExist){
+    const groupSectionsHtml=groupStandings.map(({groupNum,standings})=>
+      renderOneGroup(groupNum,standings,isGrouped?`Group ${String.fromCharCode(64+groupNum)}`:'Round Robin')).join('');
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <span style="font-size:11px;color:var(--bench-slate)">Round Robin → Finals · ${TEAMS.length} teams</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="_showGroupStageResults=!_showGroupStageResults;render()">${window._showGroupStageResults?'🏆 View Finals Bracket':'📋 View Group Stage Results'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="confirmChangeFormat()">⇄ Change Format</button>
+        </div>
       </div>
-      ${done?`<p style="font-size:12px;color:var(--bench-slate);margin:10px 0 0">🥈 Runner-up: ${esc(wA?eB?.team_name:eA?.team_name)} · 🥉 Bronze: ${esc(standings[2]?.name||'—')} (3rd in round robin standings)</p>`
-        :`<p style="font-size:11px;color:var(--bench-slate);margin:10px 0 0">Enter the result from the Courts tab once this match is assigned and played.</p>`}
-    </div>`;
-  }else if(allDone){
+      ${window._showGroupStageResults?groupSectionsHtml:buildNCAABracket()}
+    `;
+  }
+
+  // ── Group stage still in progress (or a single ungrouped round robin) ──
+  const groupSectionsHtml=groupStandings.map(({groupNum,standings})=>
+    renderOneGroup(groupNum,standings,isGrouped?`Group ${String.fromCharCode(64+groupNum)}`:'Round Robin')).join('');
+
+  let finalsHtml='';
+  if(allGroupsDone){
+    const maxAdvance=Math.max(1,Math.min(4,smallestGroupSize));
+    const advanceOptions=Array.from({length:maxAdvance},(_,i)=>i+1)
+      .map(n=>`<option value="${n}">Top ${n} per group</option>`).join('');
     finalsHtml=`<div class="card" style="margin-bottom:12px;border:1px solid rgba(215,242,61,.3)">
-      <h2 style="margin-bottom:8px">🏆 Round Robin Complete</h2>
+      <h2 style="margin-bottom:8px">🏆 ${isGrouped?'Group Stage':'Round Robin'} Complete</h2>
       <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px">
-        All ${rrMatches.length} matches played. Top 2 by standings: <strong style="color:var(--ink)">${esc(standings[0]?.name)}</strong> vs <strong style="color:var(--ink)">${esc(standings[1]?.name)}</strong> —
-        ready to play the Final for gold/silver. 3rd place, <strong style="color:var(--ink)">${esc(standings[2]?.name||'—')}</strong>, is automatically awarded 🥉 Bronze — no match needed.
+        Every match played. Pick how many teams advance from ${isGrouped?'each group':'the standings'} into the Finals bracket
+        (Semifinal → Final${isGrouped||smallestGroupSize>=4?' → 3rd Place':''}).
       </p>
-      <button class="btn btn-yellow" onclick="generateFinal()">Generate Final Match →</button>
+      ${isGrouped?`<div class="field" style="max-width:220px"><label>Teams advancing per group</label><select id="rrAdvanceCount">${advanceOptions}</select></div>`
+        :`<input type="hidden" id="rrAdvanceCount" value="${maxAdvance>=2?2:1}">`}
+      <button class="btn btn-yellow" style="margin-top:10px" onclick="generateFinal(parseInt(document.getElementById('rrAdvanceCount').value,10))">Generate Finals Bracket →</button>
     </div>`;
   }else{
+    const doneCount=rrMatches.filter(m=>m.status==='completed').length;
     finalsHtml=`<div class="card" style="margin-bottom:12px">
-      <p style="font-size:12px;color:var(--bench-slate);margin:0">📋 ${doneCount} of ${rrMatches.length} round robin matches played. The Final unlocks once every match is complete.</p>
+      <p style="font-size:12px;color:var(--bench-slate);margin:0">📋 ${doneCount} of ${rrMatches.length} round robin matches played. The Finals bracket unlocks once every group finishes.</p>
     </div>`;
   }
 
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-      <span style="font-size:11px;color:var(--bench-slate)">Round Robin · ${TEAMS.length} teams · ${rrMatches.length} matches</span>
+      <span style="font-size:11px;color:var(--bench-slate)">Round Robin · ${TEAMS.length} teams${isGrouped?` · ${groupStandings.length} groups`:''} · ${rrMatches.length} matches</span>
       <button class="btn btn-ghost btn-sm" onclick="confirmChangeFormat()">⇄ Change Format</button>
     </div>
     ${finalsHtml}
-    <div class="card" style="margin-bottom:12px">
-      <h2 style="margin-bottom:10px">🏅 Standings</h2>
-      ${standings.length?leaderboardHtml:`<p style="font-size:12px;color:var(--bench-slate);margin:0">No completed matches yet.</p>`}
-    </div>
-    <div class="card" style="margin-bottom:12px">
-      <h2 style="margin-bottom:10px">Crosstable</h2>
-      <p style="font-size:11px;color:var(--bench-slate);margin:0 0 10px">Rows/columns ranked by current standing. W/L + score from each team's perspective. · = not yet scheduled, • = scheduled but not played.</p>
-      ${matrixHtml}
-    </div>
-    <div class="card"><h2 style="margin-bottom:10px">Schedule</h2>${roundsHtml}</div>
+    ${groupSectionsHtml}
   `;
 }
 
-async function generateFinal(){
-  const standings=computeStandings();
-  if(standings.length<2){alert('Need at least 2 teams with results to generate a final.');return}
-  const[top1,top2]=standings;
+// Builds the full Finals knockout bracket (Semifinal → Final → 3rd Place,
+// or bigger if more groups/qualifiers) from the cross-seeded group-stage
+// results. Reuses the EXACT SAME match_type conventions as a normal single
+// elimination bracket ('winners' / 'third_place'), so buildNCAABracket()
+// renders and scores it with zero changes — no second bracket engine needed.
+async function generateFinal(advancePerGroup){
+  advancePerGroup=advancePerGroup||1;
+  const qualifiers=crossSeedQualifiers(advancePerGroup);
+  if(qualifiers.length<2){alert('Need at least 2 qualifying teams to generate a Finals bracket.');return}
+
+  const slots=nextP2(qualifiers.length);
+  const totalRounds=Math.log2(slots);
+  const seedOrder=standardSeedOrder(slots); // seed numbers in R1 slot order
+
+  // Create BYE entries for any padding slots beyond the real qualifier count —
+  // these always land against the TOP seeds (standard practice: strong
+  // teams get the bye) because standardSeedOrder always pairs seed k with
+  // seed (slots+1-k), and padding always fills the highest seed numbers.
+  const byeCache={};
+  async function byeEntryFor(seedNum){
+    if(byeCache[seedNum])return byeCache[seedNum];
+    const{data:bye}=await db.from('bracket_entries').insert({bracket_id:BRACKET.id,session_id:SID,team_name:'BYE',is_bye:true}).select().single();
+    byeCache[seedNum]=bye.id;
+    return bye.id;
+  }
+
   const maxRRRound=MATCHES.filter(m=>m.match_type==='round_robin').reduce((a,m)=>Math.max(a,m.round),0);
-  const{error}=await db.from('bracket_matches').insert({
-    bracket_id:BRACKET.id,round:maxRRRound+1,position:1,best_of:1,status:'pending',
-    match_type:'final',entry_a_id:top1.id,entry_b_id:top2.id,
-    score_a:null,score_b:null,winner_id:null,loser_id:null,
+  const baseRound=maxRRRound+1; // finals rounds continue numbering after group stage
+
+  const rows=[];
+  const r1ByePairs=[]; // {position, realTeamId, realSide} for post-insert auto-complete
+
+  for(let p=1;p<=slots/2;p++){
+    const seedA=seedOrder[(p-1)*2], seedB=seedOrder[(p-1)*2+1];
+    const qA=qualifiers[seedA-1], qB=qualifiers[seedB-1];
+    let entryA=qA?qA.id:null, entryB=qB?qB.id:null;
+    let byeSide=null;
+    if(!qA&&qB){entryA=await byeEntryFor(seedA);byeSide='A';}
+    else if(!qB&&qA){entryB=await byeEntryFor(seedB);byeSide='B';}
+    rows.push({
+      bracket_id:BRACKET.id,round:baseRound,position:p,best_of:1,
+      status:byeSide?'completed':'pending',match_type:'winners',
+      entry_a_id:entryA,entry_b_id:entryB,
+      winner_id:byeSide==='A'?entryB:byeSide==='B'?entryA:null,
+      loser_id:byeSide==='A'?entryA:byeSide==='B'?entryB:null,
+      score_a:null,score_b:null,
+    });
+  }
+  for(let r=2;r<=totalRounds;r++){
+    const cnt=slots/Math.pow(2,r);
+    for(let p=1;p<=cnt;p++)rows.push({
+      bracket_id:BRACKET.id,round:baseRound+r-1,position:p,best_of:1,status:'pending',
+      match_type:'winners',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null,
+    });
+  }
+  rows.push({
+    bracket_id:BRACKET.id,round:baseRound+totalRounds-1,position:2,best_of:1,status:'pending',
+    match_type:'third_place',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null,
   });
-  if(error){alert('Could not create final: '+error.message);return}
+
+  const{error}=await db.from('bracket_matches').insert(rows);
+  if(error){alert('Could not create Finals bracket: '+error.message);return}
+
   await loadAll();
-  await autoFillRRCourts();
+  await propagate(); // push any bye auto-wins from R1 straight into R2
   await loadAll();render();
 }
 
