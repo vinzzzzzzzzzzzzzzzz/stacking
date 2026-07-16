@@ -2247,8 +2247,49 @@ async function generateFinal(advancePerGroup){
 function renderScoreboard(){
   if(!BRACKET||MATCHES.length===0) return`<div class="empty"><div class="empty-icon">📊</div><div class="empty-title">No bracket yet</div><p>Generate a bracket first, then enter match results to see the scoreboard.</p></div>`;
 
-  const done=MATCHES.filter(m=>m.status==='completed'&&m.score_a!=null);
   const isRR=BRACKET.bracket_type==='round_robin';
+
+  // ── Round robin: standings are "regular season" only (round_robin match
+  // type), split per group — never mixed together, and never blended with
+  // Finals-bracket results once those exist. Reuses computeAllGroupStandings()
+  // so this always matches the Bracket tab's own group standings exactly. ──
+  if(isRR){
+    const groupStandings=computeAllGroupStandings();
+    const isGrouped=groupStandings.length>1||groupStandings[0]?.groupNum!=null;
+    const standingsHtml=groupStandings.map(({groupNum,standings:gs})=>{
+      const label=isGrouped?`Group ${String.fromCharCode(64+groupNum)}`:'Regular Season';
+      return `<div class="card" style="margin-bottom:12px">
+        <h2 style="margin-bottom:12px">🏅 ${label} — Standings</h2>
+        <div class="scroll-x">
+          <table class="stbl">
+            <thead><tr><th>#</th><th>Team</th><th>Players</th><th>W</th><th>L</th><th>GP</th><th>PF</th><th>PA</th><th>Diff</th><th>Win%</th></tr></thead>
+            <tbody>
+              ${gs.length===0?`<tr><td colspan="10" style="text-align:center;color:var(--bench-slate);padding:20px">No completed matches yet</td></tr>`:
+              gs.map((s,i)=>{
+                const t=TEAMS.find(x=>x.id===s.id);
+                return `<tr class="${i===0?'hl':''}">
+                <td style="font-weight:800;font-family:var(--font-mono)">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+                <td style="font-weight:700">${esc(s.name)}</td>
+                <td style="font-size:11px;color:var(--bench-slate)">${t?.player1_name?esc(t.player1_name)+(t.player2_name?' &amp; '+esc(t.player2_name):''):''}</td>
+                <td style="color:var(--winner-green);font-weight:700;font-family:var(--font-mono)">${s.w}</td>
+                <td style="color:var(--fault-coral);font-family:var(--font-mono)">${s.l}</td>
+                <td style="font-family:var(--font-mono)">${s.gp}</td>
+                <td style="font-family:var(--font-mono)">${s.pf}</td>
+                <td style="font-family:var(--font-mono)">${s.pa}</td>
+                <td style="font-family:var(--font-mono);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'var(--fault-coral)'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
+                <td style="font-family:var(--font-mono)">${s.gp?Math.round(s.w/s.gp*100):0}%</td>
+              </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }).join('');
+    const finalsExist=MATCHES.some(m=>m.match_type==='winners');
+    return `${standingsHtml}${finalsExist?`<div class="card"><p style="font-size:12px;color:var(--bench-slate);margin:0">🏆 Finals bracket results are shown on the Bracket tab, not mixed into these regular-season standings.</p></div>`:''}`;
+  }
+
+  const done=MATCHES.filter(m=>m.status==='completed'&&m.score_a!=null);
 
   // Build standings from all completed matches
   const stats={};
