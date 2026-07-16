@@ -1294,57 +1294,71 @@ function renderTournamentView(){
       </div>`;
   }
 
-  // ── Standings ──
-  const doneReal=_tMatches.filter(m=>m.status==='completed'&&m.score_a!=null);
-  const stats={};
-  _tTeams.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,w:0,l:0,pf:0,pa:0}});
-  for(const m of doneReal){
-    let pA=0,pB=0;
-    if(Array.isArray(m.games)&&m.games.length)for(const g of m.games){pA+=g.a||0;pB+=g.b||0}
-    else{pA=m.score_a||0;pB=m.score_b||0}
-    if(stats[m.entry_a_id]){const s=stats[m.entry_a_id];s.pf+=pA;s.pa+=pB;m.winner_id===m.entry_a_id?s.w++:s.l++}
-    if(stats[m.entry_b_id]){const s=stats[m.entry_b_id];s.pf+=pB;s.pa+=pA;m.winner_id===m.entry_b_id?s.w++:s.l++}
+  // ── Standings — group-aware (mirrors the host tournament.html logic) ──
+  function computeSpectatorStandings(groupNum){
+    const stats={};
+    const teamsInScope=groupNum==null?_tTeams:_tTeams.filter(t=>
+      _tMatches.some(m=>m.match_type==='round_robin'&&m.group_num===groupNum&&(m.entry_a_id===t.id||m.entry_b_id===t.id)));
+    teamsInScope.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,w:0,l:0,pf:0,pa:0}});
+    const done=_tMatches.filter(m=>m.match_type==='round_robin'&&m.status==='completed'&&m.score_a!=null&&(groupNum==null||m.group_num===groupNum));
+    for(const m of done){
+      let pA=0,pB=0;
+      if(Array.isArray(m.games)&&m.games.length)for(const g of m.games){pA+=g.a||0;pB+=g.b||0}
+      else{pA=m.score_a||0;pB=m.score_b||0}
+      if(stats[m.entry_a_id]){const s=stats[m.entry_a_id];s.pf+=pA;s.pa+=pB;m.winner_id===m.entry_a_id?s.w++:s.l++}
+      if(stats[m.entry_b_id]){const s=stats[m.entry_b_id];s.pf+=pB;s.pa+=pA;m.winner_id===m.entry_b_id?s.w++:s.l++}
+    }
+    return Object.values(stats).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
   }
-  const standings=Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
+  function computeAllSpectatorGroupStandings(){
+    const groupNums=[...new Set(_tMatches.filter(m=>m.match_type==='round_robin'&&m.group_num!=null).map(m=>m.group_num))].sort((a,b)=>a-b);
+    if(!groupNums.length)return[{groupNum:null,standings:computeSpectatorStandings(null)}];
+    return groupNums.map(gn=>({groupNum:gn,standings:computeSpectatorStandings(gn)}));
+  }
+  const standings=computeSpectatorStandings(null); // used by the non-RR (single-elim) branch below
 
   // ── Live bracket — same connected SVG tree as the host view ──
-  // Round robin gets a crosstable instead (no single-elim tree to draw).
+  // Round robin gets per-group crosstables instead (no single-elim tree to
+  // draw) UNLESS the Finals bracket has already been generated, in which
+  // case buildReadOnlyBracket() renders that (it already filters for
+  // match_type 'winners'/'third_place', so no changes needed there).
   const isRR = _tBracket?.bracket_type === 'round_robin';
   let bracketSection;
   if (isRR) {
-    const rrMatches = _tMatches.filter(m => m.match_type === 'round_robin');
-    const finalM = _tMatches.find(m => m.match_type === 'final');
-    const doneCount = rrMatches.filter(m => m.status === 'completed').length;
-    const order = standings.length ? standings : _tTeams.map(t=>({id:t.id,name:t.team_name}));
-    const findRRMatch = (a,b) => rrMatches.find(m => (m.entry_a_id===a&&m.entry_b_id===b)||(m.entry_a_id===b&&m.entry_b_id===a));
-    const crosstable = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
-      <thead><tr><th style="text-align:left;padding:5px"></th>${order.map((t,i)=>`<th style="text-align:center;padding:5px;min-width:34px">${i+1}</th>`).join('')}</tr></thead>
-      <tbody>${order.map((rowT,ri)=>`<tr>
-        <td style="text-align:left;padding:5px;font-weight:700;white-space:nowrap">${ri+1}. ${escapeHtml(rowT.name)}</td>
-        ${order.map((colT,ci)=>{
-          if(ri===ci)return `<td style="text-align:center;color:var(--resting-slate)">—</td>`;
-          const m=findRRMatch(rowT.id,colT.id);
-          if(!m)return `<td style="text-align:center;color:var(--resting-slate);opacity:.4">·</td>`;
-          if(m.status!=='completed')return `<td style="text-align:center;color:var(--waiting-blue)">•</td>`;
-          const won=m.winner_id===rowT.id;
-          const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
-          return `<td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'} ${score}</td>`;
-        }).join('')}
-      </tr>`).join('')}</tbody>
-    </table></div>`;
-    const finalHtml = finalM
-      ? `<div style="margin-top:12px;padding:10px 12px;background:var(--surface-raised);border-radius:8px;border:1px solid rgba(215,242,61,.3)">
-          <div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.06em;margin-bottom:6px">🏆 FINAL</div>
-          <div style="display:flex;align-items:center;gap:8px;font-size:13px">
-            <span style="flex:1;font-weight:${finalM.winner_id===finalM.entry_a_id?'800':'600'}">${escapeHtml(_tEnt(finalM.entry_a_id)?.team_name||'TBD')}</span>
-            <span style="font-family:var(--font-mono);color:var(--resting-slate)">${finalM.status==='completed'?`${finalM.score_a}–${finalM.score_b}`:finalM.status==='in_progress'?'▶ LIVE':'vs'}</span>
-            <span style="flex:1;text-align:right;font-weight:${finalM.winner_id===finalM.entry_b_id?'800':'600'}">${escapeHtml(_tEnt(finalM.entry_b_id)?.team_name||'TBD')}</span>
-          </div>
-        </div>`
-      : doneCount===rrMatches.length&&rrMatches.length>0
-        ? `<p style="font-size:12px;color:var(--resting-slate);margin-top:10px">Round robin complete — Final coming up next.</p>`
-        : `<p style="font-size:11px;color:var(--resting-slate);margin-top:10px">${doneCount} of ${rrMatches.length} round robin matches played.</p>`;
-    bracketSection = `${crosstable}${finalHtml}`;
+    const finalsExist=_tMatches.some(m=>m.match_type==='winners');
+    if(finalsExist){
+      bracketSection = buildReadOnlyBracket() || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Finals bracket not generated yet.</p>`;
+    }else{
+      const groupStandings=computeAllSpectatorGroupStandings();
+      const isGrouped=groupStandings.length>1||groupStandings[0]?.groupNum!=null;
+      const rrMatchesAll=_tMatches.filter(m=>m.match_type==='round_robin');
+      bracketSection = groupStandings.map(({groupNum,standings:gStandings})=>{
+        const label=isGrouped?`Group ${String.fromCharCode(64+groupNum)}`:'Round Robin';
+        const groupMatches=rrMatchesAll.filter(m=>groupNum==null||m.group_num===groupNum);
+        const order=gStandings.length?gStandings:[];
+        const findRRMatch=(a,b)=>groupMatches.find(m=>(m.entry_a_id===a&&m.entry_b_id===b)||(m.entry_a_id===b&&m.entry_b_id===a));
+        const crosstable=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead><tr><th style="text-align:left;padding:5px"></th>${order.map((t,i)=>`<th style="text-align:center;padding:5px;min-width:34px">${i+1}</th>`).join('')}<th style="text-align:center;padding:5px 8px;min-width:50px;border-left:1px solid var(--border-soft);color:var(--optic-yellow)">TOTAL</th></tr></thead>
+          <tbody>${order.map((rowT,ri)=>`<tr>
+            <td style="text-align:left;padding:5px;font-weight:700;white-space:nowrap">${ri+1}. ${escapeHtml(rowT.name)}</td>
+            ${order.map((colT,ci)=>{
+              if(ri===ci)return `<td style="text-align:center;color:var(--resting-slate)">—</td>`;
+              const m=findRRMatch(rowT.id,colT.id);
+              if(!m)return `<td style="text-align:center;color:var(--resting-slate);opacity:.4">·</td>`;
+              if(m.status!=='completed')return `<td style="text-align:center;color:var(--waiting-blue)">•</td>`;
+              const won=m.winner_id===rowT.id;
+              const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
+              return `<td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'} ${score}</td>`;
+            }).join('')}
+            <td style="text-align:center;font-family:var(--font-mono);font-weight:800;border-left:1px solid var(--border-soft);color:var(--optic-yellow)">${rowT.pf}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`;
+        return `<div style="margin-bottom:18px">
+          <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--optic-yellow);margin-bottom:8px">${label}</div>
+          ${crosstable}
+        </div>`;
+      }).join('');
+    }
   } else {
     bracketSection = buildReadOnlyBracket() || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Bracket not generated yet.</p>`;
   }
@@ -1364,7 +1378,29 @@ function renderTournamentView(){
     <div class="courts-grid" style="margin-bottom:16px">${courtsHtml}</div>
 
     <!-- 3. SCOREBOARD -->
-    ${standings.length?`<div class="card">
+    ${isRR ? (()=>{
+      const groupStandings=computeAllSpectatorGroupStandings();
+      const isGrouped=groupStandings.length>1||groupStandings[0]?.groupNum!=null;
+      return groupStandings.map(({groupNum,standings:gs})=>{
+        if(!gs.length)return'';
+        const label=isGrouped?`Group ${String.fromCharCode(64+groupNum)} — Standings`:'Standings';
+        return `<div class="card" style="margin-bottom:12px">
+          <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">${label}</h3>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr>${['#','Team','W','L','PF','PA','Diff'].map(h=>`<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">${h}</th>`).join('')}</tr></thead>
+            <tbody>${gs.map((s,i)=>`<tr>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700">${escapeHtml(s.name)}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--winner-green);font-weight:700">${s.w}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--loser-coral,#FF7A5C)">${s.l}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pf}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pa}</td>
+              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'#FF7A5C'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </div>`;
+      }).join('');
+    })() : (standings.length?`<div class="card">
       <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">Standings</h3>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr>${['#','Team','W','L','PF','PA','Diff'].map(h=>`<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">${h}</th>`).join('')}</tr></thead>
@@ -1378,7 +1414,7 @@ function renderTournamentView(){
           <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'#FF7A5C'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
         </tr>`).join('')}</tbody>
       </table></div>
-    </div>`:''}
+    </div>`:'')}
   `;
 }
 
