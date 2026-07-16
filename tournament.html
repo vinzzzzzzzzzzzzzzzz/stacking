@@ -2122,6 +2122,22 @@ function render(){
     document.getElementById('tabContent').innerHTML=`<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title">No Session</div><p>Open this page from the host console.</p></div>`;
     return;
   }
+
+  // Permission gate: this page is the host's tournament management console.
+  // If the logged-in host's Tournament access has been revoked, block
+  // entirely — re-check against the DB (not just localStorage) so a
+  // just-revoked permission takes effect immediately, not after next login.
+  try{
+    const savedHost=JSON.parse(localStorage.getItem('istackyyy_host_session')||'null');
+    if(savedHost?.id){
+      const{data:hostRow}=await db.from('host_accounts').select('allow_tournament').eq('id',savedHost.id).single();
+      if(hostRow&&hostRow.allow_tournament===false){
+        document.getElementById('tabContent').innerHTML=`<div class="empty"><div class="empty-icon">🔒</div><div class="empty-title">Tournament Access Restricted</div><p>Your account's Tournament access has been turned off by the administrator.<br>Contact them if you believe this is a mistake.</p></div>`;
+        return;
+      }
+    }
+  }catch(_){/* if the check itself fails, fail open — don't block on a network hiccup */}
+
   await loadAll();
   render();
 
