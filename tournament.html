@@ -1588,8 +1588,11 @@ function buildNCAABracket(){
         return out;
       }
 
-      // Round 1 + not completed-with-score → dropdown team pickers
-      const isR1Editable = (r===1 && m.score_a==null);
+      // Round 1 + not completed-with-score → dropdown team pickers.
+      // BUT: a Finals bracket generated from round-robin qualifiers already
+      // has real teams locked into R1 (no manual seeding needed) — treat it
+      // like any other round instead, so it's a clickable box → match hub.
+      const isR1Editable = (r===1 && m.score_a==null && BRACKET.bracket_type!=='round_robin');
       if(isR1Editable){
         s += slotSelect(x,tyA,m.id,'entry_a_id',m.entry_a_id);
         s += slotSelect(x,tyB,m.id,'entry_b_id',m.entry_b_id);
