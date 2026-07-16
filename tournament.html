@@ -1728,14 +1728,28 @@ function buildNCAABracket(){
   // ── Losers bracket (double elim) ────────────
   const losersHtml = (isDbl && lM.length) ? buildLosersSection(lM) : '';
 
+  // When this bracket is the Finals stage of a round-robin (group stage →
+  // qualifiers), TEAMS.length / total_slots refer to ALL registered teams,
+  // not just the qualifiers actually in this bracket — show the real count.
+  const isFinalsAfterGroups = BRACKET.bracket_type==='round_robin';
+  const qualifierIds=new Set();
+  if(isFinalsAfterGroups){
+    wM.forEach(m=>{
+      if(m.entry_a_id&&!BYES.some(b=>b.id===m.entry_a_id))qualifierIds.add(m.entry_a_id);
+      if(m.entry_b_id&&!BYES.some(b=>b.id===m.entry_b_id))qualifierIds.add(m.entry_b_id);
+    });
+  }
+  const headerLabel = isFinalsAfterGroups
+    ? `Finals Bracket · ${qualifierIds.size} qualifiers · ${Math.pow(2,maxR)}-slot draw`
+    : `${isDbl?'Double Elimination':'Single Elimination'} · ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw`;
+
   return `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-      <span style="font-size:11px;color:var(--bench-slate)">
-        ${isDbl?'Double Elimination':'Single Elimination'} ·
-        ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw
-      </span>
+      <span style="font-size:11px;color:var(--bench-slate)">${headerLabel}</span>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-ghost btn-sm" onclick="confirmGenerate('${BRACKET.bracket_type}')">↺ Reset</button>
+        ${isFinalsAfterGroups
+          ? `<button class="btn btn-ghost btn-sm" onclick="confirmRegenerateFinals()">↺ Regenerate Finals</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="confirmGenerate('${BRACKET.bracket_type}')">↺ Reset</button>`}
         <button class="btn btn-ghost btn-sm" onclick="confirmChangeFormat()">⇄ Change Format</button>
       </div>
     </div>
@@ -1935,7 +1949,7 @@ function renderRoundRobinView(){
     const findMatch=(idA,idB)=>groupMatches.find(m=>
       (m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
     const matrixHtml=`<div class="scroll-x"><table style="border-collapse:collapse;font-size:11px;width:100%">
-      <thead><tr><th style="text-align:left;padding:6px 8px"></th>${order.map(t=>`<th style="text-align:center;padding:4px;min-width:40px">${logoChip(teamById2(t.id),22)}</th>`).join('')}</tr></thead>
+      <thead><tr><th style="text-align:left;padding:6px 8px"></th>${order.map(t=>`<th style="text-align:center;padding:4px;min-width:40px">${logoChip(teamById2(t.id),22)}</th>`).join('')}<th style="text-align:center;padding:4px 8px;min-width:56px;border-left:1px solid var(--border-soft);color:var(--optic-yellow);font-size:10px;letter-spacing:.04em">TOTAL</th></tr></thead>
       <tbody>${order.map((rowT,ri)=>`<tr>
         <td style="text-align:left;padding:6px 8px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px">
           <span style="color:var(--bench-slate);font-family:var(--font-mono);font-size:10px;width:16px">${ri+1}</span>${logoChip(teamById2(rowT.id),18)}<span style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(rowT.name)}</span>
@@ -1950,6 +1964,7 @@ function renderRoundRobinView(){
           return `<td style="text-align:center;padding:4px 2px;font-family:var(--font-mono);font-weight:700;border-radius:4px;
             background:${won?'rgba(78,203,126,.14)':'rgba(255,122,92,.1)'};color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'}<br><span style="font-size:9px;opacity:.85">${score}</span></td>`;
         }).join('')}
+        <td style="text-align:center;padding:4px 8px;font-family:var(--font-mono);font-weight:800;font-size:12px;border-left:1px solid var(--border-soft);color:var(--optic-yellow)">${rowT.pf}</td>
       </tr>`).join('')}</tbody>
     </table></div>`;
 
@@ -2045,8 +2060,62 @@ function renderRoundRobinView(){
 // results. Reuses the EXACT SAME match_type conventions as a normal single
 // elimination bracket ('winners' / 'third_place'), so buildNCAABracket()
 // renders and scores it with zero changes — no second bracket engine needed.
+function confirmRegenerateFinals(){
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>Regenerate Finals Bracket?</h2>
+      <p class="modal-sub">This clears the Finals bracket only — your group stage results, crosstables, and standings are untouched.
+        You'll be able to pick the advance-per-group count again.<br><br>
+        <strong style="color:var(--fault-coral)">⚠ Any Finals match results already played will be lost.</strong></p>
+      <div class="ma">
+        <button class="no" onclick="CM()">Cancel</button>
+        <button class="ok-y" onclick="CM();doRegenerateFinals()">Clear Finals</button>
+      </div>
+    </div>
+  </div>`);
+}
+async function doRegenerateFinals(){
+  const finalsMatches=MATCHES.filter(m=>m.match_type==='winners'||m.match_type==='third_place');
+  const byeIds=new Set();
+  finalsMatches.forEach(m=>{
+    [m.entry_a_id,m.entry_b_id].forEach(id=>{ if(id&&BYES.some(b=>b.id===id))byeIds.add(id); });
+  });
+  await db.from('bracket_matches').delete().in('id',finalsMatches.map(m=>m.id));
+  if(byeIds.size)await db.from('bracket_entries').delete().in('id',[...byeIds]);
+  window._showGroupStageResults=true;
+  await loadAll();render();
+}
+
 async function generateFinal(advancePerGroup){
   advancePerGroup=advancePerGroup||1;
+  const groupStandings=computeAllGroupStandings();
+
+  // ── Special case: exactly 2 groups, top 2 advancing ──
+  // A semifinal round is unnecessary here — with only 4 qualifiers from
+  // 2 groups, direct same-rank pairing IS the whole tournament: group
+  // winners meet for the championship, runners-up meet for 3rd place.
+  // Any other combination (3+ groups, or a different advance count) still
+  // needs the cross-seeded bracket below since "same rank" has no single
+  // opponent once there are more than 2 groups.
+  if(groupStandings.length===2&&advancePerGroup===2){
+    const[gA,gB]=groupStandings;
+    if(!gA.standings[0]||!gA.standings[1]||!gB.standings[0]||!gB.standings[1]){
+      alert('Need both groups to have at least 2 teams with results.');return;
+    }
+    const rows=[
+      {bracket_id:BRACKET.id,round:1,position:1,best_of:1,status:'pending',match_type:'winners',
+        entry_a_id:gA.standings[0].id,entry_b_id:gB.standings[0].id,
+        score_a:null,score_b:null,winner_id:null,loser_id:null},
+      {bracket_id:BRACKET.id,round:1,position:2,best_of:1,status:'pending',match_type:'third_place',
+        entry_a_id:gA.standings[1].id,entry_b_id:gB.standings[1].id,
+        score_a:null,score_b:null,winner_id:null,loser_id:null},
+    ];
+    const{error}=await db.from('bracket_matches').insert(rows);
+    if(error){alert('Could not create Finals: '+error.message);return}
+    await loadAll();render();
+    return;
+  }
+
   const qualifiers=crossSeedQualifiers(advancePerGroup);
   if(qualifiers.length<2){alert('Need at least 2 qualifying teams to generate a Finals bracket.');return}
 
@@ -2066,8 +2135,10 @@ async function generateFinal(advancePerGroup){
     return bye.id;
   }
 
-  const maxRRRound=MATCHES.filter(m=>m.match_type==='round_robin').reduce((a,m)=>Math.max(a,m.round),0);
-  const baseRound=maxRRRound+1; // finals rounds continue numbering after group stage
+  const baseRound=1; // finals bracket ALWAYS starts fresh at round 1 — buildNCAABracket()
+                      // only looks at match_type==='winners' rows and computes its own
+                      // round-relative labels from them, so reusing round-robin's round
+                      // numbers here just creates empty phantom columns before it.
 
   const rows=[];
   const r1ByePairs=[]; // {position, realTeamId, realSide} for post-insert auto-complete
