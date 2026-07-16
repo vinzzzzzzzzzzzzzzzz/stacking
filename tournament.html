@@ -1746,7 +1746,15 @@ function buildNCAABracket(){
     ? `Finals Bracket · ${qualifierIds.size} qualifiers · ${Math.pow(2,maxR)}-slot draw`
     : `${isDbl?'Double Elimination':'Single Elimination'} · ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw`;
 
+  // Podium — only once the whole tournament is decided (final AND 3rd
+  // place both played). isDbl skips this: grand final/reset handle their
+  // own championship-decided state and don't have a clean "done" signal
+  // here without extra work, so keep the podium to single/finals-bracket.
+  const podiumHtml = (!isDbl && finalM?.status==='completed' && (!tfM || tfM.status==='completed'))
+    ? renderPodium(finalM, tfM) : '';
+
   return `
+    ${podiumHtml}
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <span style="font-size:11px;color:var(--bench-slate)">${headerLabel}</span>
       <div style="display:flex;gap:8px">
@@ -1762,6 +1770,57 @@ function buildNCAABracket(){
       ${svgEl}
     </div>
     ${thirdHtml}${gfHtml}${losersHtml}`;
+}
+
+// ── Podium — champion / runner-up / 3rd place, paddle-faces and all ──
+// Reuses playerFace() and logoChip() exactly as the court view does, so a
+// team looks identical whether you're watching them play or seeing them
+// on the podium.
+function renderPodium(finalM, tfM){
+  const eA=TEAMS.find(t=>t.id===finalM.entry_a_id), eB=TEAMS.find(t=>t.id===finalM.entry_b_id);
+  const champ = finalM.winner_id===finalM.entry_a_id ? eA : eB;
+  const runnerUp = finalM.winner_id===finalM.entry_a_id ? eB : eA;
+  let third=null;
+  if(tfM){
+    const tA=TEAMS.find(t=>t.id===tfM.entry_a_id), tB=TEAMS.find(t=>t.id===tfM.entry_b_id);
+    third = tfM.winner_id===tfM.entry_a_id ? tA : tB;
+  }
+  if(!champ)return'';
+
+  function stand(team,rank,heightPx){
+    if(!team)return'';
+    const medal = rank===1?'🥇':rank===2?'🥈':'🥉';
+    const accent = rank===1?'var(--optic-yellow)':rank===2?'#C9D3DC':'#CD8E5A';
+    const paddles=[
+      {name:team.player1_name,photo:team.player1_photo},
+      {name:team.player2_name,photo:team.player2_photo},
+    ].filter(p=>p.name);
+    return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;max-width:180px">
+      <div style="font-size:${rank===1?'28px':'22px'};margin-bottom:4px">${medal}</div>
+      <div style="margin-bottom:6px">${logoChip(team,rank===1?36:28)}</div>
+      <div style="font-weight:800;font-size:${rank===1?'14px':'12px'};text-align:center;margin-bottom:10px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px">${esc(team.team_name)}</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        ${paddles.length?paddles.map(p=>playerFace(p.name,p.photo,rank===1?52:44)).join(''):`<div style="font-size:11px;color:var(--bench-slate)">${esc(team.team_name)}</div>`}
+      </div>
+      <div style="width:100%;height:${heightPx}px;background:linear-gradient(180deg,${accent}33,${accent}11);
+        border:1px solid ${accent}55;border-top:3px solid ${accent};border-radius:6px 6px 0 0;
+        display:flex;align-items:flex-start;justify-content:center;padding-top:8px">
+        <span style="font-family:var(--font-mono);font-weight:800;font-size:${rank===1?'22px':'18px'};color:${accent}">${rank}</span>
+      </div>
+    </div>`;
+  }
+
+  return `<div class="card" style="margin-bottom:16px;background:linear-gradient(180deg,rgba(215,242,61,.06),transparent);border:1px solid rgba(215,242,61,.18)">
+    <div style="text-align:center;margin-bottom:14px">
+      <span style="font-size:10px;background:rgba(215,242,61,.15);color:var(--optic-yellow);padding:3px 12px;border-radius:999px;font-weight:800;letter-spacing:.08em">🏆 TOURNAMENT COMPLETE</span>
+    </div>
+    <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px;padding:0 8px 4px">
+      ${stand(runnerUp,2,70)}
+      ${stand(champ,1,100)}
+      ${stand(third,3,50)}
+    </div>
+  </div>`;
 }
 
 /* Flat 2-row match card used for 3rd place / grand final / bracket reset */
