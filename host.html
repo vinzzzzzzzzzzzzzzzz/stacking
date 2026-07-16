@@ -707,7 +707,10 @@ function getSavedHost() {
   try { return JSON.parse(localStorage.getItem(CURRENT_HOST_KEY)); } catch { return null; }
 }
 function saveHostSession(host) {
-  localStorage.setItem(CURRENT_HOST_KEY, JSON.stringify({ id: host.id, name: host.name, username: host.username }));
+  localStorage.setItem(CURRENT_HOST_KEY, JSON.stringify({
+    id: host.id, name: host.name, username: host.username,
+    allow_open_play: host.allow_open_play, allow_tournament: host.allow_tournament,
+  }));
 }
 function clearHostSession() {
   localStorage.removeItem(CURRENT_HOST_KEY);
@@ -716,12 +719,22 @@ function clearHostSession() {
 const AccountAPI = (() => {
   async function loginHost(username, password) {
     const hash = await hashPassword(password);
-    const { data, error } = await supabaseClient
+    let { data, error } = await supabaseClient
       .from('host_accounts')
-      .select('id, name, username, is_active')
+      .select('id, name, username, is_active, allow_open_play, allow_tournament')
       .eq('username', username.trim())
       .eq('password_hash', hash)
       .single();
+    if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
+      // Migration not run yet — log in without the permission columns
+      // (defaults to full access, same as the DB column defaults would be).
+      ({ data, error } = await supabaseClient
+        .from('host_accounts')
+        .select('id, name, username, is_active')
+        .eq('username', username.trim())
+        .eq('password_hash', hash)
+        .single());
+    }
     if (error || !data) throw new Error('Incorrect username or password.');
     if (!data.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
     return data;
@@ -1005,7 +1018,15 @@ const SessionAPI = (() => {
       .eq('host_id', currentHost.id)
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data;
+    // Hard block: if a permission is currently off, sessions of that type
+    // are completely hidden — not just blocked from creating new ones.
+    // Undefined (migration not run yet) defaults to true, same as the DB
+    // column default, so nothing changes until the SQL is run.
+    const allowOpenPlay   = currentHost.allow_open_play !== false;
+    const allowTournament = currentHost.allow_tournament !== false;
+    return (data || []).filter(s =>
+      s.session_type === 'tournament' ? allowTournament : allowOpenPlay
+    );
   }
 
   async function verifySessionPassword(sessionId, password) {
@@ -1717,11 +1738,18 @@ async function init() {
   // A stale, corrupted, or pre-auth-system session must be rejected.
   if (currentHost?.id) {
     try {
-      const { data, error } = await supabaseClient
+      let { data, error } = await supabaseClient
         .from('host_accounts')
-        .select('id, name, username, is_active')
+        .select('id, name, username, is_active, allow_open_play, allow_tournament')
         .eq('id', currentHost.id)
         .single();
+      if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
+        ({ data, error } = await supabaseClient
+          .from('host_accounts')
+          .select('id, name, username, is_active')
+          .eq('id', currentHost.id)
+          .single());
+      }
 
       if (error || !data || !data.is_active) {
         // Account deleted, deactivated, or localStorage corrupted — force re-login.
@@ -1730,8 +1758,8 @@ async function init() {
         renderLoginScreen();
         return;
       }
-      // Refresh currentHost with live data in case name/username changed.
-      currentHost = { id: data.id, name: data.name, username: data.username };
+      // Refresh currentHost with live data in case name/username/permissions changed.
+      currentHost = { id: data.id, name: data.name, username: data.username, allow_open_play: data.allow_open_play, allow_tournament: data.allow_tournament };
       saveHostSession(currentHost);
     } catch (_) {
       clearHostSession();
@@ -1848,7 +1876,12 @@ function sessionTypeBadge(s) {
 let _newSessionType = 'open_play'; // tracks selected type in create form
 
 async function renderSessionList() {
-  _newSessionType = 'open_play';
+  // Default to whichever session type this host is actually allowed to
+  // create. Undefined (migration not run yet) defaults to true — same as
+  // the DB column default — so behavior is unchanged until the SQL runs.
+  const allowOpenPlay   = currentHost?.allow_open_play !== false;
+  const allowTournament = currentHost?.allow_tournament !== false;
+  _newSessionType = allowOpenPlay ? 'open_play' : 'tournament';
   const sessions = await SessionAPI.getMySessions();
   const active    = sessions.filter(s => s.status === 'active');
   const completed = sessions.filter(s => s.status === 'completed').slice(0, 15);
@@ -1897,7 +1930,8 @@ async function renderSessionList() {
     <div class="card">
       <h2>New Session</h2>
 
-      <!-- Session type toggle -->
+      ${(currentHost?.allow_open_play !== false && currentHost?.allow_tournament !== false) ? `
+      <!-- Session type toggle — host has access to both, let them choose -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px;">
         <button id="typeOpenPlayBtn" onclick="selectNewSessionType('open_play')"
           style="padding:13px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:2px solid var(--court-paint);background:var(--court-paint);color:white;transition:all 0.15s;">
@@ -1907,16 +1941,24 @@ async function renderSessionList() {
           style="padding:13px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;border:2px solid var(--border-soft);background:transparent;color:var(--ink-muted);transition:all 0.15s;">
           🏆 Tournament
         </button>
+      </div>` : `
+      <!-- Only one session type enabled for this account — no toggle needed -->
+      <div style="display:none;">
+        <button id="typeOpenPlayBtn"></button>
+        <button id="typeTournamentBtn"></button>
       </div>
+      <div style="padding:10px 14px;border-radius:var(--radius-sm);background:var(--surface-hover);margin-bottom:18px;font-size:13px;font-weight:700;color:var(--ink-muted);">
+        ${currentHost?.allow_open_play !== false ? '🎾 Open Play' : '🏆 Tournament'} <span style="font-weight:500;opacity:.7;">— the only session type enabled for this account</span>
+      </div>`}
 
       <!-- Common fields -->
       <div class="form-grid">
-        <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="Open Play"></div>
+        <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="${currentHost?.allow_open_play !== false ? 'Open Play' : 'Tournament'}"></div>
         <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
       </div>
 
       <!-- Open Play only -->
-      <div id="openPlayFields">
+      <div id="openPlayFields" style="display:${currentHost?.allow_open_play === false ? 'none' : ''};">
         <div class="form-grid">
           <div class="field"><label>Format</label>
             <select id="newFormat"><option value="doubles">Doubles</option><option value="singles">Singles</option></select>
@@ -1931,7 +1973,7 @@ async function renderSessionList() {
       </div>
 
       <!-- Tournament only -->
-      <div id="tournamentFields" style="display:none;">
+      <div id="tournamentFields" style="display:${currentHost?.allow_open_play === false ? '' : 'none'};">
         <div class="form-grid">
           <div class="field"><label>Category / Level</label>
             <select id="newCategory">
@@ -2003,6 +2045,17 @@ async function handleCreateSession() {
   const courtCount = parseInt(document.getElementById('newCourtCount').value, 10) || 1;
   const errorEl = document.getElementById('createSessionError');
   errorEl.textContent = '';
+
+  // Defense in depth — even though the UI hides the disallowed type's
+  // button, don't trust client state alone to block session creation.
+  if (_newSessionType === 'open_play' && currentHost?.allow_open_play === false) {
+    errorEl.textContent = 'This account does not have Open Play access. Contact your administrator.';
+    return;
+  }
+  if (_newSessionType === 'tournament' && currentHost?.allow_tournament === false) {
+    errorEl.textContent = 'This account does not have Tournament access. Contact your administrator.';
+    return;
+  }
 
   let format, category, division;
   if (_newSessionType === 'tournament') {
