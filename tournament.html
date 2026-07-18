@@ -778,6 +778,9 @@ async function generateBracket(type){
 
   // Propagate byes
   await propagate();
+  // Court assignment is automated everywhere now — including a freshly
+  // generated single-elim/finals bracket — same as round robin.
+  await autoFillRRCourts();
 }
 
 async function propagate(){
@@ -964,9 +967,22 @@ async function promoteQueue(courtLabel){
 // a team obviously can't play two matches at once. Called right after
 // generating the schedule, and again after every round-robin/final result
 // is saved so the next match auto-fills the freed court.
-async function autoFillRRCourts(){
-  if(!BRACKET||BRACKET.bracket_type!=='round_robin')return;
+// Auto-fills every open court from whatever bracket is active — round robin
+// group-stage matches, a plain single-elimination bracket, or the Finals
+// bracket generated after group play. Two fairness rules on top of the
+// basic "don't double-book a busy team":
+//   1. A team that JUST finished a match is avoided for the very next
+//      court assignment if any other pending match is playable instead —
+//      so nobody goes straight from one match into another with zero rest.
+//      Falls back to using them anyway if there's truly no alternative
+//      (otherwise the tournament could stall).
+//   2. When the Final and 3rd Place match are both ready at once (they
+//      always become ready simultaneously — both need the two semifinal
+//      results), 3rd Place is scheduled first, Final always last.
+async function autoFillRRCourts(justFinishedTeamIds){
+  if(!BRACKET)return;
   const courtCount=SESSION?.court_count||1;
+  const avoidIds=new Set(justFinishedTeamIds||[]);
   const busyTeamIds=new Set(
     MATCHES.filter(m=>m.status==='in_progress')
       .flatMap(m=>[m.entry_a_id,m.entry_b_id])
@@ -974,12 +990,17 @@ async function autoFillRRCourts(){
   const occupiedCourts=new Set(
     MATCHES.filter(m=>m.status==='in_progress').map(m=>m.court_label)
   );
-  const pending=MATCHES.filter(m=>m.match_type==='round_robin'&&m.status==='pending'&&!m.court_label&&m.entry_a_id&&m.entry_b_id)
-    .sort((a,b)=>a.round-b.round||a.position-b.position);
+  const typeRank=m=>m.match_type==='third_place'?0:m.match_type==='winners'?1:0; // 3rd place before final when tied on round
+  const pending=MATCHES.filter(m=>
+      (m.match_type==='round_robin'||m.match_type==='winners'||m.match_type==='third_place')&&
+      m.status==='pending'&&!m.court_label&&m.entry_a_id&&m.entry_b_id)
+    .sort((a,b)=>a.round-b.round||typeRank(a)-typeRank(b)||a.position-b.position);
 
   for(let cn=1;cn<=courtCount;cn++){
     if(occupiedCourts.has(String(cn)))continue; // court already live
-    const next=pending.find(m=>!busyTeamIds.has(m.entry_a_id)&&!busyTeamIds.has(m.entry_b_id));
+    const playable=m=>!busyTeamIds.has(m.entry_a_id)&&!busyTeamIds.has(m.entry_b_id);
+    let next=pending.find(m=>playable(m)&&!avoidIds.has(m.entry_a_id)&&!avoidIds.has(m.entry_b_id));
+    if(!next)next=pending.find(playable); // no rested option left — use a just-finished team rather than stall
     if(!next)continue; // nothing playable right now (remaining matches involve busy teams)
     await db.from('bracket_matches').update({
       court_label:String(cn),status:'in_progress',started_at:new Date().toISOString(),
@@ -1122,7 +1143,7 @@ async function saveGames(matchId,bo){
   }
   await propagate();          // winner advances to next bracket slot
   await promoteQueue(freedCourt); // next queued match on this court goes LIVE
-  await autoFillRRCourts();   // round robin: auto-stack the next scheduled match
+  await autoFillRRCourts([winnerId,loserId]); // auto-stack the next match, giving these two a rest first if possible
   CM();
   await loadAll();render();   // bracket, scoreboard, standings all refresh
 }
@@ -2316,6 +2337,8 @@ async function generateFinal(advancePerGroup){
     ];
     const{error}=await db.from('bracket_matches').insert(rows);
     if(error){alert('Could not create Finals: '+error.message);return}
+    await loadAll();
+    await autoFillRRCourts(); // 3rd place goes to a court before the final — see typeRank in autoFillRRCourts
     await loadAll();render();
     return;
   }
@@ -2380,6 +2403,7 @@ async function generateFinal(advancePerGroup){
 
   await loadAll();
   await propagate(); // push any bye auto-wins from R1 straight into R2
+  await autoFillRRCourts(); // court assignment is automated for the Finals bracket too now
   await loadAll();render();
 }
 
