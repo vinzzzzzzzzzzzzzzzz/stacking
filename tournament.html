@@ -620,9 +620,19 @@ async function generateBracket(type){
     BRACKET=br;
 
     // Round robin — every team plays every other team ONCE WITHIN ITS GROUP.
-    // Matches are PRE-FILLED at generation time (no manual dropdown seeding
-    // step) since the pairing is fully determined by the schedule.
-    const groups=splitIntoGroups(TEAMS.map(t=>t.id),groupCount);
+    // Matches are PRE-FILLED at generation time (no dropdown seeding step
+    // during scheduling itself) since the pairing is fully determined once
+    // we know which team occupies which position.
+    // Automated: shuffle for unpredictable grouping/pairing.
+    // Manual: use the exact order the host assigned via the slot picker.
+    const seedMode = window._seedMode || 'automated';
+    let orderedIds;
+    if(seedMode==='manual' && Array.isArray(window._rrManualOrder) && window._rrManualOrder.length===n){
+      orderedIds = window._rrManualOrder.slice();
+    }else{
+      orderedIds = TEAMS.map(t=>t.id).sort(()=>Math.random()-0.5);
+    }
+    const groups=splitIntoGroups(orderedIds,groupCount);
     const rows=[];
     groups.forEach((groupTeamIds,gi)=>{
       const pairings=buildRoundRobinPairings(groupTeamIds);
@@ -658,28 +668,70 @@ async function generateBracket(type){
     return;
   }
 
-  if(n>16)throw new Error('Maximum 16 teams supported. Remove '+(n-16)+' team(s).');
+  if(n>32)throw new Error('Maximum 32 teams supported. Remove '+(n-32)+' team(s).');
   // Bracket model: 2→2, 3-4→4, 5-8→8, 9-16→16 slots.
   // Non-power-of-2 counts (e.g. 6, 12) fill the extra slots with BYE
   // via the dropdowns — standard practice gives byes to the top seeds.
   const slots=nextP2(n);
   const totalRounds=Math.log2(slots);
+  const seedMode = window._seedMode || 'manual';
 
-  // Create bracket record
-  const{data:br,error:brErr}=await db.from('brackets').insert({
-    session_id:SID,name:'Main Draw',bracket_type:type,total_slots:slots,best_of:1,status:'active'
+  // Create bracket record — seed_mode is what the bracket renderer uses to
+  // decide whether R1 shows dropdowns (manual) or static boxes (automated,
+  // already pre-filled below). Falls back gracefully if the migration
+  // hasn't run yet — bracket still generates, R1 just always shows as
+  // editable dropdowns until the column exists.
+  let{data:br,error:brErr}=await db.from('brackets').insert({
+    session_id:SID,name:'Main Draw',bracket_type:type,total_slots:slots,best_of:1,status:'active',seed_mode:seedMode
   }).select().single();
+  if(brErr&&/seed_mode/.test(brErr.message||'')){
+    ({data:br,error:brErr}=await db.from('brackets').insert({
+      session_id:SID,name:'Main Draw',bracket_type:type,total_slots:slots,best_of:1,status:'active'
+    }).select().single());
+  }
   if(brErr||!br)throw new Error('Could not create bracket: '+(brErr?.message||'unknown error'));
   BRACKET=br;
 
   // EMPTY draw — every Round-1 slot starts blank.
-  // The host assigns teams via the dropdowns drawn on the bracket itself.
+  // The host assigns teams via the dropdowns drawn on the bracket itself —
+  // UNLESS Automated mode was chosen, in which case R1 is pre-filled with
+  // a random shuffle right now (same bye-distribution technique used for
+  // the round-robin Finals bracket: standardSeedOrder always pairs the
+  // highest "seed" numbers first, so padding/byes naturally land spread
+  // out rather than clustering, and never BYE vs BYE).
   const rows=[];
   const r1Count=slots/2;
-  for(let p=1;p<=r1Count;p++){
-    rows.push({bracket_id:br.id,round:1,position:p,best_of:1,status:'pending',
-      match_type:'winners',entry_a_id:null,entry_b_id:null,
-      score_a:null,score_b:null,winner_id:null,loser_id:null});
+  if(seedMode==='automated' && type!=='double_elim'){
+    const shuffled=TEAMS.map(t=>t.id).sort(()=>Math.random()-0.5);
+    const seedOrder=standardSeedOrder(slots);
+    const byeCache={};
+    async function byeEntryFor(seedNum){
+      if(byeCache[seedNum])return byeCache[seedNum];
+      const{data:bye}=await db.from('bracket_entries').insert({bracket_id:br.id,session_id:SID,team_name:'BYE',is_bye:true}).select().single();
+      byeCache[seedNum]=bye.id;
+      return bye.id;
+    }
+    for(let p=1;p<=r1Count;p++){
+      const seedA=seedOrder[(p-1)*2], seedB=seedOrder[(p-1)*2+1];
+      const qA=shuffled[seedA-1], qB=shuffled[seedB-1];
+      let entryA=qA||null, entryB=qB||null, byeSide=null;
+      if(!qA&&qB){entryA=await byeEntryFor(seedA);byeSide='A';}
+      else if(!qB&&qA){entryB=await byeEntryFor(seedB);byeSide='B';}
+      rows.push({
+        bracket_id:br.id,round:1,position:p,best_of:1,
+        status:byeSide?'completed':'pending',match_type:'winners',
+        entry_a_id:entryA,entry_b_id:entryB,
+        winner_id:byeSide==='A'?entryB:byeSide==='B'?entryA:null,
+        loser_id:byeSide==='A'?entryA:byeSide==='B'?entryB:null,
+        score_a:null,score_b:null,
+      });
+    }
+  }else{
+    for(let p=1;p<=r1Count;p++){
+      rows.push({bracket_id:br.id,round:1,position:p,best_of:1,status:'pending',
+        match_type:'winners',entry_a_id:null,entry_b_id:null,
+        score_a:null,score_b:null,winner_id:null,loser_id:null});
+    }
   }
 
   // Rounds 2..totalRounds — placeholders
@@ -702,8 +754,10 @@ async function generateBracket(type){
     // Grand final + bracket reset
     rows.push({bracket_id:br.id,round:1,position:1,best_of:1,status:'pending',match_type:'grand_final',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
     rows.push({bracket_id:br.id,round:2,position:1,best_of:1,status:'pending',match_type:'bracket_reset',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
-  }else{
-    // 3rd place match
+  }else if(totalRounds>=2){
+    // 3rd place match — only makes sense once semifinals exist to draw the
+    // two losers from. A 2-team bracket is just the final itself; there's
+    // no semifinal round, so no 3rd place match to create.
     rows.push({bracket_id:br.id,round:totalRounds,position:2,best_of:1,status:'pending',match_type:'third_place',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
   }
 
@@ -1377,6 +1431,13 @@ async function doChangeFormat(){
 function confirmGenerate(type){
   const isRR=type==='round_robin';
   const title=isRR?'Generate Round Robin Schedule?':'Generate Single Elimination Bracket?';
+  const seedModeControl=`
+    <div class="field" style="margin-top:10px"><label>Team Pairings</label>
+      <select id="seedModeSelect">
+        <option value="automated">🎲 Automated — system shuffles teams, pairings are random and unpredictable</option>
+        <option value="manual">✋ Manual — you assign each team to a slot yourself</option>
+      </select>
+    </div>`;
   if(isRR){
     // How many groups can this team count actually support? Each group
     // needs at least 2 teams, so cap options at floor(n/2), max 8.
@@ -1387,8 +1448,7 @@ function confirmGenerate(type){
     M(`<div class="overlay" onclick="if(event.target===this)CM()">
       <div class="modal">
         <h2>${title}</h2>
-        <p class="modal-sub">${n} teams, everyone plays everyone once <em>within their group</em>.
-          Matches are pre-scheduled and auto-fill your courts as they free up — no manual seeding needed.<br><br>
+        <p class="modal-sub">${n} teams, everyone plays everyone once <em>within their group</em>.<br><br>
           ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}</p>
         <div class="field"><label>Number of Groups</label>
           <select id="rrGroupCountSelect">${groupOptions}</select>
@@ -1397,27 +1457,104 @@ function confirmGenerate(type){
           Splitting into groups shortens the round robin — good when you have a lot of teams and limited time.
           Once every group finishes, the top teams from each group cross into a Final bracket (Semifinal → Final → 3rd Place).
         </p>
+        ${seedModeControl}
+        <p style="font-size:11px;color:var(--bench-slate);margin:6px 0 0">
+          <strong>Automated</strong>: teams are shuffled, then the schedule auto-fills your courts as they free up — no setup needed.
+          <strong>Manual</strong>: you decide which team fills each numbered slot before the schedule is built (same picker as single elimination).
+        </p>
         <div class="ma">
           <button class="no" onclick="CM()">Cancel</button>
-          <button class="ok-y" onclick="window._rrGroupCount=document.getElementById('rrGroupCountSelect').value;CM();doGenerate('round_robin')">Generate Schedule</button>
+          <button class="ok-y" onclick="window._rrGroupCount=document.getElementById('rrGroupCountSelect').value;window._seedMode=document.getElementById('seedModeSelect').value;CM();window._seedMode==='manual'?startRRManualSeeding():doGenerate('round_robin')">Continue →</button>
         </div>
       </div>
     </div>`);
     return;
   }
-  const body=`${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket. The bracket starts EMPTY —
-       you pick which team goes in each Round-1 slot using the dropdowns on the bracket. A team can only be placed once.<br><br>
+  const body=`${TEAMS.length} teams → ${nextP2(TEAMS.length)}-slot bracket.<br><br>
        ${BRACKET?'<strong style="color:var(--fault-coral)">⚠ This will replace the existing bracket and all match results.</strong>':''}`;
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
     <div class="modal">
       <h2>${title}</h2>
       <p class="modal-sub">${body}</p>
+      ${seedModeControl}
+      <p style="font-size:11px;color:var(--bench-slate);margin:6px 0 0">
+        <strong>Automated</strong>: the system shuffles teams into the bracket for you — fully random, unpredictable pairings.
+        <strong>Manual</strong>: the bracket starts empty and you pick which team goes in each Round-1 slot using dropdowns. A team can only be placed once.
+      </p>
       <div class="ma">
         <button class="no" onclick="CM()">Cancel</button>
-        <button class="ok-y" onclick="CM();doGenerate('${type}')">Generate Draw</button>
+        <button class="ok-y" onclick="window._seedMode=document.getElementById('seedModeSelect').value;CM();doGenerate('${type}')">Continue →</button>
       </div>
     </div>
   </div>`);
+}
+
+// ── Round Robin — Manual seeding UI ──
+// Shows N numbered slots (grouped visually to match how splitIntoGroups
+// will actually distribute them) and lets the host pick which team fills
+// each one — same "already-picked teams disappear from other dropdowns"
+// behavior as single elimination's R1 assignment.
+function computeSlotGroupLabels(n,groupCount){
+  const labels=new Array(n);
+  let g=0,dir=1;
+  for(let i=0;i<n;i++){
+    labels[i]=g+1;
+    if(groupCount>1){
+      g+=dir;
+      if(g===groupCount){g=groupCount-1;dir=-1;}
+      else if(g<0){g=0;dir=1;}
+    }
+  }
+  return labels;
+}
+function startRRManualSeeding(){
+  const n=TEAMS.length;
+  window._rrManualOrder = new Array(n).fill(null);
+  renderRRManualSeedingUI();
+}
+function renderRRManualSeedingUI(){
+  const n=TEAMS.length;
+  const groupCount=Math.max(1,Math.min(8,parseInt(window._rrGroupCount,10)||1));
+  const groupLabels=computeSlotGroupLabels(n,groupCount);
+  const order=window._rrManualOrder||new Array(n).fill(null);
+  const usedIds=new Set(order.filter(Boolean));
+  const filledCount=order.filter(Boolean).length;
+
+  let slotsHtml='';
+  for(let i=0;i<n;i++){
+    const currentId=order[i];
+    const options=TEAMS.filter(t=>t.id===currentId||!usedIds.has(t.id))
+      .map(t=>`<option value="${t.id}" ${t.id===currentId?'selected':''}>${esc(t.team_name)}</option>`).join('');
+    const groupTag=groupCount>1?`<span style="font-size:9px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;margin-right:6px">GROUP ${String.fromCharCode(64+groupLabels[i])}</span>`:'';
+    slotsHtml+=`<div class="field" style="margin-bottom:8px">
+      <label>${groupTag}Slot ${i+1}</label>
+      <select onchange="assignRRManualSlot(${i},this.value)">
+        <option value="">— Select team —</option>
+        ${options}
+      </select>
+    </div>`;
+  }
+
+  document.getElementById('tabContent').innerHTML=`
+    <div class="card">
+      <h2 style="margin-bottom:6px">Manually Assign Teams</h2>
+      <p style="font-size:12px;color:var(--bench-slate);margin:0 0 4px">
+        Pick which team fills each slot. A team can only be placed once — it disappears from the other dropdowns once chosen.
+        ${groupCount>1?' Slots are pre-labeled by group so you can control exactly who lands where.':''}
+      </p>
+      <p style="font-size:12px;font-weight:700;color:${filledCount===n?'var(--winner-green)':'var(--bench-slate)'};margin:0 0 14px">${filledCount} of ${n} slots filled</p>
+      ${slotsHtml}
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-ghost" onclick="render()">Cancel</button>
+        <button class="btn btn-yellow" ${filledCount<n?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="doGenerate('round_robin')">Generate Schedule →</button>
+      </div>
+    </div>
+  `;
+}
+function assignRRManualSlot(index,teamId){
+  if(!window._rrManualOrder)window._rrManualOrder=new Array(TEAMS.length).fill(null);
+  window._rrManualOrder[index]=teamId||null;
+  renderRRManualSeedingUI();
 }
 
 async function doGenerate(type){
@@ -1592,7 +1729,12 @@ function buildNCAABracket(){
       // BUT: a Finals bracket generated from round-robin qualifiers already
       // has real teams locked into R1 (no manual seeding needed) — treat it
       // like any other round instead, so it's a clickable box → match hub.
-      const isR1Editable = (r===1 && m.score_a==null && BRACKET.bracket_type!=='round_robin');
+      // Same applies when this single-elim bracket itself was generated in
+      // Automated mode (BRACKET.seed_mode) — R1 is already pre-filled there
+      // too, so it should render as a static box, not an editable dropdown.
+      // seed_mode undefined (migration not run, or a pre-existing manual
+      // bracket) defaults to editable — matches the original behavior.
+      const isR1Editable = (r===1 && m.score_a==null && BRACKET.bracket_type!=='round_robin' && BRACKET.seed_mode!=='automated');
       if(isR1Editable){
         s += slotSelect(x,tyA,m.id,'entry_a_id',m.entry_a_id);
         s += slotSelect(x,tyB,m.id,'entry_b_id',m.entry_b_id);
