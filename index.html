@@ -302,6 +302,24 @@
   .paddle-chip-face .initials { font-size: 17px; font-weight: 800; color: #fff; }
   .paddle-chip-name-out { font-size: 11px; font-weight: 700; color: var(--line-paint); text-align: center; line-height: 1.1; max-width: 78px; word-break: break-word; }
 
+  /* ── Up Next match-preview cards ── */
+  .mp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 12px; justify-content: center; }
+  .mp-card { background: linear-gradient(175deg, var(--court-paint) 0%, var(--court-paint-deep) 100%); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card); max-width: 300px; width: 100%; margin: 0 auto; border: 1px solid var(--border-card); }
+  .mp-card.partial { opacity: 0.88; }
+  .mp-card-label { background: rgba(0,0,0,0.22); color: var(--line-tape); font-family: var(--font-display); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; }
+  .mp-card-label .mp-badge { background: rgba(215,242,61,0.18); color: var(--optic-yellow); padding: 2px 7px; border-radius: 999px; font-weight: 800; font-size: 9px; }
+  .mp-card-label .mp-badge.result-won  { background: rgba(78,203,126,0.22); color: var(--winner-green); }
+  .mp-card-label .mp-badge.result-lost { background: rgba(255,122,92,0.18); color: var(--fault-coral); }
+  .mp-teams { padding: 14px 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .mp-team-row { display: flex; gap: 10px; justify-content: center; align-items: flex-start; width: 100%; }
+  .mp-vs { font-family: var(--font-display); font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--optic-yellow); opacity: 0.85; }
+  .mp-placeholder { flex: 1; text-align: center; padding: 14px 8px; border: 1.5px dashed rgba(242,244,240,0.25); border-radius: var(--radius-sm); color: var(--line-tape); opacity: 0.65; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
+  .mp-remaining-wrap { padding: 4px 15px 12px; }
+  .mp-remaining-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--resting-slate); margin: 8px 0 6px; }
+  .mp-remaining-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mp-remaining-chip { display: flex; align-items: center; gap: 5px; background: var(--surface-raised); border: 1px solid var(--border-soft); border-radius: 999px; padding: 4px 10px 4px 6px; font-size: 12px; font-weight: 600; }
+  .mp-remaining-chip .num { font-family: var(--font-mono); font-size: 10px; color: var(--resting-slate); background: var(--surface-hover); border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
+
   /* ── Divider ── */
   .court-line-divider { height: 1px; margin: 16px 0; background: var(--border-soft); }
 
@@ -648,6 +666,7 @@ function renderShell() {
     </div>
     <div class="courts-grid" id="courtsGrid"></div>
     <div class="court-line-divider" role="separator"></div>
+    <div id="upNextSection"></div>
     <div class="queues" id="queuesGrid"></div>
     <div id="leaderboardSection"></div>
     <div class="recent-results" id="recentResults"></div>
@@ -778,6 +797,193 @@ function renderCourts(courts, players, previousCourts) {
 // ============================================================
 // QUEUE DISPLAY
 // ============================================================
+// ════════════════════════════════════════════
+// STACKING ENGINE (read-only preview copy)
+// Ported VERBATIM from host.html so the "Up Next" preview shown to
+// spectators exactly matches what the host's engine will actually do
+// when a court frees up. Never writes anywhere — pure prediction only.
+// If host.html's engine logic changes, this must be updated to match.
+// ════════════════════════════════════════════
+const TIER_RANK = { beginner: 0, intermediate: 1, advanced: 2, open: -1 };
+
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function decideSkillBalancedTeams(group) {
+  if (group.length !== 4) return null;
+  const ranks = group.map(p => TIER_RANK[p.skill_tier] >= 0 ? TIER_RANK[p.skill_tier] : 1);
+  const splits = [
+    { a: [0,1], b: [2,3] },
+    { a: [0,2], b: [1,3] },
+    { a: [0,3], b: [1,2] },
+  ];
+  function recentOpponentIds(p) {
+    return Array.isArray(p.recent_opponent_ids) ? p.recent_opponent_ids : [];
+  }
+  function rematchCount(s) {
+    let count = 0;
+    for (const i of s.a) for (const j of s.b) {
+      const pi = group[i], pj = group[j];
+      if (recentOpponentIds(pi).includes(pj.id) || recentOpponentIds(pj).includes(pi.id)) count++;
+    }
+    return count;
+  }
+  function scoreSplit(s) {
+    const sumA = s.a.reduce((acc, i) => acc + ranks[i], 0);
+    const sumB = s.b.reduce((acc, i) => acc + ranks[i], 0);
+    const diff = Math.abs(sumA - sumB);
+    const clumped =
+      (ranks[s.a[0]] === ranks[s.a[1]] ? 1 : 0) +
+      (ranks[s.b[0]] === ranks[s.b[1]] ? 1 : 0);
+    return rematchCount(s) * 1000 + diff * 10 + clumped;
+  }
+  const scores = splits.map(s => scoreSplit(s));
+  const best   = Math.min(...scores);
+  const bestSplits = splits.filter((_, i) => scores[i] === best);
+  const chosen = { ...bestSplits[Math.floor(Math.random() * bestSplits.length)], group };
+  let teamAIds = chosen.a.map(i => chosen.group[i].id);
+  let teamBIds = chosen.b.map(i => chosen.group[i].id);
+  const winnerIds = group.filter(p => p.last_match_result === 'won').map(p => p.id);
+  const loserIds  = group.filter(p => p.last_match_result === 'lost').map(p => p.id);
+  if (winnerIds.length === 2 && loserIds.length === 2) {
+    const aIsLosers = teamAIds.every(id => loserIds.includes(id));
+    if (aIsLosers) [teamAIds, teamBIds] = [teamBIds, teamAIds];
+  }
+  return { teamAPlayerIds: teamAIds, teamBPlayerIds: teamBIds };
+}
+
+function decideNextMatchFromPool(players, teamSize) {
+  const needed = teamSize * 2;
+  if (!players || players.length < needed) return null;
+  if (teamSize === 1) {
+    return { teamAPlayerIds: [players[0].id], teamBPlayerIds: [players[1].id] };
+  }
+  const anchor = players[0];
+  const anchorResult = anchor.last_match_result || null;
+  const isFresh  = p => !p.last_match_result;
+  const sameSide = p => p.last_match_result === anchorResult;
+  let group;
+  if (!anchorResult) {
+    group = players.slice(0, needed);
+  } else {
+    const sameSidePlayers = players.filter(sameSide);
+    const freshPlayers    = players.filter(isFresh);
+    group = [...sameSidePlayers, ...freshPlayers].slice(0, needed);
+    if (group.length < needed) group = players.slice(0, needed);
+  }
+  if (group.length < needed) return null;
+  const allSameResult = group.every(p => p.last_match_result === 'won') ||
+                        group.every(p => p.last_match_result === 'lost');
+  if (allSameResult) {
+    const byTs = {};
+    for (const p of group) {
+      const k = p.became_free_at || '';
+      (byTs[k] = byTs[k] || []).push(p);
+    }
+    const pairs = Object.values(byTs);
+    if (pairs.length === 2 && pairs[0].length === 2 && pairs[1].length === 2) {
+      return {
+        teamAPlayerIds: pairs[0].map(p => p.id),
+        teamBPlayerIds: pairs[1].map(p => p.id),
+      };
+    }
+  }
+  return decideSkillBalancedTeams(group);
+}
+
+// Simulates the next several matches by repeatedly running the real engine
+// on a shrinking copy of the waiting pool — this is what makes the preview
+// "live": if someone new arrives (added to `waiting` on the next refresh),
+// or a court frees up and the real pool changes, this recomputes fresh
+// each time rather than showing a stale prediction.
+function generateQueuePreviews(waiting, teamSize, maxPreviews) {
+  let pool = waiting.map(p => ({ ...p }));
+  const previews = [];
+  for (let i = 0; i < maxPreviews; i++) {
+    const decision = decideNextMatchFromPool(pool, teamSize);
+    if (!decision) break;
+    const byId = id => pool.find(p => p.id === id);
+    const teamA = decision.teamAPlayerIds.map(byId);
+    const teamB = decision.teamBPlayerIds.map(byId);
+    previews.push({ complete: true, teamA, teamB });
+    const usedIds = new Set([...decision.teamAPlayerIds, ...decision.teamBPlayerIds]);
+    pool = pool.filter(p => !usedIds.has(p.id));
+  }
+  // Partial preview: a known pair (same became_free_at — teammates from the
+  // same finished match) left waiting with nobody yet to complete a group.
+  if (teamSize === 2 && pool.length >= 2) {
+    const front = pool.slice(0, 2);
+    if (front[0].became_free_at === front[1].became_free_at && front[0].last_match_result) {
+      previews.push({ complete: false, teamA: front, resultLabel: front[0].last_match_result });
+      pool = pool.slice(2);
+    }
+  }
+  return { previews, remaining: pool };
+}
+
+// Builds one match-preview card (complete 2v2/1v1, or a partial known-pair
+// waiting for an opponent). Reuses paddleChip() so a player looks exactly
+// the same here as they do once actually on court.
+function buildPreviewCard(preview, index, teamSize) {
+  const label = preview.complete ? `Next Match #${index + 1}` : 'Waiting';
+  let badge = '';
+  if (!preview.complete) {
+    badge = preview.resultLabel === 'won'
+      ? '<span class="mp-badge result-won">Winning Pair</span>'
+      : '<span class="mp-badge result-lost">Losing Pair</span>';
+  }
+  const teamARow = `<div class="mp-team-row">${preview.teamA.map(p => paddleChip(p)).join('')}</div>`;
+  const teamBRow = preview.complete
+    ? `<div class="mp-team-row">${preview.teamB.map(p => paddleChip(p)).join('')}</div>`
+    : `<div class="mp-placeholder">Waiting for ${preview.resultLabel === 'won' ? 'another winning' : 'another losing'} pair…</div>`;
+  return `<div class="mp-card${preview.complete ? '' : ' partial'}">
+    <div class="mp-card-label"><span>${label}</span>${badge}</div>
+    <div class="mp-teams">
+      ${teamARow}
+      <span class="mp-vs">${teamSize === 1 ? 'VS' : 'VS'}</span>
+      ${teamBRow}
+    </div>
+  </div>`;
+}
+
+function renderUpNextSection(waiting) {
+  const el = document.getElementById('upNextSection');
+  if (!el) return;
+  if (!waiting.length) {
+    el.innerHTML = `<div class="card" style="text-align:center;padding:24px;color:var(--resting-slate);font-size:13px;">No one in the queue right now</div>`;
+    return;
+  }
+  const teamSize = currentSession?.format === 'singles' ? 1 : 2;
+  const courtCount = currentSession?.court_count || 1;
+  // Preview as many upcoming matches as there are courts (a reasonable
+  // "how far ahead can I see" depth), capped so the section doesn't sprawl.
+  const maxPreviews = Math.max(1, Math.min(4, courtCount));
+  const { previews, remaining } = generateQueuePreviews(waiting, teamSize, maxPreviews);
+
+  const cardsHtml = previews.map((p, i) => buildPreviewCard(p, i, teamSize)).join('');
+  const remainingHtml = remaining.length ? `
+    <div class="mp-remaining-wrap">
+      <div class="mp-remaining-label">Then queued</div>
+      <div class="mp-remaining-list">
+        ${remaining.map((p, i) => `<span class="mp-remaining-chip"><span class="num">${previews.reduce((n,pv)=>n+pv.teamA.length+(pv.teamB?pv.teamB.length:0),0) + i + 1}</span>${escapeHtml(p.name)}</span>`).join('')}
+      </div>
+    </div>` : '';
+
+  el.innerHTML = `
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px;">
+      <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">${waiting.length}</span></div>
+      <div class="mp-grid">${cardsHtml}</div>
+      ${remainingHtml}
+    </div>
+  `;
+}
+
 function renderQueues(players) {
   const grid = document.getElementById('queuesGrid');
   if (!grid) return;
@@ -795,18 +1001,10 @@ function renderQueues(players) {
     .filter(p => p.status === 'waiting')
     .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
 
+  renderUpNextSection(waiting);
+
   const resting  = players.filter(p => p.status === 'resting');
   const expected = players.filter(p => p.status === 'expected');
-
-  const resultBadge = p => {
-    if (p.last_match_result === 'won')  return '<span class="result-badge won">W</span>';
-    if (p.last_match_result === 'lost') return '<span class="result-badge lost">L</span>';
-    return '';
-  };
-
-  const waitingItems = waiting.length
-    ? waiting.map((p, i) => `<li class="lane-item" data-player-id="${p.id}"><span>${escapeHtml(p.name)} ${resultBadge(p)}</span><span class="lane-pos">#${i + 1}</span></li>`).join('')
-    : `<div class="lane-empty">No one in the queue right now</div>`;
 
   const restingItems = resting.length
     ? resting.map(p => `<li class="lane-item"><span>${escapeHtml(p.name)}</span></li>`).join('')
@@ -817,10 +1015,6 @@ function renderQueues(players) {
     : `<div class="lane-empty">Everyone's here!</div>`;
 
   grid.innerHTML = `
-    <div class="lane waiting">
-      <div class="lane-header"><span>Up Next</span><span class="count">${waiting.length}</span></div>
-      <ul class="lane-list">${waitingItems}</ul>
-    </div>
     <div class="lane resting">
       <div class="lane-header"><span>Resting</span><span class="count">${resting.length}</span></div>
       <ul class="lane-list">${restingItems}</ul>
