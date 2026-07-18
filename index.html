@@ -1366,7 +1366,26 @@ function renderTournamentView(){
     if(!groupNums.length)return[{groupNum:null,standings:computeSpectatorStandings(null)}];
     return groupNums.map(gn=>({groupNum:gn,standings:computeSpectatorStandings(gn)}));
   }
-  const standings=computeSpectatorStandings(null); // used by the non-RR (single-elim) branch below
+  // Single elimination has no match_type==='round_robin' rows at all, so
+  // computeSpectatorStandings() above always returns everyone at 0-0 for
+  // it — that function is round-robin-specific (used for group standings).
+  // This counts EVERY completed match regardless of type ('winners' /
+  // 'third_place' included), matching how the host's own renderScoreboard()
+  // already computes single-elim standings.
+  function computeSpectatorStandingsAllTypes(){
+    const stats={};
+    _tTeams.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,w:0,l:0,pf:0,pa:0}});
+    const done=_tMatches.filter(m=>m.status==='completed'&&m.score_a!=null);
+    for(const m of done){
+      let pA=0,pB=0;
+      if(Array.isArray(m.games)&&m.games.length)for(const g of m.games){pA+=g.a||0;pB+=g.b||0}
+      else{pA=m.score_a||0;pB=m.score_b||0}
+      if(stats[m.entry_a_id]){const s=stats[m.entry_a_id];s.pf+=pA;s.pa+=pB;m.winner_id===m.entry_a_id?s.w++:s.l++}
+      if(stats[m.entry_b_id]){const s=stats[m.entry_b_id];s.pf+=pB;s.pa+=pA;m.winner_id===m.entry_b_id?s.w++:s.l++}
+    }
+    return Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
+  }
+  const standings=computeSpectatorStandingsAllTypes(); // used by the non-RR (single-elim) branch below
 
   // ── Live bracket — same connected SVG tree as the host view ──
   // Round robin gets per-group crosstables instead (no single-elim tree to
