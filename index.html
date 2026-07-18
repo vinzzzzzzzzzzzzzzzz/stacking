@@ -302,9 +302,14 @@
   .paddle-chip-face .initials { font-size: 17px; font-weight: 800; color: #fff; }
   .paddle-chip-name-out { font-size: 11px; font-weight: 700; color: var(--line-paint); text-align: center; line-height: 1.1; max-width: 78px; word-break: break-word; }
 
-  /* ── Up Next match-preview cards ── */
-  .mp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 12px; justify-content: center; }
-  .mp-card { background: linear-gradient(175deg, var(--court-paint) 0%, var(--court-paint-deep) 100%); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card); max-width: 300px; width: 100%; margin: 0 auto; border: 1px solid var(--border-card); }
+  /* ── Up Next — single paginated card with < > stack navigation ── */
+  .mp-pager { display: flex; align-items: center; gap: 10px; padding: 14px 12px; }
+  .mp-nav-btn { flex-shrink: 0; width: 40px; height: 40px; min-height: 0; border-radius: 50%; border: 1px solid var(--border-soft); background: var(--surface-raised); color: var(--ink); font-size: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; transition: transform var(--dur-fast) var(--ease-bounce), background var(--dur-fast); }
+  .mp-nav-btn:not(:disabled):hover { background: var(--waiting-blue); color: white; transform: scale(1.08); }
+  .mp-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .mp-pager-card { flex: 1; min-width: 0; }
+  .mp-card { background: linear-gradient(175deg, var(--court-paint) 0%, var(--court-paint-deep) 100%); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card); max-width: 340px; width: 100%; margin: 0 auto; border: 1px solid var(--border-card); animation: mpCardIn var(--dur-base) var(--ease-settle); }
+  @keyframes mpCardIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .mp-card.partial { opacity: 0.88; }
   .mp-card-label { background: rgba(0,0,0,0.22); color: var(--line-tape); font-family: var(--font-display); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; }
   .mp-card-label .mp-badge { background: rgba(215,242,61,0.18); color: var(--optic-yellow); padding: 2px 7px; border-radius: 999px; font-weight: 800; font-size: 9px; }
@@ -314,12 +319,10 @@
   .mp-team-row { display: flex; gap: 10px; justify-content: center; align-items: flex-start; width: 100%; }
   .mp-vs { font-family: var(--font-display); font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--optic-yellow); opacity: 0.85; }
   .mp-placeholder { flex: 1; text-align: center; padding: 14px 8px; border: 1.5px dashed rgba(242,244,240,0.25); border-radius: var(--radius-sm); color: var(--line-tape); opacity: 0.65; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
-  .mp-remaining-wrap { padding: 4px 15px 12px; }
-  .mp-remaining-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--resting-slate); margin: 8px 0 6px; }
-  .mp-remaining-list { display: flex; flex-wrap: wrap; gap: 6px; }
-  .mp-remaining-chip { display: flex; align-items: center; gap: 5px; background: var(--surface-raised); border: 1px solid var(--border-soft); border-radius: 999px; padding: 4px 10px 4px 6px; font-size: 12px; font-weight: 600; }
-  .mp-remaining-chip .num { font-family: var(--font-mono); font-size: 10px; color: var(--resting-slate); background: var(--surface-hover); border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
   .lane-paddle-grid { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px; justify-content: center; }
+  @media (max-width: 480px) {
+    .mp-nav-btn { width: 36px; height: 36px; font-size: 17px; }
+  }
 
   /* ── Divider ── */
   .court-line-divider { height: 1px; margin: 16px 0; background: var(--border-soft); }
@@ -898,91 +901,119 @@ function decideNextMatchFromPool(players, teamSize) {
   return decideSkillBalancedTeams(group);
 }
 
-// Simulates the next several matches by repeatedly running the real engine
-// on a shrinking copy of the waiting pool — this is what makes the preview
-// "live": if someone new arrives (added to `waiting` on the next refresh),
-// or a court frees up and the real pool changes, this recomputes fresh
-// each time rather than showing a stale prediction.
-function generateQueuePreviews(waiting, teamSize, maxPreviews) {
+// Simulates EVERY upcoming match by repeatedly running the real engine on a
+// shrinking copy of the waiting pool, until nobody's left — this is what
+// makes the preview "live": if someone new arrives, or a court frees up and
+// the real pool changes, this recomputes fresh each time rather than
+// showing a stale prediction. Every last player ends up in SOME preview —
+// a full 2v2/1v1 group where possible, or a smaller "waiting" group for
+// whatever's left over (1–3 people), never dropped to a plain list.
+function generateQueuePreviews(waiting, teamSize) {
   let pool = waiting.map(p => ({ ...p }));
   const previews = [];
-  for (let i = 0; i < maxPreviews; i++) {
+  while (pool.length > 0) {
     const decision = decideNextMatchFromPool(pool, teamSize);
-    if (!decision) break;
-    const byId = id => pool.find(p => p.id === id);
-    const teamA = decision.teamAPlayerIds.map(byId);
-    const teamB = decision.teamBPlayerIds.map(byId);
-    previews.push({ complete: true, teamA, teamB });
-    const usedIds = new Set([...decision.teamAPlayerIds, ...decision.teamBPlayerIds]);
-    pool = pool.filter(p => !usedIds.has(p.id));
-  }
-  // Partial preview: a known pair (same became_free_at — teammates from the
-  // same finished match) left waiting with nobody yet to complete a group.
-  if (teamSize === 2 && pool.length >= 2) {
-    const front = pool.slice(0, 2);
-    if (front[0].became_free_at === front[1].became_free_at && front[0].last_match_result) {
-      previews.push({ complete: false, teamA: front, resultLabel: front[0].last_match_result });
-      pool = pool.slice(2);
+    if (decision) {
+      const byId = id => pool.find(p => p.id === id);
+      const teamA = decision.teamAPlayerIds.map(byId);
+      const teamB = decision.teamBPlayerIds.map(byId);
+      previews.push({ complete: true, teamA, teamB });
+      const usedIds = new Set([...decision.teamAPlayerIds, ...decision.teamBPlayerIds]);
+      pool = pool.filter(p => !usedIds.has(p.id));
+    } else {
+      // Not enough left for a full group — whoever remains still gets a
+      // card, just a smaller one (2 paddles instead of 4, etc.).
+      const allSameResult = pool.length && pool.every(p => p.last_match_result === pool[0].last_match_result && pool[0].last_match_result);
+      previews.push({ complete: false, teamA: pool, resultLabel: allSameResult ? pool[0].last_match_result : null });
+      pool = [];
     }
   }
-  return { previews, remaining: pool };
+  return previews;
 }
 
-// Builds one match-preview card (complete 2v2/1v1, or a partial known-pair
-// waiting for an opponent). Reuses paddleChip() so a player looks exactly
-// the same here as they do once actually on court.
-function buildPreviewCard(preview, index, teamSize) {
-  const label = preview.complete ? `Next Match #${index + 1}` : 'Waiting';
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Builds one match-preview card (complete 2v2/1v1, or a smaller partial
+// group waiting for more players). Reuses paddleChip() so a player looks
+// exactly the same here as they do once actually on court.
+function buildPreviewCard(preview, pageIndex, totalPages, teamSize) {
+  const label = `${ordinal(pageIndex + 1)} in Stack`;
   let badge = '';
-  if (!preview.complete) {
+  if (!preview.complete && preview.resultLabel) {
     badge = preview.resultLabel === 'won'
-      ? '<span class="mp-badge result-won">Winning Pair</span>'
-      : '<span class="mp-badge result-lost">Losing Pair</span>';
+      ? '<span class="mp-badge result-won">Winning</span>'
+      : '<span class="mp-badge result-lost">Losing</span>';
   }
   const teamARow = `<div class="mp-team-row">${preview.teamA.map(p => paddleChip(p)).join('')}</div>`;
   const teamBRow = preview.complete
     ? `<div class="mp-team-row">${preview.teamB.map(p => paddleChip(p)).join('')}</div>`
-    : `<div class="mp-placeholder">Waiting for ${preview.resultLabel === 'won' ? 'another winning' : 'another losing'} pair…</div>`;
+    : `<div class="mp-placeholder">Waiting for ${preview.teamA.length > 1 ? 'more players' : 'a match'}…</div>`;
   return `<div class="mp-card${preview.complete ? '' : ' partial'}">
-    <div class="mp-card-label"><span>${label}</span>${badge}</div>
+    <div class="mp-card-label"><span>${label}${pageIndex === 0 ? ' <span style="opacity:.7;font-weight:600">(Next)</span>' : ''}</span>${badge}</div>
     <div class="mp-teams">
       ${teamARow}
-      <span class="mp-vs">${teamSize === 1 ? 'VS' : 'VS'}</span>
+      <span class="mp-vs">VS</span>
       ${teamBRow}
     </div>
   </div>`;
 }
 
+// Cached so pagination (‹ ›) never re-runs the engine — decideSkillBalancedTeams
+// uses Math.random() for tie-breaking, so recomputing on every click would
+// make the preview visibly reshuffle each time you navigate. Only a fresh
+// data load (renderUpNextSection) should ever recompute this.
+window._upNextPreviews = [];
+window._upNextPageIndex = 0;
+
 function renderUpNextSection(waiting) {
   const el = document.getElementById('upNextSection');
   if (!el) return;
   if (!waiting.length) {
+    window._upNextPreviews = [];
     el.innerHTML = `<div class="card" style="text-align:center;padding:24px;color:var(--resting-slate);font-size:13px;">No one in the queue right now</div>`;
     return;
   }
   const teamSize = currentSession?.format === 'singles' ? 1 : 2;
-  const courtCount = currentSession?.court_count || 1;
-  // Preview as many upcoming matches as there are courts (a reasonable
-  // "how far ahead can I see" depth), capped so the section doesn't sprawl.
-  const maxPreviews = Math.max(1, Math.min(4, courtCount));
-  const { previews, remaining } = generateQueuePreviews(waiting, teamSize, maxPreviews);
-
-  const cardsHtml = previews.map((p, i) => buildPreviewCard(p, i, teamSize)).join('');
-  const remainingHtml = remaining.length ? `
-    <div class="mp-remaining-wrap">
-      <div class="mp-remaining-label">Then queued</div>
-      <div class="mp-remaining-list">
-        ${remaining.map((p, i) => `<span class="mp-remaining-chip"><span class="num">${previews.reduce((n,pv)=>n+pv.teamA.length+(pv.teamB?pv.teamB.length:0),0) + i + 1}</span>${escapeHtml(p.name)}</span>`).join('')}
-      </div>
-    </div>` : '';
+  window._upNextPreviews = generateQueuePreviews(waiting, teamSize);
+  window._upNextPageIndex = 0;
+  window._upNextTeamSize = teamSize;
+  window._upNextWaitingCount = waiting.length;
 
   el.innerHTML = `
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px;">
       <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">${waiting.length}</span></div>
-      <div class="mp-grid">${cardsHtml}</div>
-      ${remainingHtml}
+      <div class="mp-pager" id="mpPager"></div>
     </div>
   `;
+  renderUpNextCard();
+}
+
+// Lightweight re-render — just the pager card + arrow states. Never
+// recomputes the previews, so navigating never re-shuffles a tied split.
+function renderUpNextCard() {
+  const pager = document.getElementById('mpPager');
+  if (!pager) return;
+  const previews = window._upNextPreviews;
+  const idx = window._upNextPageIndex;
+  const total = previews.length;
+  if (!total) { pager.innerHTML = ''; return; }
+  const cardHtml = buildPreviewCard(previews[idx], idx, total, window._upNextTeamSize);
+  pager.innerHTML = `
+    <button class="mp-nav-btn" onclick="navigateUpNext(-1)" ${idx === 0 ? 'disabled' : ''} aria-label="Previous">‹</button>
+    <div class="mp-pager-card">${cardHtml}</div>
+    <button class="mp-nav-btn" onclick="navigateUpNext(1)" ${idx >= total - 1 ? 'disabled' : ''} aria-label="Next">›</button>
+  `;
+}
+
+function navigateUpNext(direction) {
+  const total = window._upNextPreviews.length;
+  const next = window._upNextPageIndex + direction;
+  if (next < 0 || next >= total) return;
+  window._upNextPageIndex = next;
+  renderUpNextCard();
 }
 
 function renderQueues(players) {
