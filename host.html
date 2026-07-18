@@ -332,9 +332,12 @@
   .card h2 { font-size: 14px; margin: 0 0 14px; letter-spacing: 0.03em; }
 
   /* ── Session list ── */
-  .session-row { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--border-soft); }
+  .session-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border-soft); }
   .session-row:last-child { border-bottom: none; }
   .session-row .meta { font-size: 12px; color: var(--bench-slate); margin-top: 2px; }
+  .session-row > div:first-child { flex: 1 1 180px; min-width: 0; }
+  .session-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 0 1 auto; }
+  .session-actions > a, .session-actions > button { flex: 0 0 auto; white-space: nowrap; }
   .ref-code-pill { background: var(--court-paint); color: rgba(255,255,255,0.88); font-weight: 700; font-size: 10px; padding: 3px 8px; border-radius: var(--radius-xs); letter-spacing: 0.07em; font-family: var(--font-mono); }
   .finish-session-btn { background: var(--fault-coral); color: white; border: none; padding: 9px 16px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; min-height: 40px; }
 
@@ -1899,7 +1902,7 @@ async function renderSessionList() {
               · ${new Date(s.created_at).toLocaleDateString()}
             </div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;">
+          <div class="session-actions">
             ${s.session_type === 'tournament'
               ? `<a href="tournament.html?session=${s.id}" style="background:rgba(215,242,61,0.15);color:var(--optic-yellow);border:1px solid rgba(215,242,61,0.3);padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;min-height:40px;">🏆 Manage</a>`
               : `<button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;" onclick="openSession('${s.id}')">Open</button>`}
@@ -1919,7 +1922,7 @@ async function renderSessionList() {
             <div style="font-weight:700;">${escapeHtml(s.name)}${sessionTypeBadge(s)}</div>
             <div class="meta"><span class="ref-code-pill mono">${s.reference_code || '—'}</span> · finished ${s.ended_at ? new Date(s.ended_at).toLocaleDateString() : ''}</div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;">
+          <div class="session-actions">
             <button onclick="startHostAgainFlow('${s.id}')" style="background:var(--surface-raised);color:var(--ink);border:1px solid var(--border-soft);padding:8px 14px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;">Host Again</button>
             <button onclick="promptDeleteSession('${s.id}','${escapeHtml(s.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Delete permanently">🗑</button>
           </div>
