@@ -319,6 +319,7 @@
   .mp-remaining-list { display: flex; flex-wrap: wrap; gap: 6px; }
   .mp-remaining-chip { display: flex; align-items: center; gap: 5px; background: var(--surface-raised); border: 1px solid var(--border-soft); border-radius: 999px; padding: 4px 10px 4px 6px; font-size: 12px; font-weight: 600; }
   .mp-remaining-chip .num { font-family: var(--font-mono); font-size: 10px; color: var(--resting-slate); background: var(--surface-hover); border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
+  .lane-paddle-grid { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px; justify-content: center; }
 
   /* ── Divider ── */
   .court-line-divider { height: 1px; margin: 16px 0; background: var(--border-soft); }
@@ -1007,22 +1008,22 @@ function renderQueues(players) {
   const expected = players.filter(p => p.status === 'expected');
 
   const restingItems = resting.length
-    ? resting.map(p => `<li class="lane-item"><span>${escapeHtml(p.name)}</span></li>`).join('')
+    ? `<div class="lane-paddle-grid">${resting.map(p => paddleChip(p)).join('')}</div>`
     : `<div class="lane-empty">Nobody resting</div>`;
 
   const expectedItems = expected.length
-    ? expected.map(p => `<li class="lane-item"><span>${escapeHtml(p.name)}</span><span class="lane-pos" style="color:var(--resting-slate);font-size:10px;">not arrived</span></li>`).join('')
+    ? `<div class="lane-paddle-grid">${expected.map(p => paddleChip(p)).join('')}</div>`
     : `<div class="lane-empty">Everyone's here!</div>`;
 
   grid.innerHTML = `
     <div class="lane resting">
       <div class="lane-header"><span>Resting</span><span class="count">${resting.length}</span></div>
-      <ul class="lane-list">${restingItems}</ul>
+      ${restingItems}
     </div>
     ${expected.length ? `
     <div class="lane expected">
       <div class="lane-header"><span>Expected</span><span class="count">${expected.length}</span></div>
-      <ul class="lane-list">${expectedItems}</ul>
+      ${expectedItems}
     </div>` : ''}
   `;
 
