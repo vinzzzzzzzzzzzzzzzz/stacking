@@ -619,23 +619,24 @@ async function generateBracket(type){
     }
     BRACKET=br;
 
-    // Round robin — every team plays every other team ONCE WITHIN ITS GROUP.
-    // Matches are PRE-FILLED at generation time (no dropdown seeding step
-    // during scheduling itself) since the pairing is fully determined once
-    // we know which team occupies which position.
-    // Automated: shuffle for unpredictable grouping/pairing.
-    // Manual: use the exact order the host assigned via the slot picker.
-    const seedMode = window._seedMode || 'automated';
-    let orderedIds;
-    if(seedMode==='manual' && Array.isArray(window._rrManualOrder) && window._rrManualOrder.length===n){
-      orderedIds = window._rrManualOrder.slice();
-    }else{
-      orderedIds = TEAMS.map(t=>t.id).sort(()=>Math.random()-0.5);
-    }
-    const groups=splitIntoGroups(orderedIds,groupCount);
+    // Group membership is ALREADY decided by this point — either the host
+    // filled the grouped slot picker, or proceedAfterTeamMode() shuffled
+    // it immediately for automated mode. Either way window._rrManualGroups
+    // is the single source of truth here, so it never gets re-randomized
+    // out from under a manual schedule the host may have built against it.
+    const groups = Array.isArray(window._rrManualGroups) && window._rrManualGroups.flat().length===n
+      ? window._rrManualGroups.map(g=>g.slice())
+      : splitIntoGroups(TEAMS.map(t=>t.id).sort(()=>Math.random()-0.5), groupCount);
+
+    // Schedule (who plays whom, which round): automated circle-method, or
+    // the host's own manually-built round-by-round matchups — e.g. to
+    // match a schedule they've already posted elsewhere.
+    const scheduleMode = window._scheduleMode || 'automated';
     const rows=[];
     groups.forEach((groupTeamIds,gi)=>{
-      const pairings=buildRoundRobinPairings(groupTeamIds);
+      const pairings = (scheduleMode==='manual' && Array.isArray(window._rrManualSchedule) && window._rrManualSchedule[gi])
+        ? window._rrManualSchedule[gi]
+        : buildRoundRobinPairings(groupTeamIds);
       for(const p of pairings){
         rows.push({
           bracket_id:br.id,round:p.round,position:p.position,best_of:1,status:'pending',
@@ -1485,7 +1486,7 @@ function confirmGenerate(type){
         </p>
         <div class="ma">
           <button class="no" onclick="CM()">Cancel</button>
-          <button class="ok-y" onclick="window._rrGroupCount=document.getElementById('rrGroupCountSelect').value;window._seedMode=document.getElementById('seedModeSelect').value;CM();window._seedMode==='manual'?startRRManualSeeding():doGenerate('round_robin')">Continue →</button>
+          <button class="ok-y" onclick="window._rrGroupCount=document.getElementById('rrGroupCountSelect').value;window._seedMode=document.getElementById('seedModeSelect').value;CM();proceedAfterTeamMode()">Continue →</button>
         </div>
       </div>
     </div>`);
@@ -1510,72 +1511,224 @@ function confirmGenerate(type){
   </div>`);
 }
 
-// ── Round Robin — Manual seeding UI ──
-// Shows N numbered slots (grouped visually to match how splitIntoGroups
-// will actually distribute them) and lets the host pick which team fills
-// each one — same "already-picked teams disappear from other dropdowns"
-// behavior as single elimination's R1 assignment.
-function computeSlotGroupLabels(n,groupCount){
-  const labels=new Array(n);
-  let g=0,dir=1;
-  for(let i=0;i<n;i++){
-    labels[i]=g+1;
-    if(groupCount>1){
-      g+=dir;
-      if(g===groupCount){g=groupCount-1;dir=-1;}
-      else if(g<0){g=0;dir=1;}
-    }
+// After the group-count + team-seeding-mode modal closes, either show the
+// grouped slot picker (manual) or shuffle right now (automated) — either
+// way, window._rrManualGroups is populated before the schedule-mode
+// question, so "manual schedule" always has real group membership to work
+// with regardless of how those groups were formed.
+function proceedAfterTeamMode(){
+  if(window._seedMode==='manual'){
+    startRRManualSeeding();
+  }else{
+    const groupCount=Math.max(1,Math.min(8,parseInt(window._rrGroupCount,10)||1));
+    const orderedIds=TEAMS.map(t=>t.id).sort(()=>Math.random()-0.5);
+    window._rrManualGroups=splitIntoGroups(orderedIds,groupCount);
+    confirmScheduleMode();
   }
-  return labels;
 }
+
+// ── Round Robin — Manual TEAM seeding UI ──
+// Shows one clean section per group (Group A's slots together, then Group
+// B's, etc.) instead of interleaving them — much easier to scan than
+// numbering straight through a snake-distributed flat list.
 function startRRManualSeeding(){
   const n=TEAMS.length;
-  window._rrManualOrder = new Array(n).fill(null);
+  const groupCount=Math.max(1,Math.min(8,parseInt(window._rrGroupCount,10)||1));
+  // Even split, e.g. 10 teams / 3 groups → 4,3,3 — first groups absorb the remainder.
+  const base=Math.floor(n/groupCount), extra=n%groupCount;
+  window._rrManualGroups = Array.from({length:groupCount},(_,i)=>
+    new Array(base+(i<extra?1:0)).fill(null));
   renderRRManualSeedingUI();
 }
 function renderRRManualSeedingUI(){
-  const n=TEAMS.length;
-  const groupCount=Math.max(1,Math.min(8,parseInt(window._rrGroupCount,10)||1));
-  const groupLabels=computeSlotGroupLabels(n,groupCount);
-  const order=window._rrManualOrder||new Array(n).fill(null);
-  const usedIds=new Set(order.filter(Boolean));
-  const filledCount=order.filter(Boolean).length;
+  const groups=window._rrManualGroups;
+  const usedIds=new Set(groups.flat().filter(Boolean));
+  const totalSlots=groups.reduce((n,g)=>n+g.length,0);
+  const filledCount=groups.reduce((n,g)=>n+g.filter(Boolean).length,0);
 
-  let slotsHtml='';
-  for(let i=0;i<n;i++){
-    const currentId=order[i];
-    const options=TEAMS.filter(t=>t.id===currentId||!usedIds.has(t.id))
-      .map(t=>`<option value="${t.id}" ${t.id===currentId?'selected':''}>${esc(t.team_name)}</option>`).join('');
-    const groupTag=groupCount>1?`<span style="font-size:9px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;margin-right:6px">GROUP ${String.fromCharCode(64+groupLabels[i])}</span>`:'';
-    slotsHtml+=`<div class="field" style="margin-bottom:8px">
-      <label>${groupTag}Slot ${i+1}</label>
-      <select onchange="assignRRManualSlot(${i},this.value)">
-        <option value="">— Select team —</option>
-        ${options}
-      </select>
+  const groupSections=groups.map((slots,gi)=>{
+    const label=groups.length>1?`GROUP ${String.fromCharCode(65+gi)}`:'TEAMS';
+    const rows=slots.map((currentId,si)=>{
+      const options=TEAMS.filter(t=>t.id===currentId||!usedIds.has(t.id))
+        .map(t=>`<option value="${t.id}" ${t.id===currentId?'selected':''}>${esc(t.team_name)}</option>`).join('');
+      return `<div class="field" style="margin-bottom:8px">
+        <label>Slot ${si+1}</label>
+        <select onchange="assignRRManualSlot(${gi},${si},this.value)">
+          <option value="">— Select team —</option>
+          ${options}
+        </select>
+      </div>`;
+    }).join('');
+    return `<div style="margin-bottom:18px;padding:14px;background:var(--surface-raised);border-radius:var(--radius-sm);border:1px solid var(--border-soft)">
+      <div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.06em;margin-bottom:10px">${label}</div>
+      ${rows}
     </div>`;
-  }
+  }).join('');
 
   document.getElementById('tabContent').innerHTML=`
     <div class="card">
       <h2 style="margin-bottom:6px">Manually Assign Teams</h2>
       <p style="font-size:12px;color:var(--bench-slate);margin:0 0 4px">
         Pick which team fills each slot. A team can only be placed once — it disappears from the other dropdowns once chosen.
-        ${groupCount>1?' Slots are pre-labeled by group so you can control exactly who lands where.':''}
       </p>
-      <p style="font-size:12px;font-weight:700;color:${filledCount===n?'var(--winner-green)':'var(--bench-slate)'};margin:0 0 14px">${filledCount} of ${n} slots filled</p>
-      ${slotsHtml}
+      <p style="font-size:12px;font-weight:700;color:${filledCount===totalSlots?'var(--winner-green)':'var(--bench-slate)'};margin:0 0 14px">${filledCount} of ${totalSlots} slots filled</p>
+      ${groupSections}
       <div style="display:flex;gap:8px;margin-top:6px">
         <button class="btn btn-ghost" onclick="render()">Cancel</button>
-        <button class="btn btn-yellow" ${filledCount<n?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="doGenerate('round_robin')">Generate Schedule →</button>
+        <button class="btn btn-yellow" ${filledCount<totalSlots?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="confirmScheduleMode()">Continue →</button>
       </div>
     </div>
   `;
 }
-function assignRRManualSlot(index,teamId){
-  if(!window._rrManualOrder)window._rrManualOrder=new Array(TEAMS.length).fill(null);
-  window._rrManualOrder[index]=teamId||null;
+function assignRRManualSlot(groupIndex,slotIndex,teamId){
+  window._rrManualGroups[groupIndex][slotIndex]=teamId||null;
   renderRRManualSeedingUI();
+}
+
+// ── Schedule mode — asked AFTER group membership is settled (whichever
+// way that happened). Independent choice from team seeding: teams can be
+// manual+schedule automated, teams automated+schedule manual, or any
+// other combination. ──
+function confirmScheduleMode(){
+  M(`<div class="overlay" onclick="if(event.target===this)CM()">
+    <div class="modal">
+      <h2>Automate the Schedule, or Assign It Yourself?</h2>
+      <p class="modal-sub">Groups are set. Now decide how the round-by-round matchups get built.</p>
+      <div class="field"><label>Schedule</label>
+        <select id="scheduleModeSelect">
+          <option value="automated">🎲 Automated — standard round-robin rotation, builds itself instantly</option>
+          <option value="manual">✋ Manual — you pick who plays whom in each round (e.g. matching a schedule you've already posted)</option>
+        </select>
+      </div>
+      <div class="ma">
+        <button class="no" onclick="CM()">Back</button>
+        <button class="ok-y" onclick="window._scheduleMode=document.getElementById('scheduleModeSelect').value;CM();window._scheduleMode==='manual'?startRRManualSchedule():doGenerate('round_robin')">Continue →</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+// ── Round Robin — Manual SCHEDULE picker ──
+// Lets the host build the exact round-by-round matchups themselves,
+// matching a schedule they've already posted elsewhere. One tab per
+// group; each round shows its match slots as two team dropdowns, filtered
+// to prevent a team appearing twice in the same round. A full-schedule
+// validation pass (below) catches the one thing dropdown filtering can't:
+// the same pairing being scheduled more than once across different rounds.
+function startRRManualSchedule(){
+  const groups=window._rrManualGroups;
+  window._rrManualSchedule = groups.map(groupTeamIds=>{
+    const k=groupTeamIds.length;
+    if(k<2)return[];
+    const roundsNeeded = k%2===0?k-1:k;
+    const matchesPerRound = Math.floor(k/2);
+    const slots=[];
+    for(let r=1;r<=roundsNeeded;r++)
+      for(let p=1;p<=matchesPerRound;p++)
+        slots.push({round:r,position:p,entry_a_id:null,entry_b_id:null});
+    return slots;
+  });
+  window._rrScheduleGroupTab=0;
+  renderRRManualScheduleUI();
+}
+
+function validateManualSchedule(schedule,groups){
+  const errors=[];
+  schedule.forEach((slots,gi)=>{
+    const label=groups.length>1?`Group ${String.fromCharCode(65+gi)}: `:'';
+    const byRound={};
+    slots.forEach(s=>{(byRound[s.round]=byRound[s.round]||[]).push(s)});
+    Object.entries(byRound).forEach(([r,ms])=>{
+      const seen=new Set();
+      ms.forEach(s=>{
+        [s.entry_a_id,s.entry_b_id].filter(Boolean).forEach(id=>{
+          if(seen.has(id))errors.push(`${label}Round ${r} — a team is scheduled twice.`);
+          seen.add(id);
+        });
+      });
+    });
+    const pairSeen=new Set();
+    slots.forEach(s=>{
+      if(s.entry_a_id&&s.entry_b_id){
+        const key=[s.entry_a_id,s.entry_b_id].sort().join('|');
+        if(pairSeen.has(key))errors.push(`${label}Two teams are scheduled to play each other more than once.`);
+        pairSeen.add(key);
+      }
+    });
+  });
+  return [...new Set(errors)]; // de-dupe repeated identical warnings
+}
+
+function renderRRManualScheduleUI(){
+  const groups=window._rrManualGroups;
+  const schedule=window._rrManualSchedule;
+  const gi=window._rrScheduleGroupTab||0;
+  const groupTeamIds=groups[gi];
+  const groupTeams=groupTeamIds.map(id=>TEAMS.find(t=>t.id===id)).filter(Boolean);
+  const slots=schedule[gi]||[];
+
+  const groupTabsHtml = groups.length>1 ? `<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+    ${groups.map((g,i)=>{
+      const gFilled=schedule[i].filter(s=>s.entry_a_id&&s.entry_b_id).length;
+      const gTotal=schedule[i].length;
+      return `<button class="btn ${i===gi?'btn-yellow':'btn-ghost'} btn-sm" onclick="window._rrScheduleGroupTab=${i};renderRRManualScheduleUI()">Group ${String.fromCharCode(65+i)} (${gFilled}/${gTotal})</button>`;
+    }).join('')}
+  </div>` : '';
+
+  const byRound={};
+  slots.forEach(s=>{(byRound[s.round]=byRound[s.round]||[]).push(s)});
+
+  const roundsHtml=Object.keys(byRound).sort((a,b)=>a-b).map(r=>{
+    const ms=byRound[r];
+    return `<div style="margin-bottom:14px">
+      <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--bench-slate);letter-spacing:.06em;margin-bottom:6px">Round ${r}</div>
+      ${ms.map(s=>{
+        const usedInRound=new Set(ms.filter(x=>x!==s).flatMap(x=>[x.entry_a_id,x.entry_b_id]).filter(Boolean));
+        const optsFor=curId=>groupTeams.filter(t=>t.id===curId||!usedInRound.has(t.id))
+          .map(t=>`<option value="${t.id}" ${t.id===curId?'selected':''}>${esc(t.team_name)}</option>`).join('');
+        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <select style="flex:1" onchange="assignScheduleSlot(${gi},${s.round},${s.position},'entry_a_id',this.value)">
+            <option value="">— Team —</option>${optsFor(s.entry_a_id)}
+          </select>
+          <span style="font-size:10px;color:var(--bench-slate);font-weight:700;flex-shrink:0">VS</span>
+          <select style="flex:1" onchange="assignScheduleSlot(${gi},${s.round},${s.position},'entry_b_id',this.value)">
+            <option value="">— Team —</option>${optsFor(s.entry_b_id)}
+          </select>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+
+  const errors=validateManualSchedule(schedule,groups);
+  const totalSlots=schedule.reduce((n,g)=>n+g.length,0);
+  const filledTotal=schedule.reduce((n,g)=>n+g.filter(s=>s.entry_a_id&&s.entry_b_id).length,0);
+  const allFilled=filledTotal===totalSlots;
+  const hasErrors=errors.length>0;
+
+  document.getElementById('tabContent').innerHTML=`
+    <div class="card">
+      <h2 style="margin-bottom:6px">Manually Assign Schedule</h2>
+      <p style="font-size:12px;color:var(--bench-slate);margin:0 0 10px">
+        Pick who plays whom in each round. Every team must face every other team in their group exactly once.
+        Dropdowns block a team from appearing twice in the same round — double-check the round order matches what you've already posted.
+      </p>
+      ${groupTabsHtml}
+      <p style="font-size:12px;font-weight:700;color:${allFilled&&!hasErrors?'var(--winner-green)':'var(--bench-slate)'};margin:0 0 10px">${filledTotal} of ${totalSlots} match slots filled${hasErrors?` · ${errors.length} issue${errors.length>1?'s':''} found`:''}</p>
+      ${hasErrors?`<div style="background:rgba(255,122,92,.12);border:1px solid rgba(255,122,92,.3);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:12px">
+        ${errors.map(e=>`<div style="font-size:12px;color:var(--fault-coral);margin-bottom:3px">⚠ ${esc(e)}</div>`).join('')}
+      </div>`:''}
+      ${roundsHtml}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-ghost" onclick="render()">Cancel</button>
+        <button class="btn btn-yellow" ${(!allFilled||hasErrors)?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="doGenerate('round_robin')">Generate Schedule →</button>
+      </div>
+    </div>
+  `;
+}
+function assignScheduleSlot(groupIndex,round,position,field,value){
+  const slot=window._rrManualSchedule[groupIndex].find(s=>s.round===round&&s.position===position);
+  if(slot)slot[field]=value||null;
+  renderRRManualScheduleUI();
 }
 
 async function doGenerate(type){
