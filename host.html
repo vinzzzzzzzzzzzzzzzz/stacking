@@ -1296,12 +1296,30 @@ const SessionAPI = (() => {
    * keep their 'left' status regardless of the decision passed here — the
    * decision modal initialises them as 'left' and locks that choice.
    */
-  async function applyQueuePlacement(courtId, sessionId, decisions) {
+  async function applyQueuePlacement(courtId, sessionId, decisions, winnerTeamId, loserTeamId) {
     const nowMs = Date.now();
     // Winners rejoin 1ms ahead of losers — preserves FIFO ordering within
     // the returning group (see original comment in this function).
     const tsWinner = new Date(nowMs).toISOString();
     const tsLoser  = new Date(nowMs + 1).toISOString();
+
+    // Idempotency guard: if this exact court no longer has THESE two teams
+    // on it, someone already processed this disposition (a duplicate
+    // submit, or a retry after a misleading error) — bail out instead of
+    // deactivating whatever team happens to be on the court NOW. That team
+    // could belong to a completely different, already-in-progress match;
+    // deactivating it without resetting ITS players' status is exactly
+    // what orphans people at status='playing' with no way back to the
+    // queue and no disposition ever offered to them.
+    if (winnerTeamId && loserTeamId) {
+      const { data: courtNow } = await supabaseClient.from('courts')
+        .select('team_a_id, team_b_id').eq('id', courtId).single();
+      const stillOurs = courtNow && (
+        (courtNow.team_a_id === winnerTeamId && courtNow.team_b_id === loserTeamId) ||
+        (courtNow.team_a_id === loserTeamId  && courtNow.team_b_id === winnerTeamId)
+      );
+      if (!stillOurs) return; // already handled by an earlier call — nothing more to do
+    }
 
     // Recent-opponent tracking: each player's "who did I just face" list is
     // the OTHER side's player ids from this match — used by the stacking
@@ -1341,17 +1359,63 @@ const SessionAPI = (() => {
       }
     }
 
-    // Deactivate the teams and free the court.
-    const { data: court } = await supabaseClient.from('courts')
-      .select('team_a_id, team_b_id').eq('id', courtId).single();
-    if (court) {
-      await supabaseClient.from('teams').update({ is_active: false })
-        .in('id', [court.team_a_id, court.team_b_id]);
+    // Deactivate the EXACT teams from THIS match — never re-query the
+    // court's current team ids for this. By the time this line runs, the
+    // court could already have been reassigned to a brand new match (see
+    // the idempotency guard above); re-querying here was the original bug.
+    const teamIdsToDeactivate = [winnerTeamId, loserTeamId].filter(Boolean);
+    if (teamIdsToDeactivate.length) {
+      await supabaseClient.from('teams').update({ is_active: false }).in('id', teamIdsToDeactivate);
+    } else {
+      // Backward-compatible fallback if this was ever called without team
+      // ids — keeps old behavior rather than silently doing nothing.
+      const { data: court } = await supabaseClient.from('courts')
+        .select('team_a_id, team_b_id').eq('id', courtId).single();
+      if (court) {
+        await supabaseClient.from('teams').update({ is_active: false })
+          .in('id', [court.team_a_id, court.team_b_id]);
+      }
     }
     await supabaseClient.from('courts')
       .update({ status: 'open', team_a_id: null, team_b_id: null, game_started_at: null })
       .eq('id', courtId);
-    await tryRefillCourt(courtId, sessionId);
+
+    // A lost race here (a concurrent realtime-triggered refill claims this
+    // court first) is NOT a failure of the disposition itself — the player
+    // updates and team deactivation above already succeeded. Swallow it so
+    // the host never sees a misleading "something went wrong, try again"
+    // that would tempt a duplicate submit — which is exactly what causes
+    // orphaned players if it ever gets through.
+    try { await tryRefillCourt(courtId, sessionId); } catch (_) {}
+
+    // Safety net: clean up any players stuck at status='playing' with no
+    // live court actually linked to them — whatever the cause, this keeps
+    // the roster accurate without the host having to manually intervene.
+    try { await reconcileOrphanedPlayers(sessionId); } catch (_) {}
+  }
+
+  // Finds players stuck at status='playing' who aren't actually on ANY
+  // live court's team right now, and returns them to the waiting queue.
+  // Acts as a backstop regardless of exactly how a player got orphaned.
+  async function reconcileOrphanedPlayers(sessionId) {
+    const [{ data: playingPlayers }, { data: liveCourts }] = await Promise.all([
+      supabaseClient.from('players').select('id').eq('session_id', sessionId).eq('status', 'playing'),
+      supabaseClient.from('courts').select('team_a_id, team_b_id').eq('session_id', sessionId).eq('status', 'in_progress'),
+    ]);
+    if (!playingPlayers || !playingPlayers.length) return 0;
+    const liveTeamIds = (liveCourts || []).flatMap(c => [c.team_a_id, c.team_b_id]).filter(Boolean);
+    let trulyPlayingIds = new Set();
+    if (liveTeamIds.length) {
+      const { data: liveTeams } = await supabaseClient.from('teams').select('player_ids').in('id', liveTeamIds);
+      trulyPlayingIds = new Set((liveTeams || []).flatMap(t => t.player_ids));
+    }
+    const orphaned = playingPlayers.filter(p => !trulyPlayingIds.has(p.id));
+    if (orphaned.length) {
+      await supabaseClient.from('players')
+        .update({ status: 'waiting', became_free_at: new Date().toISOString() })
+        .in('id', orphaned.map(p => p.id));
+    }
+    return orphaned.length;
   }
 
   /**
@@ -1646,6 +1710,42 @@ const SessionAPI = (() => {
     return inserted;
   }
 
+  // Tournament equivalent of the above — teams live in bracket_entries, not
+  // the open-play players table, so "Host Again" for a tournament needs its
+  // own carry-over path entirely.
+  async function getTournamentTeams(sessionId) {
+    const { data, error } = await supabaseClient.from('bracket_entries')
+      .select('*').eq('session_id', sessionId).eq('is_bye', false).order('seed', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+  async function carryTeamsToNewSession(newSessionId, teamRows) {
+    const inserted = [];
+    for (const t of teamRows) {
+      const row = {
+        session_id: newSessionId, is_bye: false,
+        team_name: t.team_name, player1_name: t.player1_name || null, player2_name: t.player2_name || null,
+      };
+      let { data, error } = await supabaseClient.from('bracket_entries').insert(row).select().single();
+      if (error && /logo_url|player1_photo|player2_photo/.test(error.message || '')) {
+        // Shouldn't normally trigger since we're not sending those fields,
+        // but guard anyway for consistency with the rest of the codebase.
+        ({ data, error } = await supabaseClient.from('bracket_entries')
+          .insert({ session_id: newSessionId, is_bye: false, team_name: t.team_name }).select().single());
+      }
+      if (error) throw error;
+      // Carry photos/logo separately so a missing-column error on THIS
+      // update never blocks the team from being created in the first place.
+      if (data && (t.logo_url || t.player1_photo || t.player2_photo)) {
+        await supabaseClient.from('bracket_entries').update({
+          logo_url: t.logo_url || null, player1_photo: t.player1_photo || null, player2_photo: t.player2_photo || null,
+        }).eq('id', data.id).then(({ error: e2 }) => { if (e2 && !/logo_url|player1_photo|player2_photo/.test(e2.message||'')) throw e2; });
+      }
+      if (data) inserted.push(data);
+    }
+    return inserted;
+  }
+
   /**
    * Permanently delete a completed session and all its data.
    * Child tables are deleted in dependency order before the session row.
@@ -1714,11 +1814,11 @@ const SessionAPI = (() => {
     verifySessionPassword, finishSession, deleteSession, getMatchCount,
     preRegisterPlayer, updatePlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
-    createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue,
+    createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue, reconcileOrphanedPlayers,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
     correctMatchResult, getRecentMatches,
-    carryPlayersToNewSession,
+    carryPlayersToNewSession, getTournamentTeams, carryTeamsToNewSession,
   };
 })();
 window.SessionAPI = SessionAPI;
@@ -2251,8 +2351,38 @@ async function handleFinishSession() {
 
 async function startHostAgainFlow(oldSessionId) {
   const oldSession = await SessionAPI.getSession(oldSessionId);
-  const oldPlayers = await SessionAPI.getPlayers(oldSessionId);
+  const isTournament = oldSession.session_type === 'tournament';
 
+  if (isTournament) {
+    const oldTeams = await SessionAPI.getTournamentTeams(oldSessionId);
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-backdrop" id="hostAgainModal">
+        <div class="modal-box">
+          <h2>Host Again — Tournament</h2>
+          <p class="modal-sub">New tournament based on "${escapeHtml(oldSession.name)}". Select teams to carry over — they'll be ready to use in the new tournament's Teams tab.</p>
+          <div class="field"><label>New Session Name</label><input type="text" id="hostAgainName" value="${escapeHtml(oldSession.name)} (2)"></div>
+          <div class="field"><label>Number of Courts</label><input type="number" id="hostAgainCourts" value="${oldSession.court_count}" min="1" max="20"></div>
+          <p style="font-size:12px;font-weight:700;margin:14px 0 8px;">Teams to carry over:</p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;" id="hostAgainChecklist">
+            ${oldTeams.map(t => `
+              <div class="player-check selected" style="border:1.5px solid var(--border-soft);padding:7px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;user-select:none;background:var(--court-green);color:white;border-color:var(--court-green);"
+                data-id="${t.id}" data-name="${escapeHtml(t.team_name)}" data-p1="${escapeHtml(t.player1_name||'')}" data-p2="${escapeHtml(t.player2_name||'')}"
+                data-logo="${escapeHtml(t.logo_url||'')}" data-p1photo="${escapeHtml(t.player1_photo||'')}" data-p2photo="${escapeHtml(t.player2_photo||'')}"
+                onclick="this.classList.toggle('selected');this.style.background=this.classList.contains('selected')?'var(--court-green)':'var(--surface-hover)';this.style.color=this.classList.contains('selected')?'white':'var(--ink)'">${escapeHtml(t.team_name)}</div>
+            `).join('') || '<p style="font-size:12px;color:var(--resting-slate);">No teams.</p>'}
+          </div>
+          <div class="auth-error" id="hostAgainError"></div>
+          <div class="confirm-actions">
+            <button class="btn-no" onclick="document.getElementById('hostAgainModal').remove()">Cancel</button>
+            <button class="btn-yes" onclick="confirmHostAgain('${oldSessionId}')">Create &amp; Open</button>
+          </div>
+        </div>
+      </div>
+    `);
+    return;
+  }
+
+  const oldPlayers = await SessionAPI.getPlayers(oldSessionId);
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="hostAgainModal">
       <div class="modal-box">
@@ -2269,7 +2399,7 @@ async function startHostAgainFlow(oldSessionId) {
         <div class="auth-error" id="hostAgainError"></div>
         <div class="confirm-actions">
           <button class="btn-no" onclick="document.getElementById('hostAgainModal').remove()">Cancel</button>
-          <button class="btn-yes" onclick="confirmHostAgain('${oldSessionId}')">Create & Open</button>
+          <button class="btn-yes" onclick="confirmHostAgain('${oldSessionId}')">Create &amp; Open</button>
         </div>
       </div>
     </div>
@@ -2277,19 +2407,35 @@ async function startHostAgainFlow(oldSessionId) {
 }
 
 async function confirmHostAgain(oldSessionId) {
-  const name = document.getElementById('hostAgainName').value.trim() || 'Open Play';
+  const name = document.getElementById('hostAgainName').value.trim() || 'Session';
   const courtCount = parseInt(document.getElementById('hostAgainCourts').value, 10) || 1;
   const errorEl = document.getElementById('hostAgainError');
 
   const oldSession = await SessionAPI.getSession(oldSessionId);
+  const isTournament = oldSession.session_type === 'tournament';
   const chips = [...document.querySelectorAll('#hostAgainChecklist .player-check.selected')];
-  const carryPlayers = chips.map(el => ({ name: el.dataset.name, skill_tier: el.dataset.tier }));
 
   try {
     const newSession = await SessionAPI.createSession({ name, format: oldSession.format, courtCount, sessionType: oldSession.session_type || 'open_play' });
-    if (carryPlayers.length > 0) await SessionAPI.carryPlayersToNewSession(newSession.id, carryPlayers);
-    document.getElementById('hostAgainModal').remove();
-    await openSession(newSession.id);
+
+    if (isTournament) {
+      const carryTeams = chips.map(el => ({
+        team_name: el.dataset.name, player1_name: el.dataset.p1 || null, player2_name: el.dataset.p2 || null,
+        logo_url: el.dataset.logo || null, player1_photo: el.dataset.p1photo || null, player2_photo: el.dataset.p2photo || null,
+      }));
+      if (carryTeams.length > 0) await SessionAPI.carryTeamsToNewSession(newSession.id, carryTeams);
+      document.getElementById('hostAgainModal').remove();
+      // Tournament sessions are managed on their own page, not inside the
+      // open-play console — this is the fix: previously every "Host Again"
+      // routed through openSession() (the open-play roster/arrive/shuffle
+      // UI) regardless of what type the new session actually was.
+      window.location.href = `tournament.html?session=${newSession.id}`;
+    } else {
+      const carryPlayers = chips.map(el => ({ name: el.dataset.name, skill_tier: el.dataset.tier }));
+      if (carryPlayers.length > 0) await SessionAPI.carryPlayersToNewSession(newSession.id, carryPlayers);
+      document.getElementById('hostAgainModal').remove();
+      await openSession(newSession.id);
+    }
   } catch (err) { errorEl.textContent = err.message; }
 }
 
@@ -2349,6 +2495,10 @@ let _queueStarted = false;
 // ROSTER TAB
 // ============================================================
 async function rosterTabHtml() {
+  // Self-healing check — catches any player stuck at status='playing'
+  // with no live court actually linked to them, regardless of cause.
+  try { await SessionAPI.reconcileOrphanedPlayers(activeSession.id); } catch (_) {}
+
   const players = await SessionAPI.getAllPlayersIncludingLeft(activeSession.id);
   const expected = players.filter(p => p.status === 'expected');
   // Arrived = everyone who has physically shown up, including those who
@@ -3005,6 +3155,8 @@ async function confirmDispositions() {
     ? resultFlowCourt.team_b : resultFlowCourt.team_a;
   const winnerIds = winnerTeam?.player_ids || [];
   const loserIds  = loserTeam?.player_ids  || [];
+  const loserTeamId = resultFlowCourt.team_a_id === resultFlowWinnerTeamId
+    ? resultFlowCourt.team_b_id : resultFlowCourt.team_a_id;
 
   const decisions = [
     ...winnerIds.map(pid => ({ playerId: pid, outcome: _dispositions[pid] || 'queue', wasWinner: true  })),
@@ -3012,7 +3164,7 @@ async function confirmDispositions() {
   ];
 
   try {
-    await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, decisions);
+    await SessionAPI.applyQueuePlacement(resultFlowCourt.id, activeSession.id, decisions, resultFlowWinnerTeamId, loserTeamId);
     document.getElementById('dispositionModal').remove();
     closeResultModal();
     _dispositions = {};
@@ -4410,6 +4562,7 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'messages',      filter: `session_id=eq.${activeSession.id}` }, () => { updateInboxBadge(); if (activeTab === 'inbox') renderActiveTab(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rest_requests', filter: `session_id=eq.${activeSession.id}` }, () => { updateInboxBadge(); if (activeTab === 'inbox') renderActiveTab(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'courts',        filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'courts') renderActiveTab(); })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'teams',         filter: `session_id=eq.${activeSession.id}` }, () => { if (activeTab === 'courts' || activeTab === 'roster') renderActiveTab(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'players',       filter: `session_id=eq.${activeSession.id}` }, () => {
       if (activeTab === 'roster') renderActiveTab();
       if (activeTab === 'leaderboard') renderActiveTab();
