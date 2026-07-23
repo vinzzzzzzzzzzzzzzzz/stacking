@@ -337,6 +337,11 @@ async function renderDashboard() {
         <button class="btn-primary" onclick="handleCreateAccount()">Create Account</button>
       </div>
 
+      <div class="card" id="requestsCard">
+        <h2>Host Requests</h2>
+        <div id="requestsList"><div class="empty-state">Loading…</div></div>
+      </div>
+
       <div class="card" id="accountsCard">
         <h2>Host Accounts</h2>
         <div id="accountsList"><div class="empty-state">Loading…</div></div>
@@ -344,7 +349,168 @@ async function renderDashboard() {
     </div>
   `;
 
+  await loadRequests();
   await loadAccounts();
+}
+
+async function loadRequests() {
+  const el = document.getElementById('requestsList');
+  if (!el) return;
+  try {
+    const { data: requests, error } = await db.from('host_requests')
+      .select('*, host_accounts(name, username)').eq('status', 'pending').order('created_at', { ascending: false });
+    if (error) {
+      if (/host_requests/.test(error.message || '')) {
+        el.innerHTML = `<div class="empty-state" style="font-size:12px;">No requests table yet — run this in Supabase SQL Editor:<br><br>
+          <code style="display:block;background:#111;padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;">CREATE TABLE IF NOT EXISTS host_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  host_id uuid REFERENCES host_accounts(id) ON DELETE CASCADE,
+  request_type text NOT NULL,
+  note text,
+  status text DEFAULT 'pending',
+  admin_response text,
+  host_acknowledged boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(),
+  resolved_at timestamptz
+);</code></div>`;
+        return;
+      }
+      throw error;
+    }
+    if (!requests || !requests.length) {
+      el.innerHTML = '<div class="empty-state">No pending requests.</div>';
+      return;
+    }
+    const labels = {
+      username_change: 'Change Username', password_reset: 'Reset Password', both_credentials: 'Reset Username &amp; Password',
+      access_open_play: 'Enable Open Play', access_tournament: 'Enable Tournament', access_both: 'Enable Open Play + Tournament', other: 'Other',
+    };
+    const isCredential = t => ['username_change', 'password_reset', 'both_credentials'].includes(t);
+    el.innerHTML = requests.map(r => {
+      const hostName = r.host_accounts?.name || 'Unknown host';
+      const hostUsername = r.host_accounts?.username || '';
+      const when = r.created_at ? new Date(r.created_at).toLocaleString() : '';
+      return `
+        <div class="account-row" id="req-${r.id}">
+          <div class="account-info" style="flex:1;">
+            <div class="account-name">${escapeHtml(hostName)} <span style="font-size:11px;background:rgba(215,242,61,0.15);color:#d7f23d;padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;">${labels[r.request_type] || r.request_type}</span></div>
+            <div class="account-username">@${escapeHtml(hostUsername)} · ${escapeHtml(when)}${r.note ? ' · "' + escapeHtml(r.note) + '"' : ''}</div>
+          </div>
+          <div class="account-actions">
+            ${isCredential(r.request_type)
+              ? `<button class="btn-edit" onclick="openResolveCredentialRequest('${r.id}','${r.host_id}','${escapeHtml(hostName)}')">Set New Credentials</button>`
+              : `<button class="btn-edit" onclick="openResolveAccessRequest('${r.id}','${r.host_id}','${r.request_type}','${escapeHtml(hostName)}')">Update Access</button>`}
+            <button class="btn-danger" onclick="dismissHostRequest('${r.id}')">Dismiss</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    el.innerHTML = `<div class="empty-state" style="color:var(--fault-coral);">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function openResolveCredentialRequest(requestId, hostId, hostName) {
+  if (document.getElementById('resolveCredModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="resolveCredModal">
+      <div class="modal-box">
+        <h2>Set New Credentials — ${escapeHtml(hostName)}</h2>
+        <p class="modal-sub">This becomes their temporary login. They'll be required to set their own username and password the next time they log in.</p>
+        <div class="field"><label>New Username</label><input type="text" id="resolveUsername" autocomplete="off"></div>
+        <div class="field"><label>New Temporary Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="resolvePassword" placeholder="min. 4 characters" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePw('resolvePassword',this)">👁</button>
+          </div>
+        </div>
+        <div class="field"><label>Message to host (optional)</label><input type="text" id="resolveMessage" placeholder="e.g. Here's your new login — you'll set your own on next sign-in."></div>
+        <div class="auth-error" id="resolveCredError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('resolveCredModal').remove()">Cancel</button>
+          <button class="btn-yes" id="resolveCredBtn" onclick="confirmResolveCredentialRequest('${requestId}','${hostId}')">Apply &amp; Resolve</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function confirmResolveCredentialRequest(requestId, hostId) {
+  const username = document.getElementById('resolveUsername')?.value?.trim();
+  const password = document.getElementById('resolvePassword')?.value;
+  const message  = document.getElementById('resolveMessage')?.value?.trim();
+  const errEl = document.getElementById('resolveCredError');
+  const btn = document.getElementById('resolveCredBtn');
+  if (!username) { errEl.textContent = 'Username is required.'; return; }
+  if (!password || password.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+  try {
+    const passwordHash = await hashPassword(password);
+    const { error } = await db.from('host_accounts')
+      .update({ username, password_hash: passwordHash, force_credential_reset: true }).eq('id', hostId);
+    if (error) {
+      if (error.code === '23505') throw new Error('That username is already taken.');
+      throw error;
+    }
+    await db.from('host_requests').update({
+      status: 'resolved', resolved_at: new Date().toISOString(),
+      admin_response: message || `Your credentials have been reset. New username: ${username} — you'll be asked to set your own password on next login.`,
+    }).eq('id', requestId);
+    document.getElementById('resolveCredModal').remove();
+    await loadRequests();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not apply changes.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply & Resolve'; }
+  }
+}
+
+function openResolveAccessRequest(requestId, hostId, requestType, hostName) {
+  if (document.getElementById('resolveAccessModal')) return;
+  const wantsOpenPlay   = requestType === 'access_open_play' || requestType === 'access_both';
+  const wantsTournament = requestType === 'access_tournament' || requestType === 'access_both';
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="resolveAccessModal">
+      <div class="modal-box">
+        <h2>Update Access — ${escapeHtml(hostName)}</h2>
+        <div style="display:flex;gap:18px;margin:10px 0;">
+          <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+            <input type="checkbox" id="resolveAllowOpenPlay" ${wantsOpenPlay ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;"> Open Play
+          </label>
+          <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+            <input type="checkbox" id="resolveAllowTournament" ${wantsTournament ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;"> Tournament
+          </label>
+        </div>
+        <div class="field"><label>Message to host (optional)</label><input type="text" id="resolveAccessMessage" placeholder="e.g. Tournament access is now enabled."></div>
+        <div class="auth-error" id="resolveAccessError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('resolveAccessModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmResolveAccessRequest('${requestId}','${hostId}')">Apply &amp; Resolve</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function confirmResolveAccessRequest(requestId, hostId) {
+  const allowOpenPlay = document.getElementById('resolveAllowOpenPlay')?.checked;
+  const allowTournament = document.getElementById('resolveAllowTournament')?.checked;
+  const message = document.getElementById('resolveAccessMessage')?.value?.trim();
+  const errEl = document.getElementById('resolveAccessError');
+  if (!allowOpenPlay && !allowTournament) { errEl.textContent = 'At least one session type must stay enabled.'; return; }
+  try {
+    await db.from('host_accounts').update({ allow_open_play: allowOpenPlay, allow_tournament: allowTournament }).eq('id', hostId);
+    await db.from('host_requests').update({
+      status: 'resolved', resolved_at: new Date().toISOString(),
+      admin_response: message || `Your access has been updated: ${allowOpenPlay ? 'Open Play ' : ''}${allowTournament ? 'Tournament' : ''}.`.trim(),
+    }).eq('id', requestId);
+    document.getElementById('resolveAccessModal').remove();
+    await loadRequests();
+    await loadAccounts();
+  } catch (err) { errEl.textContent = err.message || 'Could not apply changes.'; }
+}
+
+async function dismissHostRequest(requestId) {
+  if (!confirm('Dismiss this request without any changes? The host will not be notified.')) return;
+  await db.from('host_requests').update({ status: 'dismissed', resolved_at: new Date().toISOString() }).eq('id', requestId);
+  await loadRequests();
 }
 
 async function loadAccounts() {
@@ -431,8 +597,12 @@ async function handleCreateAccount() {
     const passwordHash = await hashPassword(pass);
     const allowOpenPlay  = document.getElementById('newAllowOpenPlay')?.checked ?? true;
     const allowTournament = document.getElementById('newAllowTournament')?.checked ?? true;
-    const row = { name, username, password_hash: passwordHash, allow_open_play: allowOpenPlay, allow_tournament: allowTournament };
+    const row = { name, username, password_hash: passwordHash, allow_open_play: allowOpenPlay, allow_tournament: allowTournament, force_credential_reset: true };
     let { error } = await db.from('host_accounts').insert(row);
+    if (error && /force_credential_reset/.test(error.message || '')) {
+      delete row.force_credential_reset;
+      ({ error } = await db.from('host_accounts').insert(row));
+    }
     if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
       // Migration not run yet — create the account without the new columns
       // rather than blocking account creation entirely.
