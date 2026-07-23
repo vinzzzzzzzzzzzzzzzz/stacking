@@ -360,7 +360,9 @@ async function loadRequests() {
     const { data: requests, error } = await db.from('host_requests')
       .select('*, host_accounts(name, username)').eq('status', 'pending').order('created_at', { ascending: false });
     if (error) {
-      if (/host_requests/.test(error.message || '')) {
+      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
+      if (missingTable) {
         el.innerHTML = `<div class="empty-state" style="font-size:12px;">No requests table yet — run this in Supabase SQL Editor:<br><br>
           <code style="display:block;background:#111;padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;">CREATE TABLE IF NOT EXISTS host_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -373,6 +375,11 @@ async function loadRequests() {
   created_at timestamptz DEFAULT now(),
   resolved_at timestamptz
 );</code></div>`;
+        return;
+      }
+      if (rlsBlocked) {
+        el.innerHTML = `<div class="empty-state" style="font-size:12px;">The host_requests table exists but Row Level Security is blocking it — run this in Supabase SQL Editor:<br><br>
+          <code style="display:block;background:#111;padding:10px;border-radius:6px;font-size:11px;">ALTER TABLE host_requests DISABLE ROW LEVEL SECURITY;</code></div>`;
         return;
       }
       throw error;
