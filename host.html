@@ -738,6 +738,9 @@ function enforceCredentialResetIfNeeded() {
       </div>
       <div class="auth-error" id="resetError"></div>
       <button class="btn-primary" onclick="handleForcedCredentialReset()">Save &amp; Continue</button>
+      <p style="font-size:12px;text-align:center;margin:14px 0 0;">
+        <a href="javascript:void(0)" onclick="hostLogout()" style="color:var(--ink-muted);font-weight:600;">Not you? Log out and let someone else sign in →</a>
+      </p>
     </div>
   `;
   return true;
