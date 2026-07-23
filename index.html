@@ -352,20 +352,6 @@
   .result-badge.lost { background: var(--fault-coral); color: white; }
   .lane-empty { padding: 14px; text-align: center; color: var(--bench-slate); font-size: 12px; }
 
-  /* ── Find me ── */
-  .find-me {
-    background: var(--court-paint-mid); border: 1px solid rgba(242,244,240,0.09);
-    border-radius: var(--radius); padding: 13px 15px; margin-bottom: 22px;
-    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  }
-  .find-me input {
-    flex: 1; min-width: 180px; padding: 11px; border-radius: var(--radius-sm);
-    border: 1px solid rgba(242,244,240,0.16); font-size: 16px;
-    background: rgba(242,244,240,0.1); color: white;
-  }
-  .find-me input::placeholder { color: rgba(242,244,240,0.4); }
-  .find-me-result { font-weight: 700; font-size: 13px; background: rgba(242,244,240,0.12); color: white; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid rgba(242,244,240,0.18); }
-
   /* ── Recent results ── */
   .recent-results { margin-bottom: 20px; }
   .recent-results-title { font-size: 10px; margin: 0 0 9px; color: var(--bench-slate); text-transform: uppercase; letter-spacing: 0.09em; font-weight: 700; padding-bottom: 7px; border-bottom: 1px solid var(--border-soft); }
@@ -427,9 +413,6 @@
     .court-diagram { aspect-ratio: 3/4; }
     .paddle-chip { width: 66px; }
     .paddle-chip-name { font-size: 11px; }
-    .find-me { flex-direction: column; align-items: stretch; padding: 12px; }
-    .find-me input { width: 100%; }
-    .find-me-result { text-align: center; }
     .message-row { flex-direction: column; }
     .message-row input[name="from"], .message-row input[name="msg"], .message-row button { width: 100%; }
     .rest-request-row { flex-direction: column; }
@@ -664,10 +647,7 @@ async function loadSession(sessionId) {
 // ============================================================
 function renderShell() {
   document.getElementById('mainContent').innerHTML = `
-    <div class="find-me">
-      <input type="text" id="findMeInput" placeholder="Type your name to find your spot…" oninput="handleFindMe()">
-      <div id="findMeResult"></div>
-    </div>
+    <div id="sessionCompleteSection"></div>
     <div class="courts-grid" id="courtsGrid"></div>
     <div class="court-line-divider" role="separator"></div>
     <div id="upNextSection"></div>
@@ -675,7 +655,7 @@ function renderShell() {
     <div id="leaderboardSection"></div>
     <div class="recent-results" id="recentResults"></div>
     <div class="court-line-divider" role="separator"></div>
-    <div class="rest-request-box">
+    <div class="rest-request-box" id="restRequestBox">
       <h3>Need a break?</h3>
       <div class="rest-request-row">
         <select id="restPlayerSelect"><option value="">Select your name…</option></select>
@@ -683,7 +663,7 @@ function renderShell() {
       </div>
       <p class="message-hint" id="restRequestStatus">Lets the host know you'd like to sit out — they'll confirm on their end.</p>
     </div>
-    <div class="message-box">
+    <div class="message-box" id="messageBox">
       <h3>Message the host</h3>
       <div class="message-row">
         <input type="text" name="from" id="msgFrom" placeholder="Your name">
@@ -692,6 +672,86 @@ function renderShell() {
       </div>
       <p class="message-hint">Optional — rest requests, swap asks, or anything else.</p>
     </div>
+  `;
+}
+
+// ============================================================
+// SESSION COMPLETE — podium + final standings (open play)
+// Shown once the host marks the session finished, regardless of whether
+// the live leaderboard was ever made public — a session that's over isn't
+// "live" anymore, so there's nothing competitive left to protect by
+// hiding it. Reuses the exact same paddle-chip look as the live court
+// view and the tournament podium, so a player looks the same everywhere.
+// ============================================================
+function renderOpenPlaySessionComplete(players) {
+  const el = document.getElementById('sessionCompleteSection');
+  if (!el) return;
+
+  const ranked = [...players]
+    .filter(p => (p.total_games_played || 0) > 0)
+    .sort((a, b) => {
+      const wA = a.wins || 0, wB = b.wins || 0;
+      if (wB !== wA) return wB - wA;
+      const pA = a.total_points || 0, pB = b.total_points || 0;
+      return pB - pA;
+    });
+
+  if (!ranked.length) {
+    el.innerHTML = `<div class="card" style="text-align:center;padding:24px;color:var(--resting-slate);font-size:13px;">Session finished — no completed matches to show.</div>`;
+    return;
+  }
+
+  const [first, second, third] = ranked;
+  function stand(p, rank, heightPx) {
+    if (!p) return '';
+    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉';
+    const accent = rank === 1 ? 'var(--optic-yellow)' : rank === 2 ? '#C9D3DC' : '#CD8E5A';
+    return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;max-width:150px">
+      <div style="font-size:${rank === 1 ? '28px' : '22px'};margin-bottom:6px">${medal}</div>
+      <div style="margin-bottom:8px">${paddleChip(p)}</div>
+      <div style="width:100%;height:${heightPx}px;background:linear-gradient(180deg,${accent}33,${accent}11);
+        border:1px solid ${accent}55;border-top:3px solid ${accent};border-radius:6px 6px 0 0;
+        display:flex;align-items:flex-start;justify-content:center;padding-top:8px">
+        <span style="font-family:var(--font-mono);font-weight:800;font-size:${rank === 1 ? '22px' : '18px'};color:${accent}">${rank}</span>
+      </div>
+    </div>`;
+  }
+
+  const tableRows = ranked.map((p, i) => {
+    const gp = p.total_games_played || 0, w = p.wins || 0, l = p.losses || 0;
+    const pts = p.total_points || 0, pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
+    return `<tr class="${i === 0 ? 'lb-highlight' : ''}">
+      <td style="font-weight:700;">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</td>
+      <td style="font-weight:700;">${escapeHtml(p.name)}</td>
+      <td class="lb-won" style="text-align:center;">${w}</td>
+      <td class="lb-lost" style="text-align:center;">${l}</td>
+      <td style="text-align:center;font-family:var(--font-mono);">${gp}</td>
+      <td class="lb-pts" style="text-align:center;">${pts}</td>
+      <td style="text-align:center;font-family:var(--font-mono);">${pct}%</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px;background:linear-gradient(180deg,rgba(215,242,61,.06),transparent);border:1px solid rgba(215,242,61,.18)">
+      <div style="text-align:center;margin-bottom:14px">
+        <span style="font-size:10px;background:rgba(215,242,61,.15);color:var(--optic-yellow);padding:3px 12px;border-radius:999px;font-weight:800;letter-spacing:.08em">🎾 SESSION COMPLETE</span>
+      </div>
+      <div style="display:flex;align-items:flex-end;justify-content:center;gap:10px;padding:0 8px 4px">
+        ${stand(second, 2, 70)}
+        ${stand(first, 1, 100)}
+        ${stand(third, 3, 50)}
+      </div>
+    </div>
+    <div class="lb-card" style="margin-bottom:16px">
+      <h2 class="lb-card-title">🏅 Final Standings</h2>
+      <div class="table-scroll">
+        <table class="roster-table">
+          <thead><tr><th>#</th><th>Player</th><th style="text-align:center;">W</th><th style="text-align:center;">L</th><th style="text-align:center;">GP</th><th style="text-align:center;">Pts</th><th style="text-align:center;">Win%</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="court-line-divider" role="separator"></div>
   `;
 }
 
@@ -713,9 +773,22 @@ async function refreshAll() {
   _teamsCache   = teams;
   _courtsCache  = courts;
 
-  renderCourts(courts, players, previousCourts);
-  renderQueues(players);
-  renderLeaderboard(players, session);
+  const isFinished = session.status === 'completed';
+  ['courtsGrid', 'upNextSection', 'queuesGrid', 'restRequestBox', 'messageBox'].forEach(id => {
+    const node = document.getElementById(id);
+    if (node) node.style.display = isFinished ? 'none' : '';
+  });
+
+  if (isFinished) {
+    renderOpenPlaySessionComplete(players);
+    document.getElementById('leaderboardSection').innerHTML = '';
+  } else {
+    const completeEl = document.getElementById('sessionCompleteSection');
+    if (completeEl) completeEl.innerHTML = '';
+    renderCourts(courts, players, previousCourts);
+    renderQueues(players);
+    renderLeaderboard(players, session);
+  }
   renderRecentResults(recentMatches, players);
   syncRestPlayerDropdown(players);
 }
@@ -1173,37 +1246,6 @@ function formatDuration(seconds) {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${mins}:${String(secs).padStart(2, '0')}`;
-}
-
-// ============================================================
-// FIND ME
-// ============================================================
-function handleFindMe() {
-  const query = document.getElementById('findMeInput').value.trim().toLowerCase();
-  const resultEl = document.getElementById('findMeResult');
-  if (!query) { resultEl.textContent = ''; return; }
-  const player = _playersCache.find(p => p.name.toLowerCase().includes(query));
-  if (!player) { resultEl.textContent = 'Not found yet'; return; }
-
-  if (player.status === 'playing') {
-    const court = _courtsCache.find(c => {
-      const team = _teamsCache.find(t => t.id === c.team_a_id || t.id === c.team_b_id);
-      return team && team.player_ids.includes(player.id);
-    });
-    resultEl.textContent = court ? `Playing now — Court ${court.court_number}` : 'Playing now';
-  } else if (player.status === 'resting') {
-    resultEl.textContent = 'You are resting ☕';
-  } else if (player.status === 'expected') {
-    resultEl.textContent = 'On the list — mark Arrived with your host';
-  } else if (player.status === 'waiting') {
-    const waitingSorted = _playersCache
-      .filter(p => p.status === 'waiting')
-      .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
-    const idx = waitingSorted.findIndex(p => p.id === player.id);
-    resultEl.textContent = idx >= 0 ? `#${idx + 1} in the queue` : 'In the queue';
-  } else {
-    resultEl.textContent = 'Waiting to be added';
-  }
 }
 
 // ============================================================
