@@ -321,8 +321,25 @@ async function renderDashboard() {
             </div>
           </div>
         </div>
+        <div class="field" style="margin-top:4px;">
+          <label>Session Access</label>
+          <div style="display:flex;gap:18px;margin-top:6px;">
+            <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+              <input type="checkbox" id="newAllowOpenPlay" checked style="width:18px;height:18px;cursor:pointer;"> Open Play
+            </label>
+            <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+              <input type="checkbox" id="newAllowTournament" checked style="width:18px;height:18px;cursor:pointer;"> Tournament
+            </label>
+          </div>
+          <p style="font-size:11px;color:var(--text-muted,#8a9e96);margin:6px 0 0;">Check both for full access. Unchecking one completely hides that session type for this host — existing sessions of that type disappear from their list too until re-enabled.</p>
+        </div>
         <div class="auth-error" id="createError"></div>
         <button class="btn-primary" onclick="handleCreateAccount()">Create Account</button>
+      </div>
+
+      <div class="card" id="requestsCard">
+        <h2>Host Requests</h2>
+        <div id="requestsList"><div class="empty-state">Loading…</div></div>
       </div>
 
       <div class="card" id="accountsCard">
@@ -332,17 +349,193 @@ async function renderDashboard() {
     </div>
   `;
 
+  await loadRequests();
   await loadAccounts();
+}
+
+async function loadRequests() {
+  const el = document.getElementById('requestsList');
+  if (!el) return;
+  try {
+    const { data: requests, error } = await db.from('host_requests')
+      .select('*, host_accounts(name, username)').eq('status', 'pending').order('created_at', { ascending: false });
+    if (error) {
+      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
+      if (missingTable) {
+        el.innerHTML = `<div class="empty-state" style="font-size:12px;">No requests table yet — run this in Supabase SQL Editor:<br><br>
+          <code style="display:block;background:#111;padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;">CREATE TABLE IF NOT EXISTS host_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  host_id uuid REFERENCES host_accounts(id) ON DELETE CASCADE,
+  request_type text NOT NULL,
+  note text,
+  status text DEFAULT 'pending',
+  admin_response text,
+  host_acknowledged boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(),
+  resolved_at timestamptz
+);</code></div>`;
+        return;
+      }
+      if (rlsBlocked) {
+        el.innerHTML = `<div class="empty-state" style="font-size:12px;">The host_requests table exists but Row Level Security is blocking it — run this in Supabase SQL Editor:<br><br>
+          <code style="display:block;background:#111;padding:10px;border-radius:6px;font-size:11px;">ALTER TABLE host_requests DISABLE ROW LEVEL SECURITY;</code></div>`;
+        return;
+      }
+      throw error;
+    }
+    if (!requests || !requests.length) {
+      el.innerHTML = '<div class="empty-state">No pending requests.</div>';
+      return;
+    }
+    const labels = {
+      username_change: 'Change Username', password_reset: 'Reset Password', both_credentials: 'Reset Username &amp; Password',
+      access_open_play: 'Enable Open Play', access_tournament: 'Enable Tournament', access_both: 'Enable Open Play + Tournament', other: 'Other',
+    };
+    const isCredential = t => ['username_change', 'password_reset', 'both_credentials'].includes(t);
+    el.innerHTML = requests.map(r => {
+      const hostName = r.host_accounts?.name || 'Unknown host';
+      const hostUsername = r.host_accounts?.username || '';
+      const when = r.created_at ? new Date(r.created_at).toLocaleString() : '';
+      return `
+        <div class="account-row" id="req-${r.id}">
+          <div class="account-info" style="flex:1;">
+            <div class="account-name">${escapeHtml(hostName)} <span style="font-size:11px;background:rgba(215,242,61,0.15);color:#d7f23d;padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;">${labels[r.request_type] || r.request_type}</span></div>
+            <div class="account-username">@${escapeHtml(hostUsername)} · ${escapeHtml(when)}${r.note ? ' · "' + escapeHtml(r.note) + '"' : ''}</div>
+          </div>
+          <div class="account-actions">
+            ${isCredential(r.request_type)
+              ? `<button class="btn-edit" onclick="openResolveCredentialRequest('${r.id}','${r.host_id}','${escapeHtml(hostName)}')">Set New Credentials</button>`
+              : `<button class="btn-edit" onclick="openResolveAccessRequest('${r.id}','${r.host_id}','${r.request_type}','${escapeHtml(hostName)}')">Update Access</button>`}
+            <button class="btn-danger" onclick="dismissHostRequest('${r.id}')">Dismiss</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    el.innerHTML = `<div class="empty-state" style="color:var(--fault-coral);">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function openResolveCredentialRequest(requestId, hostId, hostName) {
+  if (document.getElementById('resolveCredModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="resolveCredModal">
+      <div class="modal-box">
+        <h2>Set New Credentials — ${escapeHtml(hostName)}</h2>
+        <p class="modal-sub">This becomes their temporary login. They'll be required to set their own username and password the next time they log in.</p>
+        <div class="field"><label>New Username</label><input type="text" id="resolveUsername" autocomplete="off"></div>
+        <div class="field"><label>New Temporary Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="resolvePassword" placeholder="min. 4 characters" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePw('resolvePassword',this)">👁</button>
+          </div>
+        </div>
+        <div class="field"><label>Message to host (optional)</label><input type="text" id="resolveMessage" placeholder="e.g. Here's your new login — you'll set your own on next sign-in."></div>
+        <div class="auth-error" id="resolveCredError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('resolveCredModal').remove()">Cancel</button>
+          <button class="btn-yes" id="resolveCredBtn" onclick="confirmResolveCredentialRequest('${requestId}','${hostId}')">Apply &amp; Resolve</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function confirmResolveCredentialRequest(requestId, hostId) {
+  const username = document.getElementById('resolveUsername')?.value?.trim();
+  const password = document.getElementById('resolvePassword')?.value;
+  const message  = document.getElementById('resolveMessage')?.value?.trim();
+  const errEl = document.getElementById('resolveCredError');
+  const btn = document.getElementById('resolveCredBtn');
+  if (!username) { errEl.textContent = 'Username is required.'; return; }
+  if (!password || password.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+  try {
+    const passwordHash = await hashPassword(password);
+    const { error } = await db.from('host_accounts')
+      .update({ username, password_hash: passwordHash, force_credential_reset: true }).eq('id', hostId);
+    if (error) {
+      if (error.code === '23505') throw new Error('That username is already taken.');
+      throw error;
+    }
+    await db.from('host_requests').update({
+      status: 'resolved', resolved_at: new Date().toISOString(),
+      admin_response: message || `Your credentials have been reset. New username: ${username} — you'll be asked to set your own password on next login.`,
+    }).eq('id', requestId);
+    document.getElementById('resolveCredModal').remove();
+    await loadRequests();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not apply changes.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply & Resolve'; }
+  }
+}
+
+function openResolveAccessRequest(requestId, hostId, requestType, hostName) {
+  if (document.getElementById('resolveAccessModal')) return;
+  const wantsOpenPlay   = requestType === 'access_open_play' || requestType === 'access_both';
+  const wantsTournament = requestType === 'access_tournament' || requestType === 'access_both';
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="resolveAccessModal">
+      <div class="modal-box">
+        <h2>Update Access — ${escapeHtml(hostName)}</h2>
+        <div style="display:flex;gap:18px;margin:10px 0;">
+          <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+            <input type="checkbox" id="resolveAllowOpenPlay" ${wantsOpenPlay ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;"> Open Play
+          </label>
+          <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+            <input type="checkbox" id="resolveAllowTournament" ${wantsTournament ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;"> Tournament
+          </label>
+        </div>
+        <div class="field"><label>Message to host (optional)</label><input type="text" id="resolveAccessMessage" placeholder="e.g. Tournament access is now enabled."></div>
+        <div class="auth-error" id="resolveAccessError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('resolveAccessModal').remove()">Cancel</button>
+          <button class="btn-yes" onclick="confirmResolveAccessRequest('${requestId}','${hostId}')">Apply &amp; Resolve</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function confirmResolveAccessRequest(requestId, hostId) {
+  const allowOpenPlay = document.getElementById('resolveAllowOpenPlay')?.checked;
+  const allowTournament = document.getElementById('resolveAllowTournament')?.checked;
+  const message = document.getElementById('resolveAccessMessage')?.value?.trim();
+  const errEl = document.getElementById('resolveAccessError');
+  if (!allowOpenPlay && !allowTournament) { errEl.textContent = 'At least one session type must stay enabled.'; return; }
+  try {
+    await db.from('host_accounts').update({ allow_open_play: allowOpenPlay, allow_tournament: allowTournament }).eq('id', hostId);
+    await db.from('host_requests').update({
+      status: 'resolved', resolved_at: new Date().toISOString(),
+      admin_response: message || `Your access has been updated: ${allowOpenPlay ? 'Open Play ' : ''}${allowTournament ? 'Tournament' : ''}.`.trim(),
+    }).eq('id', requestId);
+    document.getElementById('resolveAccessModal').remove();
+    await loadRequests();
+    await loadAccounts();
+  } catch (err) { errEl.textContent = err.message || 'Could not apply changes.'; }
+}
+
+async function dismissHostRequest(requestId) {
+  if (!confirm('Dismiss this request without any changes? The host will not be notified.')) return;
+  await db.from('host_requests').update({ status: 'dismissed', resolved_at: new Date().toISOString() }).eq('id', requestId);
+  await loadRequests();
 }
 
 async function loadAccounts() {
   const el = document.getElementById('accountsList');
   if (!el) return;
   try {
-    const { data: accounts, error } = await db
+    let { data: accounts, error } = await db
       .from('host_accounts')
-      .select('id, name, username, is_active, created_at')
+      .select('id, name, username, is_active, created_at, allow_open_play, allow_tournament')
       .order('created_at', { ascending: false });
+    if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
+      // Migration not run yet — fall back to the base columns so the list
+      // still loads; permissions just default to "both" until it's run.
+      ({ data: accounts, error } = await db
+        .from('host_accounts')
+        .select('id, name, username, is_active, created_at')
+        .order('created_at', { ascending: false }));
+    }
     if (error) throw error;
 
     // Fetch session counts per host.
@@ -358,19 +551,27 @@ async function loadAccounts() {
     el.innerHTML = accounts.map(a => {
       const initials = (a.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0,2);
       const sessionCount = countByHost[a.id] || 0;
+      // Undefined (column not migrated yet) defaults to true — same as the DB column default.
+      const allowOP = a.allow_open_play !== false;
+      const allowT  = a.allow_tournament !== false;
+      const accessLabel = allowOP && allowT ? '🎾 Open Play + 🏆 Tournament'
+        : allowOP ? '🎾 Open Play only'
+        : allowT  ? '🏆 Tournament only'
+        : '⚠ No session types enabled';
       return `
         <div class="account-row" id="row-${a.id}">
           <div class="account-avatar">${escapeHtml(initials)}</div>
           <div class="account-info">
             <div class="account-name">${escapeHtml(a.name)}</div>
             <div class="account-username">@${escapeHtml(a.username)}</div>
-            <div class="session-count">${sessionCount} session${sessionCount!==1?'s':''} hosted</div>
+            <div class="session-count">${sessionCount} session${sessionCount!==1?'s':''} hosted · <span style="color:${allowOP&&allowT?'var(--optic-yellow,#d7f23d)':'inherit'}">${accessLabel}</span></div>
           </div>
           <span class="account-status-pill ${a.is_active ? 'status-active' : 'status-inactive'}">
             ${a.is_active ? 'Active' : 'Inactive'}
           </span>
           <div class="account-actions">
-            <button class="btn-edit" onclick="openEditModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.username)}',${a.is_active})">Edit</button>
+            <button class="btn-edit" onclick="openSessionsBrowser('${a.id}','${escapeHtml(a.name)}')" style="background:var(--surface-hover,#263330);color:var(--optic-yellow,#d7f23d);">🗂 Sessions</button>
+            <button class="btn-edit" onclick="openEditModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.username)}',${a.is_active},${allowOP},${allowT})">Edit</button>
             <button class="btn-danger" onclick="openDeleteModal('${a.id}','${escapeHtml(a.name)}')">Delete</button>
           </div>
         </div>
@@ -401,7 +602,20 @@ async function handleCreateAccount() {
   if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
   try {
     const passwordHash = await hashPassword(pass);
-    const { error } = await db.from('host_accounts').insert({ name, username, password_hash: passwordHash });
+    const allowOpenPlay  = document.getElementById('newAllowOpenPlay')?.checked ?? true;
+    const allowTournament = document.getElementById('newAllowTournament')?.checked ?? true;
+    const row = { name, username, password_hash: passwordHash, allow_open_play: allowOpenPlay, allow_tournament: allowTournament, force_credential_reset: true };
+    let { error } = await db.from('host_accounts').insert(row);
+    if (error && /force_credential_reset/.test(error.message || '')) {
+      delete row.force_credential_reset;
+      ({ error } = await db.from('host_accounts').insert(row));
+    }
+    if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
+      // Migration not run yet — create the account without the new columns
+      // rather than blocking account creation entirely.
+      delete row.allow_open_play; delete row.allow_tournament;
+      ({ error } = await db.from('host_accounts').insert(row));
+    }
     if (error) {
       if (error.code === '23505') throw new Error('That username is already taken. Choose a different one.');
       throw error;
@@ -410,6 +624,10 @@ async function handleCreateAccount() {
     ['newName','newUsername','newPass','newPassConfirm'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
+    });
+    ['newAllowOpenPlay','newAllowTournament'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.checked = true;
     });
     await loadAccounts();
   } catch (err) {
@@ -420,9 +638,144 @@ async function handleCreateAccount() {
 }
 
 // ============================================================
+// SESSIONS BROWSER — view + delete any host's sessions.
+// Storage on Supabase's free tier is mostly eaten by photos, which are
+// stored inline as base64 on players/teams — deleting old sessions here
+// frees that up. Deletion mirrors host.html's own trash-bin exactly, so
+// courts/teams/players/tournament data are all cleaned up together, not
+// just the session row.
+// ============================================================
+async function openSessionsBrowser(hostId, hostName) {
+  document.getElementById('topbarRight').innerHTML = `<button class="logout-btn" onclick="saLogout()">Log Out</button>`;
+  document.getElementById('appRoot').innerHTML = `
+    <div class="container">
+      <button class="btn-edit" style="margin-bottom:14px;" onclick="renderDashboard()">← Back to Accounts</button>
+      <div class="card" id="sessionsCard">
+        <h2>Sessions — ${escapeHtml(hostName)}</h2>
+        <p style="font-size:12px;color:var(--text-muted,#8a9e96);margin:-8px 0 14px;">
+          Deleting a session permanently removes it and everything tied to it — courts, teams, players, photos, and (for tournaments) the full bracket. This cannot be undone.
+        </p>
+        <div id="sessionsList"><div class="empty-state">Loading…</div></div>
+      </div>
+    </div>
+  `;
+  await loadHostSessions(hostId, hostName);
+}
+
+async function loadHostSessions(hostId, hostName) {
+  const el = document.getElementById('sessionsList');
+  if (!el) return;
+  try {
+    const { data: sessions, error } = await db
+      .from('sessions')
+      .select('id, name, session_type, status, court_count, created_at, reference_code')
+      .eq('host_id', hostId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    if (!sessions || sessions.length === 0) {
+      el.innerHTML = '<div class="empty-state">No sessions for this host yet.</div>';
+      return;
+    }
+
+    el.innerHTML = sessions.map(s => {
+      const isT = s.session_type === 'tournament';
+      const typeBadge = isT
+        ? `<span style="font-size:10px;background:rgba(215,242,61,0.15);color:#d7f23d;padding:2px 8px;border-radius:999px;font-weight:700;">🏆 TOURNAMENT</span>`
+        : `<span style="font-size:10px;background:rgba(111,168,224,0.18);color:#6fa8e0;padding:2px 8px;border-radius:999px;font-weight:700;">🎾 OPEN PLAY</span>`;
+      const statusBadge = s.status === 'active'
+        ? `<span style="font-size:10px;background:rgba(78,203,126,0.15);color:#4ecb7e;padding:2px 8px;border-radius:999px;font-weight:700;">ACTIVE</span>`
+        : `<span style="font-size:10px;background:rgba(139,148,145,0.15);color:#8b9491;padding:2px 8px;border-radius:999px;font-weight:700;">FINISHED</span>`;
+      const created = s.created_at ? new Date(s.created_at).toLocaleDateString() : '';
+      return `
+        <div class="account-row" id="srow-${s.id}">
+          <div class="account-info" style="flex:1;">
+            <div class="account-name">${escapeHtml(s.name)} ${typeBadge} ${statusBadge}</div>
+            <div class="account-username">${s.reference_code ? s.reference_code + ' · ' : ''}${s.court_count||1} court${s.court_count===1?'':'s'} · created ${created}</div>
+          </div>
+          <div class="account-actions">
+            <button class="btn-danger" onclick="confirmDeleteSuperadminSession('${s.id}','${escapeHtml(s.name)}','${hostId}','${escapeHtml(hostName)}')">🗑 Delete</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    el.innerHTML = `<div class="empty-state" style="color:var(--fault-coral);">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function confirmDeleteSuperadminSession(sessionId, sessionName, hostId, hostName) {
+  if (document.getElementById('saDeleteSessionModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="saDeleteSessionModal">
+      <div class="modal-box">
+        <h2>Delete This Session?</h2>
+        <p class="modal-sub">
+          <strong>"${escapeHtml(sessionName)}"</strong> and everything tied to it — courts, teams, players, photos,
+          and (if a tournament) the full bracket — will be permanently deleted.<br><br>
+          <strong style="color:var(--fault-coral,#ff7a5c);">This cannot be undone.</strong>
+        </p>
+        <div class="auth-error" id="saDeleteSessionError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('saDeleteSessionModal').remove()">Cancel</button>
+          <button class="btn-yes" id="saDeleteSessionBtn" style="background:var(--fault-coral,#ff7a5c);"
+            onclick="doDeleteSuperadminSession('${sessionId}','${hostId}','${escapeHtml(hostName)}')">Delete Forever</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function doDeleteSuperadminSession(sessionId, hostId, hostName) {
+  const btn = document.getElementById('saDeleteSessionBtn');
+  const errEl = document.getElementById('saDeleteSessionError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+  try {
+    await deleteSessionAsAdmin(sessionId);
+    document.getElementById('saDeleteSessionModal')?.remove();
+    await loadHostSessions(hostId, hostName);
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not delete session.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete Forever'; }
+  }
+}
+
+// Full cleanup chain — mirrors host.html's deleteSession exactly, so a
+// session deleted from either place leaves the database in the same
+// clean state (no orphaned courts/teams/players/bracket rows).
+async function deleteSessionAsAdmin(sessionId) {
+  const { data: session } = await db.from('sessions').select('status').eq('id', sessionId).single();
+  if (session?.status === 'active') {
+    await db.from('sessions').update({ status: 'completed', ended_at: new Date().toISOString() }).eq('id', sessionId);
+  }
+
+  // 1. Clear FK references FROM courts TO teams so teams can be deleted.
+  await db.from('courts').update({ team_a_id: null, team_b_id: null, status: 'open' }).eq('session_id', sessionId);
+
+  // 2. Tournament children first (bracket_matches → bracket_entries → brackets).
+  const { data: brackets } = await db.from('brackets').select('id').eq('session_id', sessionId);
+  for (const b of brackets || []) {
+    await db.from('bracket_matches').delete().eq('bracket_id', b.id);
+    await db.from('bracket_entries').delete().eq('bracket_id', b.id);
+  }
+  await db.from('bracket_entries').delete().eq('session_id', sessionId);
+  await db.from('brackets').delete().eq('session_id', sessionId);
+
+  // 3. Open-play children in safe order (most-dependent first).
+  const tables = ['matches', 'tournament_matchups', 'manual_queue', 'rest_requests', 'messages', 'courts', 'teams', 'players'];
+  for (const table of tables) {
+    const { error } = await db.from(table).delete().eq('session_id', sessionId);
+    if (error && error.code !== 'PGRST116' && error.code !== '42P01') throw error;
+  }
+
+  const { error } = await db.from('sessions').delete().eq('id', sessionId);
+  if (error) throw error;
+}
+
+// ============================================================
 // EDIT ACCOUNT MODAL
 // ============================================================
-function openEditModal(id, name, username, isActive) {
+function openEditModal(id, name, username, isActive, allowOpenPlay, allowTournament) {
   if (document.getElementById('editModal')) return;
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="editModal">
@@ -449,6 +802,17 @@ function openEditModal(id, name, username, isActive) {
           </div>
         </div>
 
+        <div class="edit-section-title">Session Access</div>
+        <div style="display:flex;gap:18px;margin:6px 0 4px;">
+          <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+            <input type="checkbox" id="editAllowOpenPlay" ${allowOpenPlay ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;"> Open Play
+          </label>
+          <label style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:14px;cursor:pointer;">
+            <input type="checkbox" id="editAllowTournament" ${allowTournament ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;"> Tournament
+          </label>
+        </div>
+        <p style="font-size:11px;color:var(--text-muted,#8a9e96);margin:0 0 10px;">Unchecking a type completely hides it for this host — existing sessions of that type disappear from their list immediately too, not just new ones. Turning it back on brings old sessions back into view. To permanently delete a session instead, use the Sessions browser below.</p>
+
         <div class="edit-section-title">Account Status</div>
         <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 0;font-size:14px;font-weight:600;">
           <input type="checkbox" id="editActive" ${isActive ? 'checked' : ''} style="width:18px;height:18px;min-height:0;cursor:pointer;">
@@ -471,6 +835,8 @@ async function confirmEditAccount(id) {
   const pass        = document.getElementById('editPass')?.value;
   const passConfirm = document.getElementById('editPassConfirm')?.value;
   const isActive    = document.getElementById('editActive')?.checked;
+  const allowOpenPlay   = document.getElementById('editAllowOpenPlay')?.checked;
+  const allowTournament = document.getElementById('editAllowTournament')?.checked;
   const errEl       = document.getElementById('editError');
   const btn         = document.getElementById('editSaveBtn');
 
@@ -479,14 +845,21 @@ async function confirmEditAccount(id) {
   if (!username) { errEl.textContent = 'Username is required.'; return; }
   if (pass && pass.length < 4) { errEl.textContent = 'New password must be at least 4 characters.'; return; }
   if (pass && pass !== passConfirm) { errEl.textContent = 'New passwords do not match.'; return; }
+  if (!allowOpenPlay && !allowTournament) { errEl.textContent = 'At least one session type must stay enabled.'; return; }
 
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   try {
-    const updates = { name, username, is_active: isActive };
+    const updates = { name, username, is_active: isActive, allow_open_play: allowOpenPlay, allow_tournament: allowTournament };
     if (pass) updates.password_hash = await hashPassword(pass);
 
-    const { error } = await db.from('host_accounts').update(updates).eq('id', id);
+    let { error } = await db.from('host_accounts').update(updates).eq('id', id);
+    if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
+      // Migration not run yet — save everything else so the edit isn't blocked.
+      delete updates.allow_open_play; delete updates.allow_tournament;
+      ({ error } = await db.from('host_accounts').update(updates).eq('id', id));
+      if (!error) errEl.textContent = 'Saved — but session-access columns are missing from the database. Run the SQL migration to enable that setting.';
+    }
     if (error) {
       if (error.code === '23505') throw new Error('That username is already taken.');
       throw error;
