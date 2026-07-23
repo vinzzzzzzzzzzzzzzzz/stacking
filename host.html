@@ -1005,7 +1005,14 @@ const AccountAPI = (() => {
     const { error } = await supabaseClient.from('host_requests')
       .insert({ host_id: hostId, request_type: requestType, note: note || null, status: 'pending' });
     if (error) {
-      if (/host_requests/.test(error.message || '')) {
+      // '42P01' = relation does not exist — the table itself is missing.
+      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      // '42501' = insufficient privilege — usually Row Level Security
+      // blocking the insert because the table exists but has no policy
+      // permitting it yet. Different fix entirely from a missing table,
+      // so this needs its own message rather than being lumped in.
+      const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
+      if (missingTable) {
         throw new Error('Database is missing the host_requests table. Run this in Supabase SQL Editor:\n\n' +
           "CREATE TABLE IF NOT EXISTS host_requests (\n" +
           "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n" +
@@ -1018,6 +1025,10 @@ const AccountAPI = (() => {
           "  created_at timestamptz DEFAULT now(),\n" +
           "  resolved_at timestamptz\n" +
           ");");
+      }
+      if (rlsBlocked) {
+        throw new Error('The host_requests table exists but Row Level Security is blocking this. Run this in Supabase SQL Editor:\n\n' +
+          "ALTER TABLE host_requests DISABLE ROW LEVEL SECURITY;");
       }
       throw error;
     }
