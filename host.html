@@ -709,6 +709,234 @@ const CURRENT_HOST_KEY = 'istackyyy_host_session';
 function getSavedHost() {
   try { return JSON.parse(localStorage.getItem(CURRENT_HOST_KEY)); } catch { return null; }
 }
+// ── Mandatory credential reset (new accounts, or after a superadmin reset) ──
+// Returns true if it showed the gate (caller should stop initializing the
+// normal console), false if there's nothing to enforce.
+function enforceCredentialResetIfNeeded() {
+  if (!currentHost?.force_credential_reset) return false;
+  document.getElementById('appRoot').innerHTML = `
+    <div class="auth-box" style="max-width:420px;margin:60px auto;">
+      <h2 style="margin-bottom:6px;">Set Your Login Details</h2>
+      <p style="font-size:13px;color:var(--ink-muted);margin:0 0 16px;">
+        ${currentHost.username ? `Welcome, ${escapeHtml(currentHost.name)}. ` : ''}Before you continue, choose your own username and password.
+      </p>
+      <div class="field"><label>Username</label>
+        <input type="text" id="resetUsername" value="${escapeHtml(currentHost.username || '')}" autocomplete="off">
+      </div>
+      <div class="field"><label>New Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="resetPassword1" placeholder="min. 4 characters" autocomplete="new-password">
+          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('resetPassword1',this)">👁</button>
+        </div>
+      </div>
+      <div class="field"><label>Confirm New Password</label>
+        <div class="password-field-wrap">
+          <input type="password" id="resetPassword2" placeholder="re-enter password" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')handleForcedCredentialReset()">
+          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('resetPassword2',this)">👁</button>
+        </div>
+      </div>
+      <div class="auth-error" id="resetError"></div>
+      <button class="btn-primary" onclick="handleForcedCredentialReset()">Save &amp; Continue</button>
+    </div>
+  `;
+  return true;
+}
+async function handleForcedCredentialReset() {
+  const username  = document.getElementById('resetUsername')?.value?.trim();
+  const password1  = document.getElementById('resetPassword1')?.value;
+  const password2  = document.getElementById('resetPassword2')?.value;
+  const errEl = document.getElementById('resetError');
+  const btn   = document.querySelector('.auth-box .btn-primary');
+  if (!username) { errEl.textContent = 'Username is required.'; return; }
+  if (!password1 || password1.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
+  if (password1 !== password2) { errEl.textContent = 'Passwords do not match.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    await AccountAPI.updateHostCredentials(currentHost.id, username, password1);
+    currentHost.username = username;
+    currentHost.force_credential_reset = false;
+    saveHostSession(currentHost);
+    renderTopbarHost();
+    await renderSessionList();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not save. Please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Save & Continue'; }
+  }
+}
+
+// Checks for resolved requests the host hasn't seen the reply to yet, and
+// shows them one at a time as a dismissible notice.
+async function checkForAdminResponses() {
+  if (!currentHost?.id) return;
+  try {
+    const pending = await AccountAPI.getUnacknowledgedResolvedRequests(currentHost.id);
+    if (pending.length) showAdminResponseNotice(pending[0]);
+  } catch (_) {}
+}
+function showAdminResponseNotice(request) {
+  if (document.getElementById('adminNoticeModal')) return;
+  const labels = {
+    username_change: 'Username Change', password_reset: 'Password Reset', both_credentials: 'Username & Password Reset',
+    access_open_play: 'Open Play Access', access_tournament: 'Tournament Access', access_both: 'Open Play + Tournament Access', other: 'Your Request',
+  };
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="adminNoticeModal">
+      <div class="modal-box">
+        <h2>📩 Message from Admin</h2>
+        <p class="modal-sub">Re: ${labels[request.request_type] || 'Your Request'}</p>
+        <div style="background:var(--surface-hover);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:12px 14px;font-size:14px;margin-bottom:14px;">
+          ${escapeHtml(request.admin_response || 'Your request has been resolved.')}
+        </div>
+        <div class="confirm-actions">
+          <button class="btn-yes" onclick="handleAcknowledgeAdminNotice('${request.id}')">Got It</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function handleAcknowledgeAdminNotice(requestId) {
+  await AccountAPI.acknowledgeRequest(requestId);
+  document.getElementById('adminNoticeModal')?.remove();
+  checkForAdminResponses(); // show the next one, if there is one
+}
+
+// ── Profile — nickname (free), credentials (requires current password) ──
+function openProfileModal() {
+  if (document.getElementById('profileModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="profileModal">
+      <div class="modal-box">
+        <h2>Profile</h2>
+        <p class="modal-sub">@${escapeHtml(currentHost.username)}</p>
+
+        <div class="edit-section-title">Display Name</div>
+        <div class="field"><label>Name shown in the app</label><input type="text" id="profileNickname" value="${escapeHtml(currentHost.name)}"></div>
+        <div class="auth-error" id="nicknameError"></div>
+        <button class="btn-no" style="width:100%;margin-bottom:16px;border-radius:var(--radius-sm);padding:10px;font-weight:700;border:1px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);" onclick="handleSaveNickname()">Save Name</button>
+
+        <div class="edit-section-title">Change Username / Password</div>
+        <p style="font-size:11px;color:var(--bench-slate);margin:0 0 10px;">Enter your current password to confirm any change below.</p>
+        <div class="field"><label>Current Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="profileCurrentPw" autocomplete="current-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('profileCurrentPw',this)">👁</button>
+          </div>
+        </div>
+        <div class="field"><label>New Username (optional)</label><input type="text" id="profileNewUsername" placeholder="leave blank to keep current" autocomplete="off"></div>
+        <div class="field"><label>New Password (optional)</label>
+          <div class="password-field-wrap">
+            <input type="password" id="profileNewPw" placeholder="leave blank to keep current" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('profileNewPw',this)">👁</button>
+          </div>
+        </div>
+        <div class="field"><label>Confirm New Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="profileNewPw2" placeholder="re-enter new password" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('profileNewPw2',this)">👁</button>
+          </div>
+        </div>
+        <div class="auth-error" id="credentialsError"></div>
+        <button class="btn-yes" id="credentialsSaveBtn" style="width:100%;margin-bottom:6px;" onclick="handleChangeCredentials()">Save Changes</button>
+        <p style="font-size:12px;text-align:center;margin:8px 0 0;">
+          <a href="javascript:void(0)" onclick="document.getElementById('profileModal').remove();openRequestAdminModal()" style="color:var(--waiting-blue);font-weight:700;">Forgot your password, or need something else? Request it from your admin →</a>
+        </p>
+
+        <button class="btn-no" style="width:100%;margin-top:16px;border-radius:var(--radius-sm);padding:10px;font-weight:700;border:1px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);" onclick="document.getElementById('profileModal').remove()">Close</button>
+      </div>
+    </div>
+  `);
+}
+async function handleSaveNickname() {
+  const name = document.getElementById('profileNickname')?.value?.trim();
+  const errEl = document.getElementById('nicknameError');
+  if (!name) { errEl.textContent = 'Name cannot be empty.'; return; }
+  try {
+    await AccountAPI.updateHostNickname(currentHost.id, name);
+    currentHost.name = name;
+    saveHostSession(currentHost);
+    renderTopbarHost();
+    errEl.textContent = '';
+    errEl.innerHTML = '<span style="color:var(--winner-green);">✓ Saved</span>';
+  } catch (err) { errEl.textContent = err.message || 'Could not save.'; }
+}
+async function handleChangeCredentials() {
+  const currentPw = document.getElementById('profileCurrentPw')?.value;
+  const newUsername = document.getElementById('profileNewUsername')?.value?.trim();
+  const newPw  = document.getElementById('profileNewPw')?.value;
+  const newPw2 = document.getElementById('profileNewPw2')?.value;
+  const errEl = document.getElementById('credentialsError');
+  const btn = document.getElementById('credentialsSaveBtn');
+
+  if (!currentPw) { errEl.textContent = 'Enter your current password to confirm this change.'; return; }
+  if (!newUsername && !newPw) { errEl.textContent = 'Enter a new username, a new password, or both.'; return; }
+  if (newPw && newPw.length < 4) { errEl.textContent = 'New password must be at least 4 characters.'; return; }
+  if (newPw && newPw !== newPw2) { errEl.textContent = 'New passwords do not match.'; return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const ok = await AccountAPI.verifyCurrentPassword(currentHost.id, currentPw);
+    if (!ok) {
+      errEl.textContent = 'Current password is incorrect.';
+      if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+      return;
+    }
+    await AccountAPI.updateHostCredentials(currentHost.id, newUsername || currentHost.username, newPw || currentPw);
+    currentHost.username = newUsername || currentHost.username;
+    saveHostSession(currentHost);
+    document.getElementById('profileModal')?.remove();
+    alert('Your login details have been updated.');
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not save changes.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+  }
+}
+
+// ── Request something from the admin ──
+function openRequestAdminModal() {
+  if (document.getElementById('requestAdminModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="requestAdminModal">
+      <div class="modal-box">
+        <h2>Request From Admin</h2>
+        <p class="modal-sub">Send a request to your superadmin — they'll action it and you'll see their reply next time you log in.</p>
+        <div class="field"><label>What do you need?</label>
+          <select id="requestType">
+            <option value="password_reset">Reset my password (forgot it)</option>
+            <option value="username_change">Change my username</option>
+            <option value="both_credentials">Reset both username and password</option>
+            <option value="access_open_play">Enable Open Play access</option>
+            <option value="access_tournament">Enable Tournament access</option>
+            <option value="access_both">Enable Open Play + Tournament access</option>
+            <option value="other">Something else</option>
+          </select>
+        </div>
+        <div class="field"><label>Note (optional)</label><input type="text" id="requestNote" placeholder="Any details for your admin"></div>
+        <div class="auth-error" id="requestError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('requestAdminModal').remove()">Cancel</button>
+          <button class="btn-yes" id="requestSendBtn" onclick="handleSubmitHostRequest()">Send Request</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function handleSubmitHostRequest() {
+  const type = document.getElementById('requestType')?.value;
+  const note = document.getElementById('requestNote')?.value?.trim();
+  const errEl = document.getElementById('requestError');
+  const btn = document.getElementById('requestSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    await AccountAPI.submitHostRequest(currentHost.id, type, note);
+    document.getElementById('requestAdminModal')?.remove();
+    alert('Request sent — your admin will get back to you.');
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not send request.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Request'; }
+  }
+}
+
 function saveHostSession(host) {
   localStorage.setItem(CURRENT_HOST_KEY, JSON.stringify({
     id: host.id, name: host.name, username: host.username,
@@ -724,13 +952,13 @@ const AccountAPI = (() => {
     const hash = await hashPassword(password);
     let { data, error } = await supabaseClient
       .from('host_accounts')
-      .select('id, name, username, is_active, allow_open_play, allow_tournament')
+      .select('id, name, username, is_active, allow_open_play, allow_tournament, force_credential_reset')
       .eq('username', username.trim())
       .eq('password_hash', hash)
       .single();
-    if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
-      // Migration not run yet — log in without the permission columns
-      // (defaults to full access, same as the DB column defaults would be).
+    if (error && /allow_open_play|allow_tournament|force_credential_reset/.test(error.message || '')) {
+      // Migration not run yet — log in without the newer columns (defaults
+      // to full access / no forced reset, same as the DB column defaults).
       ({ data, error } = await supabaseClient
         .from('host_accounts')
         .select('id, name, username, is_active')
@@ -742,7 +970,75 @@ const AccountAPI = (() => {
     if (!data.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
     return data;
   }
-  return { loginHost };
+
+  // Verifies the CURRENT password matches before allowing a sensitive
+  // change — re-auth pattern, not just trusting whoever's got the session.
+  async function verifyCurrentPassword(hostId, currentPassword) {
+    const hash = await hashPassword(currentPassword);
+    const { data, error } = await supabaseClient
+      .from('host_accounts').select('id').eq('id', hostId).eq('password_hash', hash).single();
+    if (error || !data) return false;
+    return true;
+  }
+
+  // Used both for a host setting their OWN new credentials (self-service,
+  // after verifying their current password, or on the mandatory first-login
+  // reset) and for finishing a superadmin-issued credential reset.
+  async function updateHostCredentials(hostId, newUsername, newPassword) {
+    const passwordHash = await hashPassword(newPassword);
+    const { error } = await supabaseClient.from('host_accounts')
+      .update({ username: newUsername.trim(), password_hash: passwordHash, force_credential_reset: false })
+      .eq('id', hostId);
+    if (error) {
+      if (error.code === '23505') throw new Error('That username is already taken. Choose a different one.');
+      throw error;
+    }
+  }
+
+  async function updateHostNickname(hostId, newName) {
+    const { error } = await supabaseClient.from('host_accounts').update({ name: newName.trim() }).eq('id', hostId);
+    if (error) throw error;
+  }
+
+  // ── Requests to the superadmin (credential resets, access changes) ──
+  async function submitHostRequest(hostId, requestType, note) {
+    const { error } = await supabaseClient.from('host_requests')
+      .insert({ host_id: hostId, request_type: requestType, note: note || null, status: 'pending' });
+    if (error) {
+      if (/host_requests/.test(error.message || '')) {
+        throw new Error('Database is missing the host_requests table. Run this in Supabase SQL Editor:\n\n' +
+          "CREATE TABLE IF NOT EXISTS host_requests (\n" +
+          "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n" +
+          "  host_id uuid REFERENCES host_accounts(id) ON DELETE CASCADE,\n" +
+          "  request_type text NOT NULL,\n" +
+          "  note text,\n" +
+          "  status text DEFAULT 'pending',\n" +
+          "  admin_response text,\n" +
+          "  host_acknowledged boolean DEFAULT false,\n" +
+          "  created_at timestamptz DEFAULT now(),\n" +
+          "  resolved_at timestamptz\n" +
+          ");");
+      }
+      throw error;
+    }
+  }
+
+  // Resolved requests the host hasn't seen the admin's reply to yet.
+  async function getUnacknowledgedResolvedRequests(hostId) {
+    const { data, error } = await supabaseClient.from('host_requests')
+      .select('*').eq('host_id', hostId).eq('status', 'resolved').eq('host_acknowledged', false)
+      .order('resolved_at', { ascending: false });
+    if (error) return [];
+    return data || [];
+  }
+  async function acknowledgeRequest(requestId) {
+    await supabaseClient.from('host_requests').update({ host_acknowledged: true }).eq('id', requestId);
+  }
+
+  return {
+    loginHost, verifyCurrentPassword, updateHostCredentials, updateHostNickname,
+    submitHostRequest, getUnacknowledgedResolvedRequests, acknowledgeRequest,
+  };
 })();
 
 // Current logged-in host — populated after login, null otherwise.
@@ -1843,10 +2139,10 @@ async function init() {
     try {
       let { data, error } = await supabaseClient
         .from('host_accounts')
-        .select('id, name, username, is_active, allow_open_play, allow_tournament')
+        .select('id, name, username, is_active, allow_open_play, allow_tournament, force_credential_reset')
         .eq('id', currentHost.id)
         .single();
-      if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
+      if (error && /allow_open_play|allow_tournament|force_credential_reset/.test(error.message || '')) {
         ({ data, error } = await supabaseClient
           .from('host_accounts')
           .select('id, name, username, is_active')
@@ -1862,7 +2158,7 @@ async function init() {
         return;
       }
       // Refresh currentHost with live data in case name/username/permissions changed.
-      currentHost = { id: data.id, name: data.name, username: data.username, allow_open_play: data.allow_open_play, allow_tournament: data.allow_tournament };
+      currentHost = { id: data.id, name: data.name, username: data.username, allow_open_play: data.allow_open_play, allow_tournament: data.allow_tournament, force_credential_reset: data.force_credential_reset };
       saveHostSession(currentHost);
     } catch (_) {
       clearHostSession();
@@ -1878,6 +2174,7 @@ async function init() {
     return;
   }
 
+  if (enforceCredentialResetIfNeeded()) return;
   renderTopbarHost();
   try { await renderSessionList(); }
   catch (err) {
@@ -1893,10 +2190,14 @@ function renderTopbarHost() {
     <span style="font-size:12px;color:rgba(242,244,240,0.65);font-weight:600;">
       ${escapeHtml(currentHost.name)}
     </span>
+    <button onclick="openProfileModal()" style="background:rgba(242,244,240,0.08);border:1px solid rgba(242,244,240,0.15);color:rgba(242,244,240,0.85);padding:6px 12px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:34px;">
+      👤 Profile
+    </button>
     <button onclick="hostLogout()" style="background:rgba(255,122,92,0.18);border:1px solid rgba(255,122,92,0.4);color:var(--fault-coral);padding:6px 12px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:34px;">
       Log Out
     </button>
   `;
+  checkForAdminResponses();
 }
 
 function renderLoginScreen() {
@@ -1936,6 +2237,7 @@ async function handleHostLogin() {
     const host = await AccountAPI.loginHost(username, password);
     currentHost = host;
     saveHostSession(host);
+    if (enforceCredentialResetIfNeeded()) return;
     renderTopbarHost();
     await renderSessionList();
   } catch (err) {
