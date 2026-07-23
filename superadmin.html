@@ -520,6 +520,70 @@ async function dismissHostRequest(requestId) {
   await loadRequests();
 }
 
+// Quick one-click password reset, callable directly from the account list —
+// same security posture as resolving a "forgot password" request: the admin
+// sets a temporary password they know, and the host is required to choose
+// their own on their next login (force_credential_reset). Keeps ONE
+// consistent behavior for "admin sets a password" everywhere in the app,
+// rather than this entry point quietly working differently.
+function openQuickResetPasswordModal(hostId, hostName, currentUsername) {
+  if (document.getElementById('quickResetModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="quickResetModal">
+      <div class="modal-box">
+        <h2>Reset Password — ${escapeHtml(hostName)}</h2>
+        <p class="modal-sub">This becomes their temporary login. They'll be required to choose their own username and password the next time they sign in.</p>
+        <div class="field"><label>Username</label><input type="text" id="quickResetUsername" value="${escapeHtml(currentUsername)}" autocomplete="off"></div>
+        <div class="field"><label>New Temporary Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="quickResetPassword" placeholder="min. 4 characters" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePw('quickResetPassword',this)">👁</button>
+          </div>
+        </div>
+        <div class="field"><label>Confirm Password</label>
+          <div class="password-field-wrap">
+            <input type="password" id="quickResetPassword2" placeholder="re-enter password" autocomplete="new-password">
+            <button type="button" class="password-toggle-btn" onclick="togglePw('quickResetPassword2',this)">👁</button>
+          </div>
+        </div>
+        <div class="auth-error" id="quickResetError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('quickResetModal').remove()">Cancel</button>
+          <button class="btn-yes" id="quickResetBtn" onclick="confirmQuickResetPassword('${hostId}')">Reset Password</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function confirmQuickResetPassword(hostId) {
+  const username = document.getElementById('quickResetUsername')?.value?.trim();
+  const password = document.getElementById('quickResetPassword')?.value;
+  const password2 = document.getElementById('quickResetPassword2')?.value;
+  const errEl = document.getElementById('quickResetError');
+  const btn = document.getElementById('quickResetBtn');
+  if (!username) { errEl.textContent = 'Username is required.'; return; }
+  if (!password || password.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
+  if (password !== password2) { errEl.textContent = 'Passwords do not match.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+  try {
+    const passwordHash = await hashPassword(password);
+    let { error } = await db.from('host_accounts')
+      .update({ username, password_hash: passwordHash, force_credential_reset: true }).eq('id', hostId);
+    if (error && /force_credential_reset/.test(error.message || '')) {
+      ({ error } = await db.from('host_accounts').update({ username, password_hash: passwordHash }).eq('id', hostId));
+    }
+    if (error) {
+      if (error.code === '23505') throw new Error('That username is already taken.');
+      throw error;
+    }
+    document.getElementById('quickResetModal').remove();
+    await loadAccounts();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not reset password.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Reset Password'; }
+  }
+}
+
 async function loadAccounts() {
   const el = document.getElementById('accountsList');
   if (!el) return;
@@ -571,6 +635,7 @@ async function loadAccounts() {
           </span>
           <div class="account-actions">
             <button class="btn-edit" onclick="openSessionsBrowser('${a.id}','${escapeHtml(a.name)}')" style="background:var(--surface-hover,#263330);color:var(--optic-yellow,#d7f23d);">🗂 Sessions</button>
+            <button class="btn-edit" onclick="openQuickResetPasswordModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.username)}')" style="background:var(--surface-hover,#263330);color:#6fa8e0;">🔑 Reset Password</button>
             <button class="btn-edit" onclick="openEditModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.username)}',${a.is_active},${allowOP},${allowT})">Edit</button>
             <button class="btn-danger" onclick="openDeleteModal('${a.id}','${escapeHtml(a.name)}')">Delete</button>
           </div>
