@@ -792,11 +792,13 @@ async function propagate(){
 
   const wM=all.filter(m=>m.match_type==='winners');
   const lM=all.filter(m=>m.match_type==='losers');
+  const bM=all.filter(m=>m.match_type==='bronze_bracket'); // Group Rival Battle's parallel "3rd place" bracket
   const gf=all.find(m=>m.match_type==='grand_final');
   const br=all.find(m=>m.match_type==='bracket_reset');
   const tfM=all.find(m=>m.match_type==='third_place');
   const maxWR=wM.reduce((a,m)=>Math.max(a,m.round),0);
   const maxLR=lM.length?lM.reduce((a,m)=>Math.max(a,m.round),0):0;
+  const maxBR=bM.length?bM.reduce((a,m)=>Math.max(a,m.round),0):0;
 
   for(const m of all.filter(x=>x.status==='completed'&&x.winner_id)){
     if(m.match_type==='winners'){
@@ -841,6 +843,18 @@ async function propagate(){
       if(br&&m.winner_id===m.entry_b_id){
         if(br.entry_a_id!==m.entry_a_id||br.entry_b_id!==m.entry_b_id)
           await db.from('bracket_matches').update({entry_a_id:m.entry_a_id,entry_b_id:m.entry_b_id,status:'pending'}).eq('id',br.id);
+      }
+    }
+    // Group Rival Battle's Battle-for-Third bracket — plain single-elim
+    // advancement scoped entirely to its own rounds. Never touches the
+    // Championship bracket and never routes anywhere else; whoever wins
+    // the final round of THIS bracket is 3rd place overall.
+    if(m.match_type==='bronze_bracket'&&m.winner_id&&m.round<maxBR){
+      const nr=m.round+1,np=Math.ceil(m.position/2);
+      const nxt=bM.find(x=>x.round===nr&&x.position===np);
+      if(nxt){
+        const f=m.position%2===1?'entry_a_id':'entry_b_id';
+        if(nxt[f]!==m.winner_id){await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxt.id);nxt[f]=m.winner_id;}
       }
     }
     // 3rd place: loser of semi-finals
@@ -993,7 +1007,7 @@ async function autoFillRRCourts(justFinishedTeamIds){
   );
   const typeRank=m=>m.match_type==='third_place'?0:m.match_type==='winners'?1:0; // 3rd place before final when tied on round
   const pending=MATCHES.filter(m=>
-      (m.match_type==='round_robin'||m.match_type==='winners'||m.match_type==='third_place')&&
+      (m.match_type==='round_robin'||m.match_type==='winners'||m.match_type==='third_place'||m.match_type==='group_playoff'||m.match_type==='bronze_bracket')&&
       m.status==='pending'&&!m.court_label&&m.entry_a_id&&m.entry_b_id)
     .sort((a,b)=>a.round-b.round||typeRank(a)-typeRank(b)||a.position-b.position);
 
@@ -2047,6 +2061,14 @@ function buildNCAABracket(){
   // ── Losers bracket (double elim) ────────────
   const losersHtml = (isDbl && lM.length) ? buildLosersSection(lM) : '';
 
+  // ── Battle for Third bracket (Group Rival Battle mode) ──
+  // Independent of isDbl — this exists whenever Stage 2 of a group-playoff
+  // Finals was generated, regardless of bracket_type.
+  const bM = MATCHES.filter(m=>m.match_type==='bronze_bracket');
+  const bronzeHtml = bM.length ? buildLosersSection(bM,'🥉 Battle for Third — Bracket') : '';
+  const maxBR = bM.length ? bM.reduce((a,m)=>Math.max(a,m.round),0) : 0;
+  const bronzeFinalM = bM.find(m=>m.round===maxBR);
+
   // When this bracket is the Finals stage of a round-robin (group stage →
   // qualifiers), TEAMS.length / total_slots refer to ALL registered teams,
   // not just the qualifiers actually in this bracket — show the real count.
@@ -2063,11 +2085,15 @@ function buildNCAABracket(){
     : `${isDbl?'Double Elimination':'Single Elimination'} · ${TEAMS.length} teams · ${BRACKET.total_slots}-slot draw`;
 
   // Podium — only once the whole tournament is decided (final AND 3rd
-  // place both played). isDbl skips this: grand final/reset handle their
-  // own championship-decided state and don't have a clean "done" signal
-  // here without extra work, so keep the podium to single/finals-bracket.
-  const podiumHtml = (!isDbl && finalM?.status==='completed' && (!tfM || tfM.status==='completed'))
-    ? renderPodium(finalM, tfM) : '';
+  // place both played). 3rd place comes from the traditional third_place
+  // match if one exists, or otherwise from the Battle-for-Third bracket's
+  // own final round (Group Rival Battle mode) — whichever this bracket
+  // actually has. isDbl skips this: grand final/reset handle their own
+  // championship-decided state and don't have a clean "done" signal here
+  // without extra work, so keep the podium to single/finals-bracket.
+  const thirdPlaceDecider = tfM || bronzeFinalM;
+  const podiumHtml = (!isDbl && finalM?.status==='completed' && (!thirdPlaceDecider || thirdPlaceDecider.status==='completed'))
+    ? renderPodium(finalM, thirdPlaceDecider) : '';
 
   return `
     ${podiumHtml}
@@ -2169,8 +2195,12 @@ function buildFlatMatch(m, label){
   </div>`;
 }
 
-/* Losers bracket SVG section */
-function buildLosersSection(lM){
+/* Parallel single-elim bracket tree — used for genuine double-elim's Losers
+   Bracket, and reused as-is for Group Rival Battle's Battle-for-Third
+   bracket (same visual structure, just fed a different match_type and
+   label). Rendering here is generic and doesn't care which. */
+function buildLosersSection(lM,label){
+  label=label||'📉 Losers Bracket';
   const maxLR = lM.reduce((a,m)=>Math.max(a,m.round),0);
   const BW=118,BH=24,GAP=3,CG=44,PX=12,PY=18,LH=15,R1SP=BH*2+GAP+14;
   const r1n = lM.filter(m=>m.round===1).length;
@@ -2237,7 +2267,7 @@ function buildLosersSection(lM){
 
   return `<div style="margin-top:16px;padding:12px 14px;border-top:1px solid var(--border-soft)">
     <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--fault-coral);
-      letter-spacing:.07em;margin-bottom:10px">📉 Losers Bracket</div>
+      letter-spacing:.07em;margin-bottom:10px">${label}</div>
     <div style="overflow:auto;-webkit-overflow-scrolling:touch">
       <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
         xmlns="http://www.w3.org/2000/svg" style="display:block">
@@ -2290,6 +2320,7 @@ function computeAllGroupStandings(){
 function renderRoundRobinView(){
   const rrMatches=MATCHES.filter(m=>m.match_type==='round_robin');
   const finalsExist=MATCHES.some(m=>m.match_type==='winners');
+  const groupPlayoffsExist=MATCHES.some(m=>m.match_type==='group_playoff');
   const groupStandings=computeAllGroupStandings();
   const isGrouped=groupStandings.length>1||groupStandings[0]?.groupNum!=null;
   const allGroupsDone=groupStandings.every(({groupNum})=>{
@@ -2397,6 +2428,21 @@ function renderRoundRobinView(){
     `;
   }
 
+  // ── Group Rival Battle Stage 1 in progress — each group's playoff match,
+  // not yet resolved into the Championship/Bronze brackets. ──
+  if(groupPlayoffsExist){
+    const groupSectionsHtml=groupStandings.map(({groupNum,standings})=>
+      renderOneGroup(groupNum,standings,isGrouped?`Group ${String.fromCharCode(64+groupNum)}`:'Round Robin')).join('');
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <span style="font-size:11px;color:var(--bench-slate)">Round Robin → Group Playoffs · ${TEAMS.length} teams</span>
+        <button class="btn btn-ghost btn-sm" onclick="confirmChangeFormat()">⇄ Change Format</button>
+      </div>
+      ${renderGroupPlayoffsView()}
+      ${groupSectionsHtml}
+    `;
+  }
+
   // ── Group stage still in progress (or a single ungrouped round robin) ──
   const groupSectionsHtml=groupStandings.map(({groupNum,standings})=>
     renderOneGroup(groupNum,standings,isGrouped?`Group ${String.fromCharCode(64+groupNum)}`:'Round Robin')).join('');
@@ -2406,15 +2452,29 @@ function renderRoundRobinView(){
     const maxAdvance=Math.max(1,Math.min(4,smallestGroupSize));
     const advanceOptions=Array.from({length:maxAdvance},(_,i)=>i+1)
       .map(n=>`<option value="${n}">Top ${n} per group</option>`).join('');
+    // Group Rival Battle needs real groups of at least 2 teams each to have
+    // an intra-group match to play — hide it otherwise rather than offering
+    // a mode that can't actually run.
+    const groupBattleEligible=isGrouped&&groupStandings.length>=2&&smallestGroupSize>=2;
     finalsHtml=`<div class="card" style="margin-bottom:12px;border:1px solid rgba(215,242,61,.3)">
       <h2 style="margin-bottom:8px">🏆 ${isGrouped?'Group Stage':'Round Robin'} Complete</h2>
       <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px">
-        Every match played. Pick how many teams advance from ${isGrouped?'each group':'the standings'} into the Finals bracket
-        (Semifinal → Final${isGrouped||smallestGroupSize>=4?' → 3rd Place':''}).
+        Every match played. Choose how the Finals get set up.
       </p>
-      ${isGrouped?`<div class="field" style="max-width:220px"><label>Teams advancing per group</label><select id="rrAdvanceCount">${advanceOptions}</select></div>`
-        :`<input type="hidden" id="rrAdvanceCount" value="${maxAdvance>=2?2:1}">`}
-      <button class="btn btn-yellow" style="margin-top:10px" onclick="generateFinal(parseInt(document.getElementById('rrAdvanceCount').value,10))">Generate Finals Bracket →</button>
+      <div class="field" style="max-width:320px"><label>Finals Pairing</label>
+        <select id="rrPairingMode">
+          <option value="cross_seed">Cross-Group Seeding — avoids an immediate same-group rematch</option>
+          ${groupBattleEligible?`<option value="group_battle">Group Rival Battle — each group's #1 fights their own #2 first</option>`:''}
+        </select>
+      </div>
+      <div class="field" style="max-width:220px"><label>Teams advancing per group (Cross-Group Seeding only)</label>
+        ${isGrouped?`<select id="rrAdvanceCount">${advanceOptions}</select>`:`<input type="hidden" id="rrAdvanceCount" value="${maxAdvance>=2?2:1}">`}
+      </div>
+      <p style="font-size:11px;color:var(--bench-slate);margin:8px 0 0">
+        <strong>Cross-Group Seeding</strong>: top finishers from every group cross-seed into one bracket (Semifinal → Final${isGrouped||smallestGroupSize>=4?' → 3rd Place':''}).<br>
+        ${groupBattleEligible?`<strong>Group Rival Battle</strong>: each group's top 2 play each other directly first — winners cross-seed into a Championship bracket, losers cross-seed into their own Battle-for-Third bracket.`:''}
+      </p>
+      <button class="btn btn-yellow" style="margin-top:10px" onclick="handleGenerateFinalsChoice()">Continue →</button>
     </div>`;
   }else{
     const doneCount=rrMatches.filter(m=>m.status==='completed').length;
@@ -2464,6 +2524,60 @@ async function doRegenerateFinals(){
   await loadAll();render();
 }
 
+// Builds the rows for a complete single-elimination bracket from a list of
+// qualifier teams — byes, seeding, everything. Shared by the existing
+// cross-seed Finals path AND the new Group Rival Battle mode's two parallel
+// brackets (Championship from winners, Battle-for-Third from losers) — same
+// math either way, just fed a different qualifier list and match_type.
+async function buildQualifierBracketRows(qualifiers, matchType, includeConsolation){
+  const slots=nextP2(qualifiers.length);
+  const totalRounds=Math.log2(slots);
+  const seedOrder=standardSeedOrder(slots);
+
+  // Byes always land against the TOP seeds (standard practice) because
+  // standardSeedOrder always pairs seed k with seed (slots+1-k), and
+  // padding always fills the highest seed numbers.
+  const byeCache={};
+  async function byeEntryFor(seedNum){
+    if(byeCache[seedNum])return byeCache[seedNum];
+    const{data:bye}=await db.from('bracket_entries').insert({bracket_id:BRACKET.id,session_id:SID,team_name:'BYE',is_bye:true}).select().single();
+    byeCache[seedNum]=bye.id;
+    return bye.id;
+  }
+
+  const rows=[];
+  for(let p=1;p<=slots/2;p++){
+    const seedA=seedOrder[(p-1)*2], seedB=seedOrder[(p-1)*2+1];
+    const qA=qualifiers[seedA-1], qB=qualifiers[seedB-1];
+    let entryA=qA?qA.id:null, entryB=qB?qB.id:null;
+    let byeSide=null;
+    if(!qA&&qB){entryA=await byeEntryFor(seedA);byeSide='A';}
+    else if(!qB&&qA){entryB=await byeEntryFor(seedB);byeSide='B';}
+    rows.push({
+      bracket_id:BRACKET.id,round:1,position:p,best_of:1,
+      status:byeSide?'completed':'pending',match_type:matchType,
+      entry_a_id:entryA,entry_b_id:entryB,
+      winner_id:byeSide==='A'?entryB:byeSide==='B'?entryA:null,
+      loser_id:byeSide==='A'?entryA:byeSide==='B'?entryB:null,
+      score_a:null,score_b:null,
+    });
+  }
+  for(let r=2;r<=totalRounds;r++){
+    const cnt=slots/Math.pow(2,r);
+    for(let p=1;p<=cnt;p++)rows.push({
+      bracket_id:BRACKET.id,round:r,position:p,best_of:1,status:'pending',
+      match_type:matchType,entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null,
+    });
+  }
+  if(includeConsolation&&totalRounds>=2){
+    rows.push({
+      bracket_id:BRACKET.id,round:totalRounds,position:2,best_of:1,status:'pending',
+      match_type:'third_place',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null,
+    });
+  }
+  return rows;
+}
+
 async function generateFinal(advancePerGroup){
   advancePerGroup=advancePerGroup||1;
   const groupStandings=computeAllGroupStandings();
@@ -2499,64 +2613,119 @@ async function generateFinal(advancePerGroup){
   const qualifiers=crossSeedQualifiers(advancePerGroup);
   if(qualifiers.length<2){alert('Need at least 2 qualifying teams to generate a Finals bracket.');return}
 
-  const slots=nextP2(qualifiers.length);
-  const totalRounds=Math.log2(slots);
-  const seedOrder=standardSeedOrder(slots); // seed numbers in R1 slot order
-
-  // Create BYE entries for any padding slots beyond the real qualifier count —
-  // these always land against the TOP seeds (standard practice: strong
-  // teams get the bye) because standardSeedOrder always pairs seed k with
-  // seed (slots+1-k), and padding always fills the highest seed numbers.
-  const byeCache={};
-  async function byeEntryFor(seedNum){
-    if(byeCache[seedNum])return byeCache[seedNum];
-    const{data:bye}=await db.from('bracket_entries').insert({bracket_id:BRACKET.id,session_id:SID,team_name:'BYE',is_bye:true}).select().single();
-    byeCache[seedNum]=bye.id;
-    return bye.id;
-  }
-
-  const baseRound=1; // finals bracket ALWAYS starts fresh at round 1 — buildNCAABracket()
-                      // only looks at match_type==='winners' rows and computes its own
-                      // round-relative labels from them, so reusing round-robin's round
-                      // numbers here just creates empty phantom columns before it.
-
-  const rows=[];
-  const r1ByePairs=[]; // {position, realTeamId, realSide} for post-insert auto-complete
-
-  for(let p=1;p<=slots/2;p++){
-    const seedA=seedOrder[(p-1)*2], seedB=seedOrder[(p-1)*2+1];
-    const qA=qualifiers[seedA-1], qB=qualifiers[seedB-1];
-    let entryA=qA?qA.id:null, entryB=qB?qB.id:null;
-    let byeSide=null;
-    if(!qA&&qB){entryA=await byeEntryFor(seedA);byeSide='A';}
-    else if(!qB&&qA){entryB=await byeEntryFor(seedB);byeSide='B';}
-    rows.push({
-      bracket_id:BRACKET.id,round:baseRound,position:p,best_of:1,
-      status:byeSide?'completed':'pending',match_type:'winners',
-      entry_a_id:entryA,entry_b_id:entryB,
-      winner_id:byeSide==='A'?entryB:byeSide==='B'?entryA:null,
-      loser_id:byeSide==='A'?entryA:byeSide==='B'?entryB:null,
-      score_a:null,score_b:null,
-    });
-  }
-  for(let r=2;r<=totalRounds;r++){
-    const cnt=slots/Math.pow(2,r);
-    for(let p=1;p<=cnt;p++)rows.push({
-      bracket_id:BRACKET.id,round:baseRound+r-1,position:p,best_of:1,status:'pending',
-      match_type:'winners',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null,
-    });
-  }
-  rows.push({
-    bracket_id:BRACKET.id,round:baseRound+totalRounds-1,position:2,best_of:1,status:'pending',
-    match_type:'third_place',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null,
-  });
-
+  const rows=await buildQualifierBracketRows(qualifiers,'winners',true);
   const{error}=await db.from('bracket_matches').insert(rows);
   if(error){alert('Could not create Finals bracket: '+error.message);return}
 
   await loadAll();
   await propagate(); // push any bye auto-wins from R1 straight into R2
   await autoFillRRCourts(); // court assignment is automated for the Finals bracket too now
+  await loadAll();render();
+}
+
+// ── Group Rival Battle — Stage 1: each group's #1 plays their own #2 ──
+// directly. Winner advances toward the Championship, loser drops toward
+// Battle for Third. Only meaningful with exactly 2 qualifiers per group,
+// so this mode always uses top-2 regardless of what the cross-seed mode
+// might otherwise offer.
+// Reads the Finals Pairing choice and routes to the right generator —
+// Cross-Group Seeding keeps working exactly as it always has; Group Rival
+// Battle kicks off Stage 1 (the intra-group playoffs) instead.
+function handleGenerateFinalsChoice(){
+  const mode=document.getElementById('rrPairingMode')?.value||'cross_seed';
+  if(mode==='group_battle'){
+    generateGroupPlayoffs();
+  }else{
+    const advanceCount=parseInt(document.getElementById('rrAdvanceCount')?.value,10)||1;
+    generateFinal(advanceCount);
+  }
+}
+
+// Stage 1 view for Group Rival Battle — one row per group's playoff match,
+// same live/queued/score-entry behavior as any other match (openMatchHub
+// works generically off the match id, no match_type special-casing needed
+// there). Once every playoff is decided, offers to build Stage 2.
+function renderGroupPlayoffsView(){
+  const playoffs=MATCHES.filter(m=>m.match_type==='group_playoff').sort((a,b)=>a.position-b.position);
+  const allDone=playoffs.length>0&&playoffs.every(m=>m.status==='completed');
+  const eByID=id=>[...TEAMS,...BYES].find(t=>t.id===id);
+  const rows=playoffs.map((m,i)=>{
+    const eA=eByID(m.entry_a_id), eB=eByID(m.entry_b_id);
+    const done=m.status==='completed';
+    const wA=done&&m.winner_id===m.entry_a_id;
+    const live=m.status==='in_progress';
+    const canClick=eA&&eB&&!done;
+    const groupLabel=playoffs.length>1?`Group ${String.fromCharCode(65+i)}`:'Playoff';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:8px;${live?'border:1px solid rgba(215,242,61,.4)':''}${canClick?';cursor:pointer':''}"
+      ${canClick?`onclick="openMatchHub('${m.id}')"`:''}>
+      <span style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;min-width:64px">${esc(groupLabel)}</span>
+      <span style="flex:1;font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
+      <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
+      <span style="flex:1;text-align:right;font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="card" style="margin-bottom:12px">
+    <h2 style="margin-bottom:6px">🥊 Group Playoffs</h2>
+    <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px">Each group's #1 seed battles their own #2. Winners advance to the Championship bracket, losers drop to Battle for Third.</p>
+    ${rows}
+    ${allDone
+      ? `<button class="btn btn-yellow" style="margin-top:8px" onclick="generateStage2FromPlayoffs()">Generate Championship &amp; Bronze Brackets →</button>`
+      : `<p style="font-size:12px;color:var(--bench-slate);margin:8px 0 0">📋 ${playoffs.filter(m=>m.status==='completed').length} of ${playoffs.length} playoff matches played.</p>`}
+  </div>`;
+}
+
+
+// ── Group Rival Battle — Stage 1: each group's #1 plays their own #2 ──
+// directly. Winner advances toward the Championship, loser drops toward
+// Battle for Third. Only meaningful with exactly 2 qualifiers per group,
+// so this mode always uses top-2 regardless of what the cross-seed mode
+// might otherwise offer.
+async function generateGroupPlayoffs(){
+  const groupStandings=computeAllGroupStandings();
+  for(const{standings}of groupStandings){
+    if(!standings[0]||!standings[1]){alert('Every group needs at least 2 teams with results.');return}
+  }
+  const rows=groupStandings.map(({standings},gi)=>({
+    bracket_id:BRACKET.id,round:1,position:gi+1,best_of:1,status:'pending',match_type:'group_playoff',
+    entry_a_id:standings[0].id,entry_b_id:standings[1].id,
+    score_a:null,score_b:null,winner_id:null,loser_id:null,
+  }));
+  const{error}=await db.from('bracket_matches').insert(rows);
+  if(error){alert('Could not create group playoffs: '+error.message);return}
+  await loadAll();
+  await autoFillRRCourts();
+  await loadAll();render();
+}
+
+// ── Group Rival Battle — Stage 2: once every group's playoff is decided,
+// all the winners cross-seed into a Championship bracket and all the
+// losers cross-seed into their OWN bracket the same way — whoever wins
+// THAT one is 3rd place. Same math as the regular cross-seed Finals,
+// just run twice on two different qualifier pools. Uses 'bronze_bracket'
+// as its own match_type (NOT 'losers') specifically to avoid the
+// double-elimination "loser of every winners-bracket match auto-routes to
+// the losers bracket" logic in propagate() — that logic exists for genuine
+// double elim and would incorrectly siphon the Championship's own runner-up
+// into this bracket if reused as-is. ──
+async function generateStage2FromPlayoffs(){
+  const playoffs=MATCHES.filter(m=>m.match_type==='group_playoff').sort((a,b)=>a.position-b.position);
+  if(!playoffs.length||playoffs.some(m=>m.status!=='completed')){
+    alert('All group playoff matches must be completed first.');return;
+  }
+  const eByID=id=>[...TEAMS,...BYES].find(t=>t.id===id);
+  const winners=playoffs.map(m=>eByID(m.winner_id)).filter(Boolean);
+  const losers =playoffs.map(m=>eByID(m.loser_id)).filter(Boolean);
+  if(winners.length<2){alert('Need at least 2 group playoff winners to build a Championship bracket.');return}
+
+  const champRows =await buildQualifierBracketRows(winners,'winners',false);
+  const bronzeRows=losers.length>=2?await buildQualifierBracketRows(losers,'bronze_bracket',false):[];
+  const{error}=await db.from('bracket_matches').insert([...champRows,...bronzeRows]);
+  if(error){alert('Could not create Championship/Bronze brackets: '+error.message);return}
+
+  await loadAll();
+  await propagate();
+  await autoFillRRCourts();
   await loadAll();render();
 }
 
