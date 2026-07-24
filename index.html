@@ -1361,6 +1361,85 @@ function _tRoundLabel(r,total){const rem=total-r+1;return rem===1?'Final':rem===
 // Read-only SVG bracket tree — visually matches the host's connected bracket
 // exactly (same geometry/constants), with all edit controls (dropdowns,
 // Bo-selector, reverse, reset) stripped since spectators can't edit.
+// ── Read-only Group Playoffs (Stage 1 of Group Rival Battle) — mirrors the
+// host's renderGroupPlayoffsView() SVG bracket-tree exactly, minus the
+// click-to-score handlers and the Generate button (spectator can't act on
+// either). Without this, a spectator watching during Stage 1 would see
+// nothing at all — the group crosstables are still valid but give zero
+// indication these deciding matches are even happening. ──
+function buildReadOnlyGroupPlayoffs(){
+  const playoffs=_tMatches.filter(m=>m.match_type==='group_playoff').sort((a,b)=>a.position-b.position);
+  if(!playoffs.length)return'';
+  const N=playoffs.length;
+
+  const BW=136,BH=26,GAP=4,PX=14,PY=26;
+  const PAIR=BH*2+GAP, R1SP=PAIR+34;
+  const TRUNK_GAP=44, ENDPOINT_GAP=64, ENDPOINT_W=168, ENDPOINT_H=44;
+  const matchY=Array.from({length:N},(_,i)=>PY+i*R1SP+PAIR/2);
+  const trunkX=PX+BW+TRUNK_GAP;
+  const endpointX=trunkX+ENDPOINT_GAP;
+  const trunkY=(matchY[0]+matchY[N-1])/2;
+  const treeH=PY+N*R1SP+PY;
+  const svgW=endpointX+ENDPOINT_W+PX;
+
+  function buildTree(side,endpointLabel,accent){
+    let s='';
+    for(let i=0;i<N;i++){
+      const m=playoffs[i];
+      const eA=_tEnt(m.entry_a_id), eB=_tEnt(m.entry_b_id);
+      const done=m.status==='completed';
+      const highlightA = done && (side==='winner' ? m.winner_id===m.entry_a_id : m.loser_id===m.entry_a_id);
+      const highlightB = done && (side==='winner' ? m.winner_id===m.entry_b_id : m.loser_id===m.entry_b_id);
+      const cy=matchY[i], tyA=cy-BH-GAP/2, tyB=cy+GAP/2;
+      const live=m.status==='in_progress';
+
+      function box(ty,team,hl){
+        const fill=hl?`${accent}22`:'var(--surface-raised)';
+        const stroke=hl?accent:(live?'rgba(215,242,61,.4)':'var(--border-soft)');
+        const nameColor=hl?accent:(done?'rgba(242,244,240,.4)':'var(--ink)');
+        const uid=`sgp${side}${m.id.replace(/-/g,'').slice(0,6)}_${ty|0}`;
+        return `<rect x="${PX}" y="${ty}" width="${BW}" height="${BH}" rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>
+          <clipPath id="${uid}"><rect x="${PX+6}" y="${ty+2}" width="${BW-12}" height="${BH-4}"/></clipPath>
+          <text x="${PX+7}" y="${ty+BH/2+4}" font-size="10" font-weight="${hl?700:500}" fill="${nameColor}"
+            font-family="Inter,sans-serif" clip-path="url(#${uid})">${escapeHtml(team?.team_name||'?')}</text>`;
+      }
+      s+=box(tyA,eA,highlightA);
+      s+=box(tyB,eB,highlightB);
+      s+=`<line x1="${PX+BW}" y1="${tyA+BH/2}" x2="${PX+BW}" y2="${tyB+BH/2}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      s+=`<line x1="${PX+BW}" y1="${cy}" x2="${trunkX}" y2="${cy}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      s+=`<text x="${PX}" y="${tyA-6}" font-size="8" font-weight="800" letter-spacing="1"
+        fill="${accent}" font-family="Inter,sans-serif">GROUP ${String.fromCharCode(65+i)}</text>`;
+      if(live)s+=`<text x="${PX+BW-2}" y="${tyA-6}" text-anchor="end" font-size="8" font-weight="800"
+        fill="var(--optic-yellow)" font-family="Inter,sans-serif">▶ LIVE</text>`;
+    }
+    if(N>1)s+=`<line x1="${trunkX}" y1="${matchY[0]}" x2="${trunkX}" y2="${matchY[N-1]}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+    s+=`<line x1="${trunkX}" y1="${trunkY}" x2="${endpointX}" y2="${trunkY}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+    const decidedNames=playoffs.map(m=>m.status==='completed'?_tEnt(side==='winner'?m.winner_id:m.loser_id)?.team_name:null).filter(Boolean);
+    const allDecided=decidedNames.length===N;
+    s+=`<rect x="${endpointX}" y="${trunkY-ENDPOINT_H/2}" width="${ENDPOINT_W}" height="${ENDPOINT_H}" rx="6"
+      fill="${allDecided?accent+'22':'var(--surface-raised)'}" stroke="${allDecided?accent:'var(--border-soft)'}" stroke-width="${allDecided?1.5:1}"/>`;
+    s+=`<text x="${endpointX+ENDPOINT_W/2}" y="${trunkY-ENDPOINT_H/2-8}" text-anchor="middle" font-size="9" font-weight="800"
+      letter-spacing="1" fill="${accent}" font-family="Inter,sans-serif">${escapeHtml(endpointLabel)}</text>`;
+    s+= allDecided
+      ? `<text x="${endpointX+ENDPOINT_W/2}" y="${trunkY+3}" text-anchor="middle" font-size="10" font-weight="700" fill="${accent}" font-family="Inter,sans-serif">${decidedNames.length} team${decidedNames.length!==1?'s':''} ready</text>`
+      : `<text x="${endpointX+ENDPOINT_W/2}" y="${trunkY+3}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--resting-slate)" font-family="Inter,sans-serif">${decidedNames.length}/${N} decided</text>`;
+    return s;
+  }
+
+  const champSvg =buildTree('winner','🏆 CHAMPIONSHIP','#D7F23D');
+  const bronzeSvg=buildTree('loser', '🥉 BATTLE FOR 3RD','#CD8E5A');
+
+  return `<div class="card" style="margin-bottom:16px">
+    <h3 style="font-size:13px;margin:0 0 4px;">🥊 Group Playoffs</h3>
+    <p style="font-size:11px;color:var(--resting-slate);margin:0 0 12px;">Each group's #1 seed battles their own #2 — winners advance to the Championship, losers drop to Battle for Third.</p>
+    <div style="overflow:auto;-webkit-overflow-scrolling:touch">
+      <svg width="${svgW}" height="${treeH}" viewBox="0 0 ${svgW} ${treeH}" xmlns="http://www.w3.org/2000/svg" style="display:block;min-width:${svgW}px">${champSvg}</svg>
+      <div style="height:1px;background:var(--border-soft);margin:14px 0"></div>
+      <svg width="${svgW}" height="${treeH}" viewBox="0 0 ${svgW} ${treeH}" xmlns="http://www.w3.org/2000/svg" style="display:block;min-width:${svgW}px">${bronzeSvg}</svg>
+    </div>
+  </div>`;
+}
+
 function buildReadOnlyBracket(){
   const wM=_tMatches.filter(m=>m.match_type==='winners').sort((a,b)=>a.round-b.round||a.position-b.position);
   const tfM=_tMatches.find(m=>m.match_type==='third_place');
@@ -1470,7 +1549,9 @@ function buildReadOnlyBracket(){
   const svgEl=`<svg width="${SVG_W}" height="${SVG_H}" viewBox="0 0 ${SVG_W} ${SVG_H}" xmlns="http://www.w3.org/2000/svg"
     style="display:block;min-width:${SVG_W}px;max-width:100%"><style>rect{transition:fill .12s}text{user-select:none}</style>${s}</svg>`;
 
-  // 3rd place — read-only flat card
+  // 3rd place — read-only flat card (traditional cross-seed mode only;
+  // Group Rival Battle mode has no third_place row, its 3rd place comes
+  // from the Battle-for-Third bracket below instead)
   let thirdHtml='';
   if(tfM){
     const eA=_tEnt(tfM.entry_a_id),eB=_tEnt(tfM.entry_b_id);
@@ -1490,12 +1571,75 @@ function buildReadOnlyBracket(){
     </div>`;
   }
 
-  const podiumHtml=(finalM?.status==='completed'&&(!tfM||tfM.status==='completed'))
-    ? renderPodiumSpectator(finalM,tfM) : '';
+  // Battle for Third bracket (Group Rival Battle mode) — independent of
+  // the traditional third_place match; exists whenever Stage 2 of a
+  // group-playoff Finals was generated.
+  const bM=_tMatches.filter(m=>m.match_type==='bronze_bracket');
+  const bronzeHtml=buildReadOnlyBronzeBracket(bM);
+  const maxBR=bM.length?bM.reduce((a,m)=>Math.max(a,m.round),0):0;
+  const bronzeFinalM=bM.find(m=>m.round===maxBR);
+  const thirdPlaceDecider=tfM||bronzeFinalM;
+
+  const podiumHtml=(finalM?.status==='completed'&&(!thirdPlaceDecider||thirdPlaceDecider.status==='completed'))
+    ? renderPodiumSpectator(finalM,thirdPlaceDecider) : '';
 
   return `${podiumHtml}<div style="overflow:auto;-webkit-overflow-scrolling:touch;background:var(--surface);
     border:1px solid var(--border-card);border-radius:var(--radius);padding:14px 10px;box-shadow:var(--shadow-card)">
-    ${svgEl}</div>${thirdHtml}`;
+    ${svgEl}</div>${thirdHtml}${bronzeHtml}`;
+}
+
+// Read-only parallel bracket tree — used for Group Rival Battle's Battle
+// for Third bracket once Stage 2 has been generated. Mirrors the host's
+// buildLosersSection() geometry exactly, minus click handlers.
+function buildReadOnlyBronzeBracket(bM){
+  if(!bM.length)return'';
+  const maxLR=bM.reduce((a,m)=>Math.max(a,m.round),0);
+  const BW=118,BH=24,GAP=3,CG=44,PX=12,PY=18,LH=15,R1SP=BH*2+GAP+14;
+  const r1n=bM.filter(m=>m.round===1).length;
+  const cy={};
+  for(let r=1;r<=maxLR;r++){
+    cy[r]={};
+    const ms=bM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
+      if(r===1)cy[r][m.position]=PY+LH+(m.position-1)*R1SP+BH+GAP/2;
+      else{
+        const yA=cy[r-1]?.[2*m.position-1],yB=cy[r-1]?.[2*m.position];
+        cy[r][m.position]=(yA!=null&&yB!=null)?(yA+yB)/2:PY+LH+BH;
+      }
+    }
+  }
+  const H=Math.max(100,PY+LH+r1n*R1SP+PY), W=PX+maxLR*(BW+CG)+PX;
+  let svg='';
+  for(let r=1;r<=maxLR;r++){
+    const x=PX+(r-1)*(BW+CG);
+    svg+=`<text x="${x+BW/2}" y="${PY+10}" text-anchor="middle" font-size="9" font-weight="800" fill="#CD8E5A" font-family="Inter,sans-serif" letter-spacing="1">BR${r}</text>`;
+    const ms=bM.filter(m=>m.round===r).sort((a,b)=>a.position-b.position);
+    for(const m of ms){
+      const midY=cy[r][m.position]??PY+LH+BH;
+      const tyA=midY-BH-GAP/2, tyB=midY+GAP/2;
+      const eA=_tEnt(m.entry_a_id), eB=_tEnt(m.entry_b_id);
+      const done=m.status==='completed';
+      const wA=done&&m.winner_id===m.entry_a_id, wB=done&&m.winner_id===m.entry_b_id;
+      [[tyA,eA,done?m.score_a:null,wA,done&&!wA],[tyB,eB,done?m.score_b:null,wB,done&&!wB]].forEach(([ty,e,sc,w,l])=>{
+        const uid=`sbr${m.id.replace(/-/g,'').slice(0,6)}_${ty|0}`;
+        svg+=`<rect x="${x}" y="${ty}" width="${BW}" height="${BH}" rx="3" fill="${w?'rgba(78,203,126,.14)':'var(--surface-raised)'}" stroke="${w?'rgba(78,203,126,.5)':'var(--border-soft)'}" stroke-width="1"/>`;
+        svg+=`<clipPath id="${uid}"><rect x="${x+6}" y="${ty+2}" width="${BW-16}" height="${BH-4}"/></clipPath>
+          <text x="${x+7}" y="${ty+BH/2+4}" font-size="10" font-weight="${w?700:400}"
+            fill="${!e?'var(--resting-slate)':w?'var(--winner-green)':l?'rgba(242,244,240,.35)':'var(--ink)'}"
+            font-family="Inter,sans-serif" clip-path="url(#${uid})" ${!e?'font-style="italic"':''}>${e?escapeHtml(e.team_name):'TBD'}</text>`;
+        if(sc!=null)svg+=`<text x="${x+BW-3}" y="${ty+BH/2+4}" font-size="10" font-weight="700" fill="${w?'var(--winner-green)':'var(--resting-slate)'}" text-anchor="end" font-family="'JetBrains Mono',monospace">${sc}</text>`;
+      });
+      const lx=x+BW, lyA=tyA+BH/2, lyB=tyB+BH/2;
+      svg+=`<line x1="${lx}" y1="${lyA}" x2="${lx}" y2="${lyB}" stroke="var(--line)" stroke-width="1.5"/>`;
+      if(r<maxLR)svg+=`<line x1="${lx}" y1="${midY}" x2="${x+BW+CG}" y2="${midY}" stroke="var(--line)" stroke-width="1.5"/>`;
+    }
+  }
+  return `<div style="margin-top:16px;padding:12px 14px;border-top:1px solid var(--border-soft)">
+    <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#CD8E5A;letter-spacing:.07em;margin-bottom:10px">🥉 Battle for Third — Bracket</div>
+    <div style="overflow:auto;-webkit-overflow-scrolling:touch">
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="display:block">${svg}</svg>
+    </div>
+  </div>`;
 }
 
 // ── Podium (spectator, read-only) — mirrors the host's renderPodium() ──
@@ -1676,131 +1820,4 @@ function renderTournamentView(){
         const order=gStandings.length?gStandings:[];
         const findRRMatch=(a,b)=>groupMatches.find(m=>(m.entry_a_id===a&&m.entry_b_id===b)||(m.entry_a_id===b&&m.entry_b_id===a));
         const crosstable=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">
-          <thead><tr><th style="text-align:left;padding:5px"></th>${order.map((t,i)=>`<th style="text-align:center;padding:5px;min-width:34px">${i+1}</th>`).join('')}<th style="text-align:center;padding:5px 8px;min-width:50px;border-left:1px solid var(--border-soft);color:var(--optic-yellow)">TOTAL</th></tr></thead>
-          <tbody>${order.map((rowT,ri)=>`<tr>
-            <td style="text-align:left;padding:5px;font-weight:700;white-space:nowrap">${ri+1}. ${escapeHtml(rowT.name)}</td>
-            ${order.map((colT,ci)=>{
-              if(ri===ci)return `<td style="text-align:center;color:var(--resting-slate)">—</td>`;
-              const m=findRRMatch(rowT.id,colT.id);
-              if(!m)return `<td style="text-align:center;color:var(--resting-slate);opacity:.4">·</td>`;
-              if(m.status!=='completed')return `<td style="text-align:center;color:var(--waiting-blue)">•</td>`;
-              const won=m.winner_id===rowT.id;
-              const score=m.entry_a_id===rowT.id?`${m.score_a}-${m.score_b}`:`${m.score_b}-${m.score_a}`;
-              return `<td style="text-align:center;font-family:var(--font-mono);font-weight:700;color:${won?'var(--winner-green)':'var(--fault-coral)'}">${won?'W':'L'} ${score}</td>`;
-            }).join('')}
-            <td style="text-align:center;font-family:var(--font-mono);font-weight:800;border-left:1px solid var(--border-soft);color:var(--optic-yellow)">${rowT.pf}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>`;
-        return `<div style="margin-bottom:18px">
-          <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--optic-yellow);margin-bottom:8px">${label}</div>
-          ${crosstable}
-        </div>`;
-      }).join('');
-    }
-  } else {
-    bracketSection = buildReadOnlyBracket() || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Bracket not generated yet.</p>`;
-  }
-
-  el.innerHTML=`
-    <div style="text-align:center;margin-bottom:14px">
-      <span style="font-size:10px;background:rgba(215,242,61,.15);color:var(--optic-yellow);padding:3px 10px;border-radius:999px;font-weight:800;letter-spacing:.07em">🏆 TOURNAMENT · LIVE</span>
-    </div>
-
-    <!-- 1. BRACKET — the headline of a tournament view -->
-    <div class="card" style="margin-bottom:16px;overflow-x:auto">
-      <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">${isRR?'Round Robin Standings':'Live Bracket'}</h3>
-      ${bracketSection}
-    </div>
-
-    <!-- 2. COURTS — who is playing right now -->
-    <div class="courts-grid" style="margin-bottom:16px">${courtsHtml}</div>
-
-    <!-- 3. SCOREBOARD -->
-    ${isRR ? (()=>{
-      const groupStandings=computeAllSpectatorGroupStandings();
-      const isGrouped=groupStandings.length>1||groupStandings[0]?.groupNum!=null;
-      return groupStandings.map(({groupNum,standings:gs})=>{
-        if(!gs.length)return'';
-        const label=isGrouped?`Group ${String.fromCharCode(64+groupNum)} — Standings`:'Standings';
-        return `<div class="card" style="margin-bottom:12px">
-          <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">${label}</h3>
-          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
-            <thead><tr>${['#','Team','W','L','PF','PA','Diff'].map(h=>`<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">${h}</th>`).join('')}</tr></thead>
-            <tbody>${gs.map((s,i)=>`<tr>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700">${escapeHtml(s.name)}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--winner-green);font-weight:700">${s.w}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--loser-coral,#FF7A5C)">${s.l}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pf}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pa}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'#FF7A5C'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
-            </tr>`).join('')}</tbody>
-          </table></div>
-        </div>`;
-      }).join('');
-    })() : (standings.length?`<div class="card">
-      <h3 style="font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em">Standings</h3>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr>${['#','Team','W','L','PF','PA','Diff'].map(h=>`<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;color:var(--resting-slate);border-bottom:1px solid var(--border-soft)">${h}</th>`).join('')}</tr></thead>
-        <tbody>${standings.map((s,i)=>`<tr>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700">${escapeHtml(s.name)}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--winner-green);font-weight:700">${s.w}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);color:var(--loser-coral,#FF7A5C)">${s.l}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pf}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft)">${s.pa}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border-soft);font-weight:700;color:${s.pf-s.pa>=0?'var(--winner-green)':'#FF7A5C'}">${s.pf-s.pa>=0?'+':''}${s.pf-s.pa}</td>
-        </tr>`).join('')}</tbody>
-      </table></div>
-    </div>`:'')}
-  `;
-}
-
-// ============================================================
-// REALTIME
-// ============================================================
-function subscribeRealtime() {
-  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
-  realtimeChannel = supabaseClient
-    .channel(`session-${currentSessionId}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'courts',   filter: `session_id=eq.${currentSessionId}` }, refreshAll)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'teams',    filter: `session_id=eq.${currentSessionId}` }, refreshAll)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'players',  filter: `session_id=eq.${currentSessionId}` }, refreshAll)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `id=eq.${currentSessionId}` },         refreshAll)
-    .subscribe();
-}
-
-function startTimerLoop() {
-  if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    document.querySelectorAll('.court-timer[data-start]').forEach(el => {
-      const start = el.getAttribute('data-start');
-      if (!start) return;
-      const elapsed = Math.max(0, Math.floor((Date.now() - new Date(start).getTime()) / 1000));
-      const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
-      const secs = String(elapsed % 60).padStart(2, '0');
-      el.textContent = `${mins}:${secs}`;
-    });
-  }, 1000);
-}
-
-// ============================================================
-// HELPERS
-// ============================================================
-function playerNamesForTeam(team, players) {
-  if (!team) return [];
-  return team.player_ids.map(pid => players.find(p => p.id === pid)?.name || '—');
-}
-function playersForTeam(team, players) {
-  if (!team) return [];
-  return team.player_ids.map(pid => players.find(p => p.id === pid) || { name: '—', photo_url: null });
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-</script>
-</body>
-</html>
+          <thead><tr><th style="text-align:left;padding:5px"></th>${order.map((t,i)=>`<th style="text-align:center;padding:5px;min-width:34px">${i+1}</th>`).join('')}<th style="text-align:center;padding:5px 8px;min-width:50px;border-left:1px solid 
