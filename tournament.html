@@ -857,6 +857,25 @@ async function propagate(){
         if(nxt[f]!==m.winner_id){await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxt.id);nxt[f]=m.winner_id;}
       }
     }
+    // Group Rival Battle's Round 1 — the group playoff itself. Winner
+    // feeds into the Championship bracket's round 2 (the very next round
+    // after the playoffs); loser feeds into the SAME position in the
+    // Battle-for-Third bracket's round 2. This is what makes the whole
+    // thing ONE continuous auto-advancing bracket instead of a manual
+    // two-step process — same ceil(position/2) mapping used everywhere
+    // else in this file for round-to-round advancement.
+    if(m.match_type==='group_playoff'&&m.status==='completed'){
+      const np=Math.ceil(m.position/2);
+      const f=m.position%2===1?'entry_a_id':'entry_b_id';
+      if(m.winner_id){
+        const nxtW=wM.find(x=>x.round===2&&x.position===np);
+        if(nxtW&&nxtW[f]!==m.winner_id){await db.from('bracket_matches').update({[f]:m.winner_id}).eq('id',nxtW.id);nxtW[f]=m.winner_id;}
+      }
+      if(m.loser_id){
+        const nxtB=bM.find(x=>x.round===2&&x.position===np);
+        if(nxtB&&nxtB[f]!==m.loser_id){await db.from('bracket_matches').update({[f]:m.loser_id}).eq('id',nxtB.id);nxtB[f]=m.loser_id;}
+      }
+    }
     // 3rd place: loser of semi-finals
     if(m.match_type==='winners'&&m.round===maxWR-1&&tfM){
       const f=m.position===1?'entry_a_id':'entry_b_id';
@@ -1779,7 +1798,12 @@ function roundLabel(r,total){
  *   Each later round: Y-center = avg of its two child Y-centers → naturally doubles spacing
  */
 function buildNCAABracket(){
-  const wM   = MATCHES.filter(m=>m.match_type==='winners').sort((a,b)=>a.round-b.round||a.position-b.position);
+  // Group Rival Battle matches (match_type:'group_playoff') are tagged
+  // round:1 with the Championship's 'winners' rows starting at round:2 —
+  // combining them here makes the whole thing render as ONE continuous
+  // tree instead of two separate stages, matching how it's actually
+  // generated and auto-advanced in propagate().
+  const wM   = MATCHES.filter(m=>m.match_type==='winners'||m.match_type==='group_playoff').sort((a,b)=>a.round-b.round||a.position-b.position);
   const lM   = MATCHES.filter(m=>m.match_type==='losers');
   const gfM  = MATCHES.find(m=>m.match_type==='grand_final');
   const tfM  = MATCHES.find(m=>m.match_type==='third_place');
@@ -1848,12 +1872,14 @@ function buildNCAABracket(){
   let s=''; // accumulates SVG markup
 
   // Round labels
+  const hasGroupPlayoffRound=wM.some(m=>m.match_type==='group_playoff'&&m.round===1);
   for(let r=1;r<=maxR;r++){
     const x=PX+(r-1)*(BW+CG);
+    const label=(r===1&&hasGroupPlayoffRound)?'GROUP PLAYOFFS':roundLabel(r,maxR).toUpperCase();
     s+=`<text x="${x+BW/2}" y="${PY+11}" text-anchor="middle"
       font-size="9" font-weight="800" fill="var(--bench-slate)"
       font-family="Inter,sans-serif" letter-spacing="1">
-      ${roundLabel(r,maxR).toUpperCase()}
+      ${label}
     </text>`;
   }
 
@@ -2062,9 +2088,16 @@ function buildNCAABracket(){
   const losersHtml = (isDbl && lM.length) ? buildLosersSection(lM) : '';
 
   // ── Battle for Third bracket (Group Rival Battle mode) ──
-  // Independent of isDbl — this exists whenever Stage 2 of a group-playoff
-  // Finals was generated, regardless of bracket_type.
-  const bM = MATCHES.filter(m=>m.match_type==='bronze_bracket');
+  // Independent of isDbl — this exists whenever a group-playoff Finals
+  // was generated, regardless of bracket_type. The SAME group_playoff
+  // matches feed both trees — here they're shown from the LOSER's
+  // perspective (swap winner_id/loser_id on a synthetic copy) since in
+  // THIS tree, the loser is who's "advancing" toward 3rd place.
+  const groupPlayoffMatches=MATCHES.filter(m=>m.match_type==='group_playoff');
+  const bronzeR1FromPlayoffs=groupPlayoffMatches.map(m=>({
+    ...m,winner_id:m.loser_id,loser_id:m.winner_id,
+  }));
+  const bM = [...bronzeR1FromPlayoffs, ...MATCHES.filter(m=>m.match_type==='bronze_bracket')];
   const bronzeHtml = bM.length ? buildLosersSection(bM,'🥉 Battle for Third — Bracket') : '';
   const maxBR = bM.length ? bM.reduce((a,m)=>Math.max(a,m.round),0) : 0;
   const bronzeFinalM = bM.find(m=>m.round===maxBR);
@@ -2111,7 +2144,7 @@ function buildNCAABracket(){
       padding:14px 10px;box-shadow:var(--shadow-card)">
       ${svgEl}
     </div>
-    ${thirdHtml}${gfHtml}${losersHtml}`;
+    ${thirdHtml}${gfHtml}${losersHtml}${bronzeHtml}`;
 }
 
 // ── Podium — champion / runner-up / 3rd place, paddle-faces and all ──
@@ -2649,59 +2682,97 @@ function renderGroupPlayoffsView(){
   const playoffs=MATCHES.filter(m=>m.match_type==='group_playoff').sort((a,b)=>a.position-b.position);
   const allDone=playoffs.length>0&&playoffs.every(m=>m.status==='completed');
   const eByID=id=>[...TEAMS,...BYES].find(t=>t.id===id);
+  const N=playoffs.length;
 
-  const rows=playoffs.map((m,i)=>{
-    const eA=eByID(m.entry_a_id), eB=eByID(m.entry_b_id);
-    const done=m.status==='completed';
-    const wA=done&&m.winner_id===m.entry_a_id;
-    const live=m.status==='in_progress';
-    const canClick=eA&&eB&&!done;
-    const groupLabel=playoffs.length>1?`Group ${String.fromCharCode(65+i)}`:'Playoff';
-    const winnerName=done?(wA?eA?.team_name:eB?.team_name):null;
-    const loserName =done?(wA?eB?.team_name:eA?.team_name):null;
-    return `<div style="background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:10px;overflow:hidden;border:1px solid ${live?'rgba(215,242,61,.4)':'var(--border-soft)'}">
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;${canClick?'cursor:pointer':''}" ${canClick?`onclick="openMatchHub('${m.id}')"`:''}>
-        <span style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;min-width:64px">${esc(groupLabel)}</span>
-        <span style="flex:1;font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
-        <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
-        <span style="flex:1;text-align:right;font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
-      </div>
-      <div style="display:flex;border-top:1px solid var(--border-soft)">
-        <div style="flex:1;padding:7px 10px;text-align:center;font-size:11px;font-weight:700;background:rgba(215,242,61,.06);color:${winnerName?'var(--optic-yellow)':'var(--bench-slate)'}">
-          🏆 ${winnerName?`<span style="color:var(--winner-green)">${esc(winnerName)}</span> advances`:'Winner ➜ Championship'}
-        </div>
-        <div style="flex:1;padding:7px 10px;text-align:center;font-size:11px;font-weight:700;background:rgba(255,122,92,.05);color:${loserName?'#CD8E5A':'var(--bench-slate)'};border-left:1px solid var(--border-soft)">
-          🥉 ${loserName?`<span style="color:#CD8E5A">${esc(loserName)}</span> → Battle for 3rd`:'Loser ➜ Battle for 3rd'}
-        </div>
-      </div>
-    </div>`;
-  }).join('');
+  // ── Geometry (mirrors buildNCAABracket's box/line style for visual
+  // consistency with the real bracket the host will see once Stage 2
+  // generates) ──
+  const BW=136,BH=26,GAP=4,PX=14,PY=26;
+  const PAIR=BH*2+GAP, R1SP=PAIR+34;
+  const TRUNK_GAP=44, ENDPOINT_GAP=64, ENDPOINT_W=168, ENDPOINT_H=44;
+  const matchY=Array.from({length:N},(_,i)=>PY+i*R1SP+PAIR/2);
+  const trunkX=PX+BW+TRUNK_GAP;
+  const endpointX=trunkX+ENDPOINT_GAP;
+  const trunkY=(matchY[0]+matchY[N-1])/2;
+  const treeH=PY+N*R1SP+PY;
+  const svgW=endpointX+ENDPOINT_W+PX;
 
-  // Aggregate preview — shows the Championship/Bronze fields taking shape
-  // as each group's playoff gets decided, before Stage 2 is even generated.
-  function done_(m){return m.status==='completed'}
-  const previewHtml=`<div style="display:flex;gap:10px;margin-top:4px">
-    <div style="flex:1;background:var(--surface-raised);border-radius:var(--radius-sm);padding:10px 12px;border:1px solid rgba(215,242,61,.2)">
-      <div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;margin-bottom:6px">🏆 CHAMPIONSHIP FIELD</div>
-      ${playoffs.map((m,i)=>{
-        const name=done_(m)?eByID(m.winner_id)?.team_name:null;
-        return `<div style="font-size:12px;color:${name?'var(--ink)':'var(--bench-slate)'};padding:2px 0">${name?esc(name):'TBD'}</div>`;
-      }).join('')}
-    </div>
-    <div style="flex:1;background:var(--surface-raised);border-radius:var(--radius-sm);padding:10px 12px;border:1px solid rgba(255,122,92,.2)">
-      <div style="font-size:10px;font-weight:800;color:#CD8E5A;letter-spacing:.05em;margin-bottom:6px">🥉 BATTLE FOR THIRD FIELD</div>
-      ${playoffs.map((m,i)=>{
-        const name=done_(m)?eByID(m.loser_id)?.team_name:null;
-        return `<div style="font-size:12px;color:${name?'var(--ink)':'var(--bench-slate)'};padding:2px 0">${name?esc(name):'TBD'}</div>`;
-      }).join('')}
-    </div>
+  // side: 'winner' (top tree, feeds Championship) or 'loser' (bottom tree, feeds Battle for Third)
+  function buildTree(side,endpointLabel,accent,groupLabelPrefix){
+    let s='';
+    for(let i=0;i<N;i++){
+      const m=playoffs[i];
+      const eA=eByID(m.entry_a_id), eB=eByID(m.entry_b_id);
+      const done=m.status==='completed';
+      const highlightA = done && (side==='winner' ? m.winner_id===m.entry_a_id : m.loser_id===m.entry_a_id);
+      const highlightB = done && (side==='winner' ? m.winner_id===m.entry_b_id : m.loser_id===m.entry_b_id);
+      const cy=matchY[i], tyA=cy-BH-GAP/2, tyB=cy+GAP/2;
+      const live=m.status==='in_progress';
+      const canClick=eA&&eB&&!done;
+
+      function box(ty,team,hl){
+        const fill=hl?`${accent}22`:'var(--surface-raised)';
+        const stroke=hl?accent:(live?'rgba(215,242,61,.4)':'var(--border-soft)');
+        const nameColor=hl?accent:(done?'rgba(242,244,240,.4)':'var(--ink)');
+        const uid=`gp${side}${m.id.replace(/-/g,'').slice(0,6)}_${ty|0}`;
+        return `<rect x="${PX}" y="${ty}" width="${BW}" height="${BH}" rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1"/>
+          <clipPath id="${uid}"><rect x="${PX+6}" y="${ty+2}" width="${BW-12}" height="${BH-4}"/></clipPath>
+          <text x="${PX+7}" y="${ty+BH/2+4}" font-size="10" font-weight="${hl?700:500}" fill="${nameColor}"
+            font-family="Inter,sans-serif" clip-path="url(#${uid})">${esc(team?.team_name||'?')}</text>`;
+      }
+      s+=box(tyA,eA,highlightA);
+      s+=box(tyB,eB,highlightB);
+      // vertical connector between the pair
+      s+=`<line x1="${PX+BW}" y1="${tyA+BH/2}" x2="${PX+BW}" y2="${tyB+BH/2}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      // horizontal to the trunk
+      s+=`<line x1="${PX+BW}" y1="${cy}" x2="${trunkX}" y2="${cy}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+      if(canClick)s+=`<rect x="${PX}" y="${tyA}" width="${BW+TRUNK_GAP}" height="${PAIR}" fill="transparent" style="cursor:pointer" onclick="openMatchHub('${m.id}')"><title>Enter score</title></rect>`;
+      // group label above the pair
+      s+=`<text x="${PX}" y="${tyA-6}" font-size="8" font-weight="800" letter-spacing="1"
+        fill="${accent}" font-family="Inter,sans-serif">${esc(groupLabelPrefix)} ${String.fromCharCode(65+i)}</text>`;
+      if(live)s+=`<text x="${PX+BW-2}" y="${tyA-6}" text-anchor="end" font-size="8" font-weight="800"
+        fill="var(--optic-yellow)" font-family="Inter,sans-serif">▶ LIVE</text>`;
+    }
+    // trunk vertical (only meaningful with 2+ matches)
+    if(N>1)s+=`<line x1="${trunkX}" y1="${matchY[0]}" x2="${trunkX}" y2="${matchY[N-1]}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+    // trunk to endpoint
+    s+=`<line x1="${trunkX}" y1="${trunkY}" x2="${endpointX}" y2="${trunkY}" stroke="var(--line)" stroke-width="1.5" stroke-linecap="round"/>`;
+    // endpoint box
+    const decidedNames=playoffs.map(m=>m.status==='completed'?eByID(side==='winner'?m.winner_id:m.loser_id)?.team_name:null).filter(Boolean);
+    const allDecided=decidedNames.length===N;
+    s+=`<rect x="${endpointX}" y="${trunkY-ENDPOINT_H/2}" width="${ENDPOINT_W}" height="${ENDPOINT_H}" rx="6"
+      fill="${allDecided?accent+'22':'var(--surface-raised)'}" stroke="${allDecided?accent:'var(--border-soft)'}" stroke-width="${allDecided?1.5:1}"/>`;
+    s+=`<text x="${endpointX+ENDPOINT_W/2}" y="${trunkY-ENDPOINT_H/2-8}" text-anchor="middle" font-size="9" font-weight="800"
+      letter-spacing="1" fill="${accent}" font-family="Inter,sans-serif">${esc(endpointLabel)}</text>`;
+    if(allDecided){
+      s+=`<text x="${endpointX+ENDPOINT_W/2}" y="${trunkY+3}" text-anchor="middle" font-size="10" font-weight="700"
+        fill="${accent}" font-family="Inter,sans-serif">${esc(decidedNames.length)} team${decidedNames.length!==1?'s':''} ready</text>`;
+    }else{
+      s+=`<text x="${endpointX+ENDPOINT_W/2}" y="${trunkY+3}" text-anchor="middle" font-size="10" font-weight="600"
+        fill="var(--bench-slate)" font-family="Inter,sans-serif">${esc(decidedNames.length)}/${N} decided</text>`;
+    }
+    return s;
+  }
+
+  const champSvg =buildTree('winner','🏆 CHAMPIONSHIP','#D7F23D','GROUP');
+  const bronzeSvg=buildTree('loser', '🥉 BATTLE FOR 3RD','#CD8E5A','GROUP');
+
+  const svgHtml=`<div style="overflow:auto;-webkit-overflow-scrolling:touch">
+    <svg width="${svgW}" height="${treeH}" viewBox="0 0 ${svgW} ${treeH}" xmlns="http://www.w3.org/2000/svg" style="display:block;min-width:${svgW}px">
+      ${champSvg}
+    </svg>
+    <div style="height:1px;background:var(--border-soft);margin:14px 0"></div>
+    <svg width="${svgW}" height="${treeH}" viewBox="0 0 ${svgW} ${treeH}" xmlns="http://www.w3.org/2000/svg" style="display:block;min-width:${svgW}px">
+      ${bronzeSvg}
+    </svg>
   </div>`;
 
   return `<div class="card" style="margin-bottom:12px">
     <h2 style="margin-bottom:6px">🥊 Group Playoffs</h2>
-    <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px">Each group's #1 seed battles their own #2. Winners advance to the Championship bracket, losers drop to Battle for Third.</p>
-    ${rows}
-    ${previewHtml}
+    <p style="font-size:12px;color:var(--bench-slate);margin:0 0 14px">Each group's #1 seed battles their own #2. Tap a live match to enter the result.</p>
+    <div style="background:var(--surface);border:1px solid var(--border-card);border-radius:var(--radius);padding:14px 10px;box-shadow:var(--shadow-card)">
+      ${svgHtml}
+    </div>
     ${allDone
       ? `<button class="btn btn-yellow" style="margin-top:14px" onclick="generateStage2FromPlayoffs()">Generate Championship &amp; Bronze Brackets →</button>`
       : `<p style="font-size:12px;color:var(--bench-slate);margin:14px 0 0">📋 ${playoffs.filter(m=>m.status==='completed').length} of ${playoffs.length} playoff matches played.</p>`}
@@ -2719,11 +2790,34 @@ async function generateGroupPlayoffs(){
   for(const{standings}of groupStandings){
     if(!standings[0]||!standings[1]){alert('Every group needs at least 2 teams with results.');return}
   }
+  const n=groupStandings.length;
+  const isPow2=n>=2&&(n&(n-1))===0;
+
   const rows=groupStandings.map(({standings},gi)=>({
     bracket_id:BRACKET.id,round:1,position:gi+1,best_of:1,status:'pending',match_type:'group_playoff',
     entry_a_id:standings[0].id,entry_b_id:standings[1].id,
     score_a:null,score_b:null,winner_id:null,loser_id:null,
   }));
+
+  // When the group count is a clean power of 2, build the ENTIRE
+  // Championship + Bronze structure right now too (empty, round 2
+  // onward) — this becomes one continuous, auto-advancing bracket exactly
+  // like a real tournament tree, with no manual "generate stage 2" step.
+  // Byes can't be pre-assigned sensibly here (we don't know who the real
+  // winners/losers are yet, so there's no "top seed" to give a bye to) —
+  // for a non-power-of-2 group count, this falls back to the manual
+  // two-step flow instead, which resolves byes AFTER results are known.
+  if(isPow2){
+    const totalRounds=Math.log2(n)+1; // +1 because round 1 IS the group playoffs
+    for(let r=2;r<=totalRounds;r++){
+      const cnt=n/Math.pow(2,r-1);
+      for(let p=1;p<=cnt;p++){
+        rows.push({bracket_id:BRACKET.id,round:r,position:p,best_of:1,status:'pending',match_type:'winners',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
+        rows.push({bracket_id:BRACKET.id,round:r,position:p,best_of:1,status:'pending',match_type:'bronze_bracket',entry_a_id:null,entry_b_id:null,score_a:null,score_b:null,winner_id:null,loser_id:null});
+      }
+    }
+  }
+
   const{error}=await db.from('bracket_matches').insert(rows);
   if(error){alert('Could not create group playoffs: '+error.message);return}
   await loadAll();
