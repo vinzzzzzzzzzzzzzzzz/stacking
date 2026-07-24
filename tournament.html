@@ -2649,6 +2649,7 @@ function renderGroupPlayoffsView(){
   const playoffs=MATCHES.filter(m=>m.match_type==='group_playoff').sort((a,b)=>a.position-b.position);
   const allDone=playoffs.length>0&&playoffs.every(m=>m.status==='completed');
   const eByID=id=>[...TEAMS,...BYES].find(t=>t.id===id);
+
   const rows=playoffs.map((m,i)=>{
     const eA=eByID(m.entry_a_id), eB=eByID(m.entry_b_id);
     const done=m.status==='completed';
@@ -2656,22 +2657,54 @@ function renderGroupPlayoffsView(){
     const live=m.status==='in_progress';
     const canClick=eA&&eB&&!done;
     const groupLabel=playoffs.length>1?`Group ${String.fromCharCode(65+i)}`:'Playoff';
-    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:8px;${live?'border:1px solid rgba(215,242,61,.4)':''}${canClick?';cursor:pointer':''}"
-      ${canClick?`onclick="openMatchHub('${m.id}')"`:''}>
-      <span style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;min-width:64px">${esc(groupLabel)}</span>
-      <span style="flex:1;font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
-      <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
-      <span style="flex:1;text-align:right;font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
+    const winnerName=done?(wA?eA?.team_name:eB?.team_name):null;
+    const loserName =done?(wA?eB?.team_name:eA?.team_name):null;
+    return `<div style="background:var(--surface-raised);border-radius:var(--radius-sm);margin-bottom:10px;overflow:hidden;border:1px solid ${live?'rgba(215,242,61,.4)':'var(--border-soft)'}">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;${canClick?'cursor:pointer':''}" ${canClick?`onclick="openMatchHub('${m.id}')"`:''}>
+        <span style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;min-width:64px">${esc(groupLabel)}</span>
+        <span style="flex:1;font-weight:${done&&wA?'800':'600'};color:${done&&wA?'var(--winner-green)':'var(--ink)'}">${esc(eA?.team_name||'?')}</span>
+        <span style="font-family:var(--font-mono);font-weight:700;color:var(--bench-slate)">${done?`${m.score_a}–${m.score_b}`:live?'▶ LIVE':'vs'}</span>
+        <span style="flex:1;text-align:right;font-weight:${done&&!wA?'800':'600'};color:${done&&!wA?'var(--winner-green)':'var(--ink)'}">${esc(eB?.team_name||'?')}</span>
+      </div>
+      <div style="display:flex;border-top:1px solid var(--border-soft)">
+        <div style="flex:1;padding:7px 10px;text-align:center;font-size:11px;font-weight:700;background:rgba(215,242,61,.06);color:${winnerName?'var(--optic-yellow)':'var(--bench-slate)'}">
+          🏆 ${winnerName?`<span style="color:var(--winner-green)">${esc(winnerName)}</span> advances`:'Winner ➜ Championship'}
+        </div>
+        <div style="flex:1;padding:7px 10px;text-align:center;font-size:11px;font-weight:700;background:rgba(255,122,92,.05);color:${loserName?'#CD8E5A':'var(--bench-slate)'};border-left:1px solid var(--border-soft)">
+          🥉 ${loserName?`<span style="color:#CD8E5A">${esc(loserName)}</span> → Battle for 3rd`:'Loser ➜ Battle for 3rd'}
+        </div>
+      </div>
     </div>`;
   }).join('');
+
+  // Aggregate preview — shows the Championship/Bronze fields taking shape
+  // as each group's playoff gets decided, before Stage 2 is even generated.
+  function done_(m){return m.status==='completed'}
+  const previewHtml=`<div style="display:flex;gap:10px;margin-top:4px">
+    <div style="flex:1;background:var(--surface-raised);border-radius:var(--radius-sm);padding:10px 12px;border:1px solid rgba(215,242,61,.2)">
+      <div style="font-size:10px;font-weight:800;color:var(--optic-yellow);letter-spacing:.05em;margin-bottom:6px">🏆 CHAMPIONSHIP FIELD</div>
+      ${playoffs.map((m,i)=>{
+        const name=done_(m)?eByID(m.winner_id)?.team_name:null;
+        return `<div style="font-size:12px;color:${name?'var(--ink)':'var(--bench-slate)'};padding:2px 0">${name?esc(name):'TBD'}</div>`;
+      }).join('')}
+    </div>
+    <div style="flex:1;background:var(--surface-raised);border-radius:var(--radius-sm);padding:10px 12px;border:1px solid rgba(255,122,92,.2)">
+      <div style="font-size:10px;font-weight:800;color:#CD8E5A;letter-spacing:.05em;margin-bottom:6px">🥉 BATTLE FOR THIRD FIELD</div>
+      ${playoffs.map((m,i)=>{
+        const name=done_(m)?eByID(m.loser_id)?.team_name:null;
+        return `<div style="font-size:12px;color:${name?'var(--ink)':'var(--bench-slate)'};padding:2px 0">${name?esc(name):'TBD'}</div>`;
+      }).join('')}
+    </div>
+  </div>`;
 
   return `<div class="card" style="margin-bottom:12px">
     <h2 style="margin-bottom:6px">🥊 Group Playoffs</h2>
     <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px">Each group's #1 seed battles their own #2. Winners advance to the Championship bracket, losers drop to Battle for Third.</p>
     ${rows}
+    ${previewHtml}
     ${allDone
-      ? `<button class="btn btn-yellow" style="margin-top:8px" onclick="generateStage2FromPlayoffs()">Generate Championship &amp; Bronze Brackets →</button>`
-      : `<p style="font-size:12px;color:var(--bench-slate);margin:8px 0 0">📋 ${playoffs.filter(m=>m.status==='completed').length} of ${playoffs.length} playoff matches played.</p>`}
+      ? `<button class="btn btn-yellow" style="margin-top:14px" onclick="generateStage2FromPlayoffs()">Generate Championship &amp; Bronze Brackets →</button>`
+      : `<p style="font-size:12px;color:var(--bench-slate);margin:14px 0 0">📋 ${playoffs.filter(m=>m.status==='completed').length} of ${playoffs.length} playoff matches played.</p>`}
   </div>`;
 }
 
