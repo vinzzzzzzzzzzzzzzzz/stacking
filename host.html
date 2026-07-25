@@ -1971,9 +1971,18 @@ const SessionAPI = (() => {
     const allPlayerIds = [...new Set(teamRows.flatMap(t => t.player_ids || []))];
     if (!allPlayerIds.length) throw new Error('No players found for this match.');
 
-    // ── 4. For each player, recompute stats from their FULL match history ──
-    //  This is the only approach immune to accumulated delta errors.
-    for (const playerId of allPlayerIds) {
+    // ── 4. Recompute stats from FULL match history for everyone involved ──
+    await recomputeStatsForPlayers(match.session_id, allPlayerIds);
+  }
+
+  /**
+   * Re-sums wins/losses/points/games-played for the given players from
+   * their FULL current match history — immune to accumulated delta errors,
+   * and doubles as the leaderboard cleanup after a match is corrected OR
+   * deleted (a removed match simply won't be in the history anymore).
+   */
+  async function recomputeStatsForPlayers(sessionId, playerIds) {
+    for (const playerId of playerIds) {
       // All matches this player's team_a or team_b was involved in
       // (we query by session to keep it fast; player IDs are contained
       //  inside teams.player_ids which we can't filter on the DB directly,
@@ -1981,13 +1990,13 @@ const SessionAPI = (() => {
       const { data: sessionMatches } = await supabaseClient
         .from('matches')
         .select('id, team_a_id, team_b_id, winner_team_id, team_a_score, team_b_score')
-        .eq('session_id', match.session_id);
+        .eq('session_id', sessionId);
 
       // Find the teams that ever contained this player.
       const { data: playerTeams } = await supabaseClient
         .from('teams')
         .select('id, player_ids')
-        .eq('session_id', match.session_id)
+        .eq('session_id', sessionId)
         .contains('player_ids', [playerId]);
 
       const playerTeamIds = new Set((playerTeams || []).map(t => t.id));
@@ -2020,6 +2029,28 @@ const SessionAPI = (() => {
         total_points:       totalPoints,
       }).eq('id', playerId);
     }
+  }
+
+  /**
+   * Permanently delete a recorded match and scrub its effect from the
+   * leaderboard — the 4 players involved get their stats recomputed from
+   * whatever match history remains, so the deleted match's wins/losses/
+   * points disappear from the rankings immediately.
+   */
+  async function deleteMatchResult(matchId) {
+    const { data: match, error: matchErr } = await supabaseClient
+      .from('matches').select('*').eq('id', matchId).single();
+    if (matchErr || !match) throw new Error('Match record not found.');
+
+    const { data: teamRows } = await supabaseClient
+      .from('teams').select('id, player_ids')
+      .in('id', [match.team_a_id, match.team_b_id]);
+    const allPlayerIds = [...new Set((teamRows || []).flatMap(t => t.player_ids || []))];
+
+    const { error: delErr } = await supabaseClient.from('matches').delete().eq('id', matchId);
+    if (delErr) throw delErr;
+
+    if (allPlayerIds.length) await recomputeStatsForPlayers(match.session_id, allPlayerIds);
   }
 
   async function getRecentMatches(sessionId, limit = 20) {
@@ -2151,7 +2182,7 @@ const SessionAPI = (() => {
     createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue, reconcileOrphanedPlayers,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
-    correctMatchResult, getRecentMatches,
+    correctMatchResult, deleteMatchResult, getRecentMatches,
     carryPlayersToNewSession, getTournamentTeams, carryTeamsToNewSession,
   };
 })();
@@ -4910,6 +4941,12 @@ async function openMatchEditor(matchId) {
             Apply Correction
           </button>
         </div>
+        <div style="text-align:center;margin-top:10px;">
+          <button type="button" onclick="showDeleteMatchConfirmModal('${matchId}')"
+            style="background:none;border:none;color:var(--loser-coral);font-size:12px;font-weight:700;cursor:pointer;padding:4px 0;min-height:0;">
+            🗑 Delete This Match
+          </button>
+        </div>
       </div>
     </div>
   `);
@@ -5017,6 +5054,48 @@ async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeam
     if (btn) { btn.disabled = false; btn.textContent = 'Apply Correction'; }
   } finally {
     uiGuardEnd('matchEdit-' + matchId);
+  }
+}
+
+/**
+ * Delete a recorded match — asks for confirmation first, then removes the
+ * match row and recomputes every affected player's stats so the deleted
+ * match's wins/losses/points come out of the leaderboard immediately.
+ */
+async function showDeleteMatchConfirmModal(matchId) {
+  if (document.getElementById('deleteMatchConfirmModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="deleteMatchConfirmModal">
+      <div class="modal-box" style="max-width:400px;">
+        <h2>Delete This Match?</h2>
+        <p class="modal-sub">This permanently removes the match and updates every affected player's wins, losses, and points on the leaderboard. This can't be undone.</p>
+        <div class="auth-error" id="deleteMatchConfirmError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('deleteMatchConfirmModal').remove()">Cancel</button>
+          <button class="btn-yes" id="deleteMatchConfirmBtn" style="background:var(--fault-coral);"
+            onclick="confirmDeleteMatch('${matchId}')">Delete Match</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmDeleteMatch(matchId) {
+  if (!uiGuardStart('deleteMatch-' + matchId)) return; // already deleting — ignore the duplicate tap
+  const btn   = document.getElementById('deleteMatchConfirmBtn');
+  const errEl = document.getElementById('deleteMatchConfirmError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+  try {
+    await SessionAPI.deleteMatchResult(matchId);
+    document.getElementById('deleteMatchConfirmModal').remove();
+    document.getElementById('matchEditModal')?.remove();
+    document.getElementById('tabPanel').innerHTML = await leaderboardTabHtml();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not delete match.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Delete Match'; }
+  } finally {
+    uiGuardEnd('deleteMatch-' + matchId);
   }
 }
 
