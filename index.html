@@ -303,11 +303,16 @@
   .paddle-chip-name-out { font-size: 11px; font-weight: 700; color: var(--line-paint); text-align: center; line-height: 1.1; max-width: 78px; word-break: break-word; }
 
   /* ── Up Next — single paginated card with < > stack navigation ── */
-  .mp-pager { display: flex; align-items: center; gap: 10px; padding: 14px 12px; }
-  .mp-nav-btn { flex-shrink: 0; width: 40px; height: 40px; min-height: 0; border-radius: 50%; border: 1px solid var(--border-soft); background: var(--surface-raised); color: var(--ink); font-size: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; transition: transform var(--dur-fast) var(--ease-bounce), background var(--dur-fast); }
+  /* ── Up Next — responsive multi-card stack with < > navigation.
+     Card count per page scales with available width (see
+     computeCardsPerPage in the script) — same breakpoints as the host's
+     Queue tab so both feel identical. ── */
+  .mp-pager { display: flex; align-items: stretch; gap: 10px; padding: 14px 12px; }
+  .mp-nav-btn { flex-shrink: 0; width: 40px; height: 40px; min-height: 0; border-radius: 50%; border: 1px solid var(--border-soft); background: var(--surface-raised); color: var(--ink); font-size: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; align-self: center; transition: transform var(--dur-fast) var(--ease-bounce), background var(--dur-fast); }
   .mp-nav-btn:not(:disabled):hover { background: var(--waiting-blue); color: white; transform: scale(1.08); }
   .mp-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-  .mp-pager-card { flex: 1; min-width: 0; }
+  .mp-pager-row { flex: 1; min-width: 0; display: flex; gap: 10px; align-items: stretch; }
+  .mp-pager-row .mp-card { flex: 1; min-width: 0; max-width: none; margin: 0; }
   .mp-card { background: linear-gradient(175deg, var(--court-paint) 0%, var(--court-paint-deep) 100%); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-card); max-width: 340px; width: 100%; margin: 0 auto; border: 1px solid var(--border-card); animation: mpCardIn var(--dur-base) var(--ease-settle); }
   @keyframes mpCardIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .mp-card.partial { opacity: 0.88; }
@@ -1039,7 +1044,19 @@ function buildPreviewCard(preview, pageIndex, totalPages, teamSize) {
 // make the preview visibly reshuffle each time you navigate. Only a fresh
 // data load (renderUpNextSection) should ever recompute this.
 window._upNextPreviews = [];
-window._upNextPageIndex = 0;
+window._upNextPageIndex = 0; // index of the FIRST card currently visible
+
+// How many cards fit side by side at the current width — same breakpoints
+// used for the host's Queue tab so both feel identical. Measures the
+// section's own rendered width rather than window.innerWidth so it stays
+// correct regardless of any surrounding page padding/layout.
+function computeCardsPerPage(containerEl){
+  const w = containerEl?.clientWidth || window.innerWidth;
+  if (w < 480) return 1;
+  if (w < 800) return 2;
+  if (w < 1120) return 3;
+  return 4;
+}
 
 function renderUpNextSection(waiting) {
   const el = document.getElementById('upNextSection');
@@ -1062,28 +1079,44 @@ function renderUpNextSection(waiting) {
     </div>
   `;
   renderUpNextCard();
+  if (!window._upNextResizeBound) {
+    window._upNextResizeBound = true;
+    let t;
+    window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(renderUpNextCard, 150); });
+  }
 }
 
-// Lightweight re-render — just the pager card + arrow states. Never
-// recomputes the previews, so navigating never re-shuffles a tied split.
+// Lightweight re-render — just the pager row + arrow states. Never
+// recomputes the previews, so navigating (or resizing) never re-shuffles
+// a tied split — only a fresh data load does that.
 function renderUpNextCard() {
   const pager = document.getElementById('mpPager');
   if (!pager) return;
   const previews = window._upNextPreviews;
-  const idx = window._upNextPageIndex;
   const total = previews.length;
   if (!total) { pager.innerHTML = ''; return; }
-  const cardHtml = buildPreviewCard(previews[idx], idx, total, window._upNextTeamSize);
+
+  const perPage = Math.max(1, Math.min(computeCardsPerPage(document.getElementById('upNextSection')), total));
+  // Keep the current page valid if the card count shrank (e.g. a resize
+  // that reduces perPage, or the data itself changing).
+  const maxStart = Math.max(0, total - perPage);
+  if (window._upNextPageIndex > maxStart) window._upNextPageIndex = maxStart;
+  const idx = window._upNextPageIndex;
+
+  const visible = previews.slice(idx, idx + perPage);
+  const cardsHtml = visible.map((p, i) => buildPreviewCard(p, idx + i, total, window._upNextTeamSize)).join('');
+
   pager.innerHTML = `
     <button class="mp-nav-btn" onclick="navigateUpNext(-1)" ${idx === 0 ? 'disabled' : ''} aria-label="Previous">‹</button>
-    <div class="mp-pager-card">${cardHtml}</div>
-    <button class="mp-nav-btn" onclick="navigateUpNext(1)" ${idx >= total - 1 ? 'disabled' : ''} aria-label="Next">›</button>
+    <div class="mp-pager-row">${cardsHtml}</div>
+    <button class="mp-nav-btn" onclick="navigateUpNext(1)" ${idx + perPage >= total ? 'disabled' : ''} aria-label="Next">›</button>
   `;
 }
 
 function navigateUpNext(direction) {
   const total = window._upNextPreviews.length;
-  const next = window._upNextPageIndex + direction;
+  const perPage = Math.max(1, Math.min(computeCardsPerPage(document.getElementById('upNextSection')), total));
+  const next = window._upNextPageIndex + direction * perPage;
   if (next < 0 || next >= total) return;
   window._upNextPageIndex = next;
   renderUpNextCard();
