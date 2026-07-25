@@ -362,6 +362,14 @@ let SESSION=null, TEAMS=[], BYES=[], MATCHES=[], BRACKET=null;
 window._showGroupStageResults=false; // toggle: group-stage crosstables vs finals bracket tree
 let activeTab='teams';
 
+// ── Double-submit guard ──────────────────────────────────────────
+// Blocks a fast double-tap/double-click from firing the same court/score
+// action twice — the second call is dropped instead of racing the first
+// and double-advancing the bracket/queue.
+const _uiBusyKeys=new Set();
+function uiGuardStart(key){ if(_uiBusyKeys.has(key))return false; _uiBusyKeys.add(key); return true; }
+function uiGuardEnd(key){ _uiBusyKeys.delete(key); }
+
 function copyShareLink(btn){
   navigator.clipboard.writeText(window._shareUrl||'');
   btn.textContent='Copied!';setTimeout(()=>{btn.textContent='📋 Copy Link'},1500);
@@ -973,18 +981,27 @@ function openMatchHub(matchId){
 }
 
 async function playOnCourt(matchId,cn){
-  const{error}=await db.from('bracket_matches').update({court_label:String(cn),status:'in_progress',started_at:new Date().toISOString()}).eq('id',matchId);
-  if(error){alert('Failed: '+error.message+(/court_label|started_at/.test(error.message)?'\n\nRun the ALTER TABLE SQL for court_label/started_at columns.':''));return}
-  CM();await loadAll();render();
+  if(!uiGuardStart('court-'+matchId))return;
+  try{
+    const{error}=await db.from('bracket_matches').update({court_label:String(cn),status:'in_progress',started_at:new Date().toISOString()}).eq('id',matchId);
+    if(error){alert('Failed: '+error.message+(/court_label|started_at/.test(error.message)?'\n\nRun the ALTER TABLE SQL for court_label/started_at columns.':''));return}
+    CM();await loadAll();render();
+  }finally{uiGuardEnd('court-'+matchId);}
 }
 async function queueOnCourt(matchId,cn){
-  const{error}=await db.from('bracket_matches').update({court_label:String(cn),status:'pending'}).eq('id',matchId);
-  if(error){alert('Failed: '+error.message+(/court_label|started_at/.test(error.message)?'\n\nRun the ALTER TABLE SQL for court_label/started_at columns.':''));return}
-  CM();await loadAll();render();
+  if(!uiGuardStart('court-'+matchId))return;
+  try{
+    const{error}=await db.from('bracket_matches').update({court_label:String(cn),status:'pending'}).eq('id',matchId);
+    if(error){alert('Failed: '+error.message+(/court_label|started_at/.test(error.message)?'\n\nRun the ALTER TABLE SQL for court_label/started_at columns.':''));return}
+    CM();await loadAll();render();
+  }finally{uiGuardEnd('court-'+matchId);}
 }
 async function unassignCourt(matchId){
-  await db.from('bracket_matches').update({court_label:null,status:'pending',started_at:null}).eq('id',matchId);
-  CM();await loadAll();render();
+  if(!uiGuardStart('court-'+matchId))return;
+  try{
+    await db.from('bracket_matches').update({court_label:null,status:'pending',started_at:null}).eq('id',matchId);
+    CM();await loadAll();render();
+  }finally{uiGuardEnd('court-'+matchId);}
 }
 // When a court frees up, promote its first queued match to LIVE.
 async function promoteQueue(courtLabel){
@@ -1048,6 +1065,10 @@ async function autoFillRRCourts(justFinishedTeamIds){
 }
 
 // ── GAME-BY-GAME SCORE ENTRY (Bo1/3/5/7) ──
+// Points target per match — ask up front, since some finals are played to
+// 15 or 21 instead of the default 11 (loser's score still capped at
+// target-1; no deuce in tournament play, straight to the target).
+let _scoreTarget=11;
 function openScoreModal(matchId){
   const m=MATCHES.find(x=>x.id===matchId);
   if(!m)return;
@@ -1055,9 +1076,9 @@ function openScoreModal(matchId){
   const b=[...TEAMS,...BYES].find(t=>t.id===m.entry_b_id);
   const bo=m.best_of||1;
   const need=Math.ceil(bo/2);
+  _scoreTarget=m.points_to_win||11;
 
   // One row per game: pick WHO WON, then enter only the LOSER's score.
-  // Winner score is always 11 — no deuce in tournament play.
   let rows='';
   for(let g=1;g<=bo;g++){
     rows+=`<div class="g-row" data-game="${g}" data-winner=""
@@ -1079,7 +1100,7 @@ function openScoreModal(matchId){
       </div>
       <div class="loser-wrap" style="display:none;align-items:center;gap:10px">
         <span class="loser-label" style="font-size:11px;color:var(--bench-slate);flex:1"></span>
-        <input type="number" min="0" max="10" class="loser-score" placeholder="0"
+        <input type="number" min="0" max="${_scoreTarget-1}" class="loser-score" placeholder="0"
           oninput="updateGameSummary(this)"
           style="width:80px;font-size:22px;font-weight:800;text-align:center;font-family:var(--font-mono);min-height:44px;
           background:var(--bg);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--ink)">
@@ -1088,11 +1109,22 @@ function openScoreModal(matchId){
     </div>`;
   }
 
+  const targetBtns=[11,15,21].map(t=>`<button type="button" class="sc-target-btn" data-target="${t}"
+      onclick="setScoreTarget(${t})"
+      style="flex:1;padding:8px 4px;border-radius:var(--radius-sm);font-weight:800;font-size:12px;min-height:38px;cursor:pointer;
+      border:2px solid ${t===_scoreTarget?'var(--winner-green)':'var(--border-soft)'};
+      background:${t===_scoreTarget?'rgba(78,203,126,.14)':'transparent'};
+      color:${t===_scoreTarget?'var(--winner-green)':'var(--ink)'}">${t}</button>`).join('');
+
   M(`<div class="overlay" onclick="if(event.target===this)CM()">
     <div class="modal">
       <h2>Who Won?</h2>
-      <p class="modal-sub">${esc(a?.team_name||'?')} vs ${esc(b?.team_name||'?')} · Best of ${bo}${bo>1?` — first to ${need} games`:''}.<br>
-      Tap the winner of each game, then enter only the losing team's score (0–10) — the winner's score is always 11. No deuce.</p>
+      <p class="modal-sub">${esc(a?.team_name||'?')} vs ${esc(b?.team_name||'?')} · Best of ${bo}${bo>1?` — first to ${need} games`:''}.</p>
+      <div style="margin-bottom:12px">
+        <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--bench-slate);margin-bottom:6px">Playing to</div>
+        <div id="scoreTargetBtns" style="display:flex;gap:6px">${targetBtns}</div>
+      </div>
+      <p class="modal-sub" id="scoreModalHint">Tap the winner of each game, then enter only the losing team's score (0–${_scoreTarget-1}) — the winner's score is always ${_scoreTarget}. No deuce.</p>
       <div id="gameRows" data-a="${esc(a?.team_name||'A')}" data-b="${esc(b?.team_name||'B')}">${rows}</div>
       <div class="err" id="gErr"></div>
       <div class="ma">
@@ -1101,6 +1133,23 @@ function openScoreModal(matchId){
       </div>
     </div>
   </div>`);
+}
+
+function setScoreTarget(target){
+  _scoreTarget=target;
+  document.querySelectorAll('#scoreTargetBtns .sc-target-btn').forEach(btn=>{
+    const on=parseInt(btn.dataset.target,10)===target;
+    btn.style.borderColor=on?'var(--winner-green)':'var(--border-soft)';
+    btn.style.background=on?'rgba(78,203,126,.14)':'transparent';
+    btn.style.color=on?'var(--winner-green)':'var(--ink)';
+  });
+  const hint=document.getElementById('scoreModalHint');
+  if(hint)hint.textContent=`Tap the winner of each game, then enter only the losing team's score (0–${target-1}) — the winner's score is always ${target}. No deuce.`;
+  document.querySelectorAll('#gameRows .loser-score').forEach(input=>{
+    input.max=target-1;
+    if(parseInt(input.value,10)>=target)input.value=target-1;
+    updateGameSummary(input);
+  });
 }
 
 function pickGameWinner(btn){
@@ -1128,13 +1177,15 @@ function updateGameSummary(input){
   const out=row.querySelector('.game-summary');
   const ls=parseInt(input.value,10);
   if(isNaN(ls)){out.textContent='';return}
-  const ws=11; // no deuce — straight to 11
+  const ws=_scoreTarget; // no deuce — straight to the chosen target
   const side=row.dataset.winner;
   out.textContent=side==='a'?`${ws}–${ls}`:`${ls}–${ws}`;
 }
 
 async function saveGames(matchId,bo){
+  if(!uiGuardStart('saveGames-'+matchId))return;
   const m=MATCHES.find(x=>x.id===matchId);
+  const target=_scoreTarget||11;
   const need=Math.ceil(bo/2);
   const games=[];let winsA=0,winsB=0;
   const rows=[...document.querySelectorAll('#gameRows .g-row')];
@@ -1143,15 +1194,15 @@ async function saveGames(matchId,bo){
     if(!side)continue; // unplayed game
     const ls=parseInt(row.querySelector('.loser-score').value,10);
     const g=parseInt(row.dataset.game,10);
-    if(isNaN(ls)||ls<0){document.getElementById('gErr').textContent=`Game ${g}: enter the losing team's score.`;return}
-    const ws=11; // no deuce in tournament — winner is always 11
-    if(ls>=11){document.getElementById('gErr').textContent=`Game ${g}: losing score must be 10 or below.`;return}
+    if(isNaN(ls)||ls<0){document.getElementById('gErr').textContent=`Game ${g}: enter the losing team's score.`;uiGuardEnd('saveGames-'+matchId);return}
+    const ws=target; // no deuce in tournament — winner is always the chosen target
+    if(ls>=target){document.getElementById('gErr').textContent=`Game ${g}: losing score must be ${target-1} or below.`;uiGuardEnd('saveGames-'+matchId);return}
     if(side==='a'){games.push({a:ws,b:ls});winsA++}
     else{games.push({a:ls,b:ws});winsB++}
     if(winsA>=need||winsB>=need)break; // ignore extra rows after decided
   }
-  if(games.length===0){document.getElementById('gErr').textContent='Pick who won at least one game.';return}
-  if(winsA<need&&winsB<need){document.getElementById('gErr').textContent=`Not decided yet — someone needs ${need} game win${need>1?'s':''}.`;return}
+  if(games.length===0){document.getElementById('gErr').textContent='Pick who won at least one game.';uiGuardEnd('saveGames-'+matchId);return}
+  if(winsA<need&&winsB<need){document.getElementById('gErr').textContent=`Not decided yet — someone needs ${need} game win${need>1?'s':''}.`;uiGuardEnd('saveGames-'+matchId);return}
 
   const winnerId=winsA>winsB?m.entry_a_id:m.entry_b_id;
   const loserId =winsA>winsB?m.entry_b_id:m.entry_a_id;
@@ -1160,26 +1211,39 @@ async function saveGames(matchId,bo){
   const sB=bo===1?games[0].b:winsB;
   const freedCourt=m.court_label;
 
-  const{error:updErr}=await db.from('bracket_matches').update({
-    games,score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
-    status:'completed',ended_at:new Date().toISOString()
-  }).eq('id',matchId);
-  if(updErr){
-    if(/games|court_label|started_at/.test(updErr.message||'')){
-      document.getElementById('gErr').textContent='Database missing columns — run in Supabase SQL Editor: '+
-        "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS games jsonb DEFAULT '[]'; "+
-        "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS court_label text; "+
-        "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS started_at timestamptz;";
-    }else{
-      document.getElementById('gErr').textContent='Save failed: '+updErr.message;
+  try{
+    let{error:updErr}=await db.from('bracket_matches').update({
+      games,score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
+      points_to_win:target,status:'completed',ended_at:new Date().toISOString()
+    }).eq('id',matchId);
+    if(updErr&&/points_to_win/.test(updErr.message||'')){
+      // Column not migrated yet — retry without it so scoring still works,
+      // just without remembering the chosen target for this match.
+      ({error:updErr}=await db.from('bracket_matches').update({
+        games,score_a:sA,score_b:sB,winner_id:winnerId,loser_id:loserId,
+        status:'completed',ended_at:new Date().toISOString()
+      }).eq('id',matchId));
     }
-    return;
+    if(updErr){
+      if(/games|court_label|started_at/.test(updErr.message||'')){
+        document.getElementById('gErr').textContent='Database missing columns — run in Supabase SQL Editor: '+
+          "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS games jsonb DEFAULT '[]'; "+
+          "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS court_label text; "+
+          "ALTER TABLE bracket_matches ADD COLUMN IF NOT EXISTS started_at timestamptz;";
+      }else{
+        document.getElementById('gErr').textContent='Save failed: '+updErr.message;
+      }
+      return;
+    }
+    if(m)m.points_to_win=target;
+    await propagate();          // winner advances to next bracket slot
+    await promoteQueue(freedCourt); // next queued match on this court goes LIVE
+    await autoFillRRCourts([winnerId,loserId]); // auto-stack the next match, giving these two a rest first if possible
+    CM();
+    await loadAll();render();   // bracket, scoreboard, standings all refresh
+  }finally{
+    uiGuardEnd('saveGames-'+matchId);
   }
-  await propagate();          // winner advances to next bracket slot
-  await promoteQueue(freedCourt); // next queued match on this court goes LIVE
-  await autoFillRRCourts([winnerId,loserId]); // auto-stack the next match, giving these two a rest first if possible
-  CM();
-  await loadAll();render();   // bracket, scoreboard, standings all refresh
 }
 
 // ── SLOT ASSIGNMENT (Round 1 dropdowns) ─────────
@@ -3039,8 +3103,11 @@ function openReverseModal(matchId){
   </div>`);
 }
 async function doReverseAndRender(matchId){
-  document.getElementById('tabContent').innerHTML='<div class="empty"><p>Reversing…</p></div>';
-  await doReverse(matchId);render();
+  if(!uiGuardStart('reverse-'+matchId))return;
+  try{
+    document.getElementById('tabContent').innerHTML='<div class="empty"><p>Reversing…</p></div>';
+    await doReverse(matchId);render();
+  }finally{uiGuardEnd('reverse-'+matchId);}
 }
 
 async function doSetBO(matchId,bestOf){
