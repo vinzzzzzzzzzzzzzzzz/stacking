@@ -3092,6 +3092,7 @@ async function handlePreRegister() {
 }
 
 async function handleArrived(playerId) {
+  if (!uiGuardStart('arrived-' + playerId)) return;
   try {
     await SessionAPI.markArrived(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
@@ -3109,13 +3110,16 @@ async function handleArrived(playerId) {
       document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
     }
   } catch (err) { alert(err.message || 'Could not mark as arrived.'); }
+  finally { uiGuardEnd('arrived-' + playerId); }
 }
 
 async function handleRemovePlayer(playerId) {
+  if (!uiGuardStart('removePlayer-' + playerId)) return;
   try {
     await SessionAPI.removePlayer(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
   } catch (err) { alert(err.message || 'Could not remove player.'); }
+  finally { uiGuardEnd('removePlayer-' + playerId); }
 }
 
 // ── Edit Player (name, tier, photo) ──
@@ -3165,17 +3169,21 @@ async function handleSaveEditPlayer(playerId) {
 }
 
 async function handleRestManually(playerId) {
+  if (!uiGuardStart('restManually-' + playerId)) return;
   try {
     await SessionAPI.restPlayerManually(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
   } catch (err) { alert(err.message || 'Could not rest player.'); }
+  finally { uiGuardEnd('restManually-' + playerId); }
 }
 
 async function handleReturnToQueue(playerId) {
+  if (!uiGuardStart('returnToQueue-' + playerId)) return;
   try {
     await SessionAPI.returnToQueue(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
   } catch (err) { alert(err.message || 'Could not return player.'); }
+  finally { uiGuardEnd('returnToQueue-' + playerId); }
 }
 
 // ============================================================
@@ -3358,6 +3366,24 @@ let resultFlowWinnerTeamId = null;
 // Prevents any DB writes from firing more than once per result submission,
 // even if the host taps "Save" rapidly multiple times.
 let _resultInFlight = false;
+
+// ── Double-submit guard ──────────────────────────────────────────
+// A fast double-tap/double-click on any button can fire its onclick twice
+// before `disabled=true` has any effect (React-less inline handlers have
+// no built-in debounce, and a re-render between the two clicks can even
+// swap in a fresh, non-disabled button element). Anything that writes to
+// court/queue/player state gets wrapped with this synchronous key-based
+// guard so the second call is dropped instead of racing the first —
+// exactly the class of bug that was double-placing players in the queue.
+const _uiBusyKeys = new Set();
+function uiGuardStart(key) {
+  if (_uiBusyKeys.has(key)) return false;
+  _uiBusyKeys.add(key);
+  return true;
+}
+function uiGuardEnd(key) {
+  _uiBusyKeys.delete(key);
+}
 
 async function handleMarkFinished(courtId) {
   // Guard: if a modal is already open, don't stack a second one.
@@ -3619,6 +3645,7 @@ function setDisposition(playerId, outcome) {
 }
 
 async function confirmDispositions() {
+  if (!uiGuardStart('dispositions')) return; // already saving — ignore the duplicate tap
   const btn   = document.getElementById('dispositionConfirmBtn');
   const errEl = document.getElementById('dispositionError');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -3649,6 +3676,8 @@ async function confirmDispositions() {
   } catch (err) {
     if (errEl) errEl.textContent = err.message || 'Something went wrong — please try again.';
     if (btn) { btn.disabled = false; btn.textContent = 'Confirm & Free Court'; }
+  } finally {
+    uiGuardEnd('dispositions');
   }
 }
 
@@ -4551,11 +4580,13 @@ function showMatchModal(matchId, bracketId, nameA, nameB, entryAId, entryBId, be
 }
 
 async function handleMatchResult(matchId, bracketId, entryAId, entryBId, existingId) {
+  const guardKey = 'matchResult-' + (existingId || matchId || (entryAId + '_' + entryBId));
+  if (!uiGuardStart(guardKey)) return;
   const sA = parseInt(document.getElementById('mmScoreA').value,10);
   const sB = parseInt(document.getElementById('mmScoreB').value,10);
   const errEl = document.getElementById('mmError');
-  if (isNaN(sA)||isNaN(sB)) { errEl.textContent='Enter valid scores.'; return; }
-  if (sA===sB) { errEl.textContent='Cannot be tied — there must be a winner.'; return; }
+  if (isNaN(sA)||isNaN(sB)) { errEl.textContent='Enter valid scores.'; uiGuardEnd(guardKey); return; }
+  if (sA===sB) { errEl.textContent='Cannot be tied — there must be a winner.'; uiGuardEnd(guardKey); return; }
   const winnerId = sA>sB ? entryAId : entryBId;
   const mid = existingId || matchId;
   try {
@@ -4572,6 +4603,7 @@ async function handleMatchResult(matchId, bracketId, entryAId, entryBId, existin
     document.getElementById('matchModal').remove();
     document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
   } catch(e) { errEl.textContent=e.message||'Could not save.'; }
+  finally { uiGuardEnd(guardKey); }
 }
 
 async function updateBestOf(matchId, bestOf) {
@@ -4595,9 +4627,14 @@ function confirmReverseResult(matchId, bracketId) {
 }
 
 async function handleReverseResult(matchId, bracketId) {
-  await BracketAPI.reverseResult(matchId, bracketId);
-  document.getElementById('reverseModal').remove();
-  document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+  if (!uiGuardStart('reverseResult-' + matchId)) return;
+  try {
+    await BracketAPI.reverseResult(matchId, bracketId);
+    document.getElementById('reverseModal').remove();
+    document.getElementById('tabPanel').innerHTML = await bracketsTabHtml();
+  } finally {
+    uiGuardEnd('reverseResult-' + matchId);
+  }
 }
 
 
@@ -4856,7 +4893,7 @@ async function openMatchEditor(matchId) {
             <input type="number" id="editLoserScore" min="0" value="${origLoserScore}"
               style="font-family:var(--font-mono);font-size:30px;font-weight:800;width:100%;text-align:center;border:2px solid var(--border-soft);border-radius:6px;background:var(--surface-raised);color:var(--ink);padding:4px 0;min-height:0;"
               oninput="refreshMatchEditPreview()" onchange="refreshMatchEditPreview()">
-            <div style="font-size:9px;color:var(--resting-slate);margin-top:3px;">type new score · 10+ = deuce</div>
+            <div style="font-size:9px;color:var(--resting-slate);margin-top:3px;" id="editScoreLimitNote">type new score · 10+ = deuce</div>
           </div>
         </div>
 
@@ -4893,9 +4930,16 @@ function refreshMatchEditPreview() {
   const origWinnerNames = modal.dataset.origWinner || '';
   const origLoserNames  = modal.dataset.origLoser  || '';
 
-  const raw        = parseInt(document.getElementById('editLoserScore')?.value, 10);
-  const loserScore = (isNaN(raw) || raw < 0) ? 0 : raw;
-  const isDeuce    = loserScore >= 10;
+  const deuceOn = activeSession?.deuce_enabled !== false;
+  const raw     = parseInt(document.getElementById('editLoserScore')?.value, 10);
+  let loserScore = (isNaN(raw) || raw < 0) ? 0 : raw;
+  // Deuce OFF: loser can never reach 11 — clamp the input just like new-match entry.
+  if (!deuceOn && loserScore > 10) {
+    loserScore = 10;
+    const inputEl = document.getElementById('editLoserScore');
+    if (inputEl) inputEl.value = 10;
+  }
+  const isDeuce    = deuceOn && loserScore >= 10;
   const winnerScore = isDeuce ? loserScore + 2 : 11;
 
   const swapped = document.getElementById('swapWinnerCheckbox')?.checked;
@@ -4922,6 +4966,8 @@ function refreshMatchEditPreview() {
   const deuceEl  = document.getElementById('scoreDeuceTag');
   if (winNumEl) winNumEl.textContent = winnerScore;
   if (deuceEl)  deuceEl.textContent  = isDeuce ? 'Deuce +2 rule' : '';
+  const limitEl = document.getElementById('editScoreLimitNote');
+  if (limitEl) limitEl.textContent = deuceOn ? 'type new score · 10+ = deuce' : 'type new score · 0–10 · winner always 11 (no deuce)';
 
   // Build the plain-English preview.
   const previewEl = document.getElementById('matchEditPreview');
@@ -4936,6 +4982,7 @@ function refreshMatchEditPreview() {
 }
 
 async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeamId, origLoserScore) {
+  if (!uiGuardStart('matchEdit-' + matchId)) return; // already saving — ignore the duplicate tap
   const btn   = document.getElementById('matchEditConfirmBtn');
   const errEl = document.getElementById('matchEditError');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -4944,6 +4991,14 @@ async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeam
   if (isNaN(raw) || raw < 0) {
     if (errEl) errEl.textContent = 'Enter a valid score (0 or higher).';
     if (btn) { btn.disabled = false; btn.textContent = 'Apply Correction'; }
+    uiGuardEnd('matchEdit-' + matchId);
+    return;
+  }
+  const deuceOn = activeSession?.deuce_enabled !== false;
+  if (!deuceOn && raw > 10) {
+    if (errEl) errEl.textContent = 'Deuce is off — losing score must be 10 or below.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply Correction'; }
+    uiGuardEnd('matchEdit-' + matchId);
     return;
   }
 
@@ -4960,6 +5015,8 @@ async function confirmMatchEdit(matchId, originalWinnerTeamId, originalLoserTeam
   } catch (err) {
     if (errEl) errEl.textContent = err.message || 'Could not apply correction.';
     if (btn) { btn.disabled = false; btn.textContent = 'Apply Correction'; }
+  } finally {
+    uiGuardEnd('matchEdit-' + matchId);
   }
 }
 
