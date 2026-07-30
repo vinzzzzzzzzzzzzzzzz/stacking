@@ -410,6 +410,7 @@
   .status-playing  { background: var(--court-paint); }
   .status-resting  { background: var(--bench-slate); }
   .status-left     { background: var(--bench-slate); opacity: 0.55; }
+  .status-late_arrival { background: var(--optic-yellow); color: var(--optic-yellow-ink); }
 
   /* ── Roster action buttons — ≥44px on mobile ── */
   .arrive-btn, .rest-btn, .back-btn, .edit-btn { border: none; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; min-height: 36px; cursor: pointer; }
@@ -1284,7 +1285,7 @@ function generateReferenceCode() {
 // ============================================================
 const SessionAPI = (() => {
 
-  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled, deuceEnabled }) {
+  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled, deuceEnabled, pairingMode }) {
     if (!currentHost?.id) {
       throw new Error('Not logged in — please log out and sign in again.');
     }
@@ -1305,7 +1306,7 @@ const SessionAPI = (() => {
         allow_cross_lane_fill: true,
         password_hash: null,
         session_type: sessionType || 'open_play',
-        open_play_mode: sessionType === 'open_play' ? 'automated' : null,
+        open_play_mode: sessionType === 'open_play' ? (pairingMode === 'manual' ? 'manual' : 'automated') : null,
         scoring_mode: 'win_loss',
         points_to_win: 11,
         deuce_enabled: deuceEnabled !== false,
@@ -1385,7 +1386,7 @@ const SessionAPI = (() => {
    * physically arrived yet. No queue placement, no became_free_at.
    * Rejects duplicate names (case-insensitive) within the same session.
    */
-  async function preRegisterPlayer(sessionId, name, skillTier = 'open', photoUrl = null) {
+  async function preRegisterPlayer(sessionId, name, skillTier = 'open', photoUrl = null, notes = null) {
     // Check for an existing player with the same name in this session.
     // We do this client-side because Supabase doesn't expose a
     // case-insensitive unique constraint easily without a migration.
@@ -1397,12 +1398,14 @@ const SessionAPI = (() => {
 
     const row = { session_id: sessionId, name: name.trim(), skill_tier: skillTier, status: 'expected' };
     if (photoUrl) row.photo_url = photoUrl;
+    if (notes)    row.notes = notes.trim();
     const { data, error } = await supabaseClient.from('players').insert(row).select().single();
     if (error) {
-      // If the photo_url column doesn't exist yet, retry without it so
-      // player registration still works (photo just won't be saved).
-      if (photoUrl && /photo_url/.test(error.message || '')) {
+      // If the photo_url/notes columns don't exist yet, retry without them
+      // so player registration still works (those fields just won't save).
+      if (/photo_url|notes/.test(error.message || '')) {
         delete row.photo_url;
+        delete row.notes;
         const retry = await supabaseClient.from('players').insert(row).select().single();
         if (retry.error) throw retry.error;
         return retry.data;
@@ -1412,16 +1415,18 @@ const SessionAPI = (() => {
     return data;
   }
 
-  // Edit an existing player's name, tier, and/or photo.
-  async function updatePlayer(playerId, { name, skillTier, photoUrl } = {}) {
+  // Edit an existing player's name, tier, photo, and/or notes.
+  async function updatePlayer(playerId, { name, skillTier, photoUrl, notes } = {}) {
     const row = {};
     if (name != null)     row.name = name.trim();
     if (skillTier != null) row.skill_tier = skillTier;
     if (photoUrl != null)  row.photo_url = photoUrl;
+    if (notes != null)     row.notes = notes.trim();
     const { data, error } = await supabaseClient.from('players').update(row).eq('id', playerId).select().single();
     if (error) {
-      if (/photo_url/.test(error.message || '')) {
+      if (/photo_url|notes/.test(error.message || '')) {
         delete row.photo_url;
+        delete row.notes;
         const retry = await supabaseClient.from('players').update(row).eq('id', playerId).select().single();
         if (retry.error) throw retry.error;
         return retry.data;
@@ -1432,12 +1437,19 @@ const SessionAPI = (() => {
   }
 
   /**
-   * Mark a player as arrived — sets status 'waiting' and stamps
-   * became_free_at NOW so they enter the FIFO pool at the current time.
+   * Mark a player as arrived.
+   *
+   * Automated mode: sets status 'waiting' and stamps became_free_at NOW so
+   * they enter the FIFO pool at the current time.
+   *
+   * Manual (semi-automated) mode: sets status 'late_arrival' instead — they
+   * sit in the Late Arrivals card (became_free_at stamped as their
+   * check-in time, shown as "Arrived Xm ago") until the host builds them
+   * into a match by hand. They are NOT auto-queued.
    */
-  async function markArrived(playerId) {
+  async function markArrived(playerId, manualMode = false) {
     const { error } = await supabaseClient.from('players')
-      .update({ status: 'waiting', became_free_at: new Date().toISOString() })
+      .update({ status: manualMode ? 'late_arrival' : 'waiting', became_free_at: new Date().toISOString() })
       .eq('id', playerId);
     if (error) throw error;
   }
@@ -1489,7 +1501,10 @@ const SessionAPI = (() => {
     if (theirTeam) {
       await supabaseClient.from('teams').update({ is_active: false }).eq('id', theirTeam.id);
     }
-    await supabaseClient.from('players').update({ status: 'resting' }).eq('id', playerId);
+    // became_free_at doubles as "entered current status at" — stamping it
+    // here is what lets the Resting card show a live "Resting Xm" timer.
+    await supabaseClient.from('players')
+      .update({ status: 'resting', became_free_at: new Date().toISOString() }).eq('id', playerId);
   }
 
   async function restPlayerManually(playerId) {
@@ -1675,7 +1690,7 @@ const SessionAPI = (() => {
       if (outcome === 'queue') {
         row = { status: 'waiting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds };
       } else if (outcome === 'rest') {
-        row = { status: 'resting', last_match_result: lastResult, recent_opponent_ids: opponentIds };
+        row = { status: 'resting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds };
       } else if (outcome === 'left') {
         row = { status: 'left', last_match_result: lastResult, recent_opponent_ids: opponentIds };
       } else {
@@ -1720,7 +1735,16 @@ const SessionAPI = (() => {
     // the host never sees a misleading "something went wrong, try again"
     // that would tempt a duplicate submit — which is exactly what causes
     // orphaned players if it ever gets through.
-    try { await tryRefillCourt(courtId, sessionId); } catch (_) {}
+    // Manual-mode sessions never auto-pair — release the oldest prepared
+    // ("Up Next") match instead of running the automated stacking engine.
+    try {
+      const freedSession = sessionId ? await getSession(sessionId) : null;
+      if (freedSession?.open_play_mode === 'manual') {
+        await tryReleasePreparedMatch(courtId, sessionId);
+      } else {
+        await tryRefillCourt(courtId, sessionId);
+      }
+    } catch (_) {}
 
     // Safety net: clean up any players stuck at status='playing' with no
     // live court actually linked to them — whatever the cause, this keeps
@@ -1861,6 +1885,117 @@ const SessionAPI = (() => {
     const teamB = await createTeam(court.session_id, decision.teamBPlayerIds, 'playing');
     await assignCourt(courtId, teamA.id, teamB.id);
     return { teamA, teamB };
+  }
+
+  // ---------- MANUAL MODE (semi-automated pairing) ----------
+  //
+  // Manual mode never auto-pairs — the host hand-picks who plays next from
+  // the four live cards (Winning/Losing/Resting/Late Arrivals). A built
+  // match either starts immediately on an open court, or — if every court
+  // is busy — is held as a "prepared match" (Up Next) and released to the
+  // next court that frees, oldest-prepared first. This mirrors the
+  // automated engine's court-filling mechanics without its auto-pairing.
+
+  /**
+   * Build a match from host-picked players. Doubles picks are split into
+   * two skill-balanced teams (same balancing logic the automated engine
+   * uses); singles picks are 1v1 as-is — the host already chose exactly
+   * who plays whom, there's nothing left to balance.
+   */
+  async function buildManualMatch(sessionId, playerIds) {
+    const ids = [...new Set(playerIds || [])];
+    if (ids.length !== 2 && ids.length !== 4) {
+      throw new Error('Pick exactly 2 players (singles) or 4 players (doubles).');
+    }
+
+    const { data: players, error: pErr } = await supabaseClient.from('players')
+      .select('id, status, skill_tier, last_match_result, recent_opponent_ids').in('id', ids);
+    if (pErr) throw pErr;
+    if (!players || players.length !== ids.length) {
+      throw new Error('One of the selected players is no longer available.');
+    }
+    const notReady = players.find(p => !['waiting', 'late_arrival', 'resting'].includes(p.status));
+    if (notReady) throw new Error('One of the selected players is already in a match.');
+
+    let teamAIds, teamBIds;
+    if (players.length === 2) {
+      teamAIds = [players[0].id];
+      teamBIds = [players[1].id];
+    } else {
+      const split = decideSkillBalancedTeams(players);
+      if (!split) throw new Error('Could not split these 4 players into two teams.');
+      teamAIds = split.teamAPlayerIds;
+      teamBIds = split.teamBPlayerIds;
+    }
+
+    const teamA = await createTeam(sessionId, teamAIds, 'prepared');
+    const teamB = await createTeam(sessionId, teamBIds, 'prepared');
+
+    // An open court right now? Start immediately instead of queueing.
+    const { data: openCourts } = await supabaseClient.from('courts')
+      .select('*').eq('session_id', sessionId).eq('status', 'open')
+      .order('court_number', { ascending: true }).limit(1);
+    const openCourt = (openCourts || [])[0];
+
+    if (openCourt) {
+      await assignCourt(openCourt.id, teamA.id, teamB.id);
+      return { started: true, courtNumber: openCourt.court_number };
+    }
+
+    // No open court — hold this match as "Up Next", oldest-prepared-first.
+    const { error: prepErr } = await supabaseClient.from('prepared_matches')
+      .insert({ session_id: sessionId, team_a_id: teamA.id, team_b_id: teamB.id, status: 'pending' });
+    if (prepErr) {
+      throw new Error('Database missing the prepared_matches table — run in Supabase SQL Editor: ' +
+        "CREATE TABLE IF NOT EXISTS prepared_matches (id uuid primary key default gen_random_uuid(), " +
+        "session_id uuid references sessions(id), team_a_id uuid references teams(id), " +
+        "team_b_id uuid references teams(id), status text default 'pending', created_at timestamptz default now());");
+    }
+    return { started: false };
+  }
+
+  async function getPreparedMatches(sessionId) {
+    const { data, error } = await supabaseClient.from('prepared_matches')
+      .select('*, team_a:team_a_id(*), team_b:team_b_id(*)')
+      .eq('session_id', sessionId).eq('status', 'pending')
+      .order('created_at', { ascending: true });
+    if (error) {
+      if (/prepared_matches/.test(error.message || '')) return []; // table not migrated yet
+      throw error;
+    }
+    return data || [];
+  }
+
+  async function cancelPreparedMatch(matchId) {
+    const { data: pm } = await supabaseClient.from('prepared_matches').select('*').eq('id', matchId).single();
+    if (!pm) return;
+    await supabaseClient.from('teams').update({ is_active: false }).in('id', [pm.team_a_id, pm.team_b_id]);
+    const { data: teamRows } = await supabaseClient.from('teams').select('player_ids').in('id', [pm.team_a_id, pm.team_b_id]);
+    const playerIds = (teamRows || []).flatMap(t => t.player_ids || []);
+    if (playerIds.length) {
+      await supabaseClient.from('players').update({ status: 'waiting', became_free_at: new Date().toISOString() }).in('id', playerIds);
+    }
+    await supabaseClient.from('prepared_matches').delete().eq('id', matchId);
+  }
+
+  /** Release the oldest prepared match onto a court that just freed up. */
+  async function tryReleasePreparedMatch(courtId, sessionId) {
+    const { data: court } = await supabaseClient.from('courts').select('*').eq('id', courtId).single();
+    if (!court || court.status === 'in_progress') return null;
+
+    const { data: prepared, error } = await supabaseClient.from('prepared_matches')
+      .select('*').eq('session_id', sessionId).eq('status', 'pending')
+      .order('created_at', { ascending: true }).limit(1);
+    if (error) {
+      if (/prepared_matches/.test(error.message || '')) return null; // table not migrated yet
+      throw error;
+    }
+    const next = (prepared || [])[0];
+    if (!next) return null;
+
+    await assignCourt(courtId, next.team_a_id, next.team_b_id);
+    await supabaseClient.from('prepared_matches').update({ status: 'assigned' }).eq('id', next.id);
+    return next;
   }
 
   // ---------- INBOX ----------
@@ -2180,6 +2315,7 @@ const SessionAPI = (() => {
     preRegisterPlayer, updatePlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
     createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue, reconcileOrphanedPlayers,
+    buildManualMatch, getPreparedMatches, cancelPreparedMatch, tryReleasePreparedMatch,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
     correctMatchResult, deleteMatchResult, getRecentMatches,
@@ -2348,6 +2484,7 @@ function sessionTypeBadge(s) {
 }
 
 let _newSessionType = 'open_play'; // tracks selected type in create form
+let _newPairingMode = 'automated'; // open play only: 'automated' | 'manual'
 
 async function renderSessionList() {
   // Default to whichever session type this host is actually allowed to
@@ -2356,6 +2493,7 @@ async function renderSessionList() {
   const allowOpenPlay   = currentHost?.allow_open_play !== false;
   const allowTournament = currentHost?.allow_tournament !== false;
   _newSessionType = allowOpenPlay ? 'open_play' : 'tournament';
+  _newPairingMode = 'automated';
   const sessions = await SessionAPI.getMySessions();
   const active    = sessions.filter(s => s.status === 'active');
   const completed = sessions.filter(s => s.status === 'completed').slice(0, 15);
@@ -2444,6 +2582,19 @@ async function renderSessionList() {
             </select>
           </div>
         </div>
+        <div class="field" style="margin-top:2px;">
+          <label>Pairing</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <button type="button" id="pairModeAutoBtn" onclick="selectPairingMode('automated')"
+              style="padding:11px 8px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;border:2px solid var(--court-paint);background:var(--court-paint);color:white;text-align:left;">
+              ⚡ Automated<br><span style="font-weight:500;font-size:10px;opacity:.85;">System stacks &amp; starts matches for you</span>
+            </button>
+            <button type="button" id="pairModeManualBtn" onclick="selectPairingMode('manual')"
+              style="padding:11px 8px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;border:2px solid var(--border-soft);background:transparent;color:var(--ink-muted);text-align:left;">
+              🎛 Semi-Automated<br><span style="font-weight:500;font-size:10px;opacity:.85;">You build each match by hand from live cards</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Tournament only -->
@@ -2508,6 +2659,18 @@ function selectNewSessionType(type) {
   }
 }
 
+function selectPairingMode(mode) {
+  _newPairingMode = mode;
+  const autoBtn   = document.getElementById('pairModeAutoBtn');
+  const manualBtn = document.getElementById('pairModeManualBtn');
+  if (!autoBtn || !manualBtn) return;
+  const on  = { border: 'var(--court-paint)', bg: 'var(--court-paint)', color: 'white' };
+  const off = { border: 'var(--border-soft)', bg: 'transparent', color: 'var(--ink-muted)' };
+  const [activeBtn, inactiveBtn] = mode === 'manual' ? [manualBtn, autoBtn] : [autoBtn, manualBtn];
+  activeBtn.style.borderColor = on.border; activeBtn.style.background = on.bg; activeBtn.style.color = on.color;
+  inactiveBtn.style.borderColor = off.border; inactiveBtn.style.background = off.bg; inactiveBtn.style.color = off.color;
+}
+
 function syncFormatFromDivision() {
   const div = document.getElementById('newDivision')?.value || '';
   // Format is implied by division — singles divisions → singles format
@@ -2542,8 +2705,10 @@ async function handleCreateSession() {
   const deuceEnabled = _newSessionType === 'tournament' ? false
     : (document.getElementById('newDeuce')?.value !== 'off');
 
+  const pairingMode = _newSessionType === 'open_play' ? _newPairingMode : null;
+
   try {
-    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division, deuceEnabled });
+    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division, deuceEnabled, pairingMode });
     await openSession(session.id);
   } catch (err) {
     errorEl.textContent = err.message;
@@ -2687,7 +2852,7 @@ async function renderConsole() {
 
     <div class="tabs">
       <button class="tab-btn ${activeTab === 'roster' ? 'active' : ''}" onclick="switchTab('roster')">Roster</button>
-      ${activeSession.session_type !== 'tournament' ? `<button class="tab-btn ${activeTab === 'queue' ? 'active' : ''}" onclick="switchTab('queue')">Queue</button>` : ''}
+      ${activeSession.session_type !== 'tournament' ? `<button class="tab-btn ${activeTab === 'queue' ? 'active' : ''}" onclick="switchTab('queue')">${activeSession.open_play_mode === 'manual' ? 'Board' : 'Queue'}</button>` : ''}
       ${activeSession.session_type === 'tournament' ? `<button class="tab-btn ${activeTab === 'brackets' ? 'active' : ''}" onclick="switchTab('brackets')">Brackets</button>` : ''}
       <button class="tab-btn ${activeTab === 'courts' ? 'active' : ''}" onclick="switchTab('courts')">Courts</button>
       <button class="tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}" onclick="switchTab('leaderboard')">Leaderboard</button>
@@ -2826,6 +2991,12 @@ function switchTab(tab) {
 async function renderActiveTab() {
   const panel = document.getElementById('tabPanel');
   if (!panel) return;
+  // Manual board's live-timer interval only makes sense while that board
+  // is on screen — clear it on every navigation, queueTabHtml re-arms it.
+  if (activeTab !== 'queue' && window._manualTimerInterval) {
+    clearInterval(window._manualTimerInterval);
+    window._manualTimerInterval = null;
+  }
   if (activeTab === 'roster')      panel.innerHTML = await rosterTabHtml();
   if (activeTab === 'queue')       panel.innerHTML = await queueTabHtml();
   if (activeTab === 'brackets')    panel.innerHTML = await bracketsTabHtml();
@@ -2936,7 +3107,177 @@ function computeCardsPerPageHost(containerEl) {
 window._queuePreviews = [];
 window._queuePageIndex = 0;
 
+// ════════════════════════════════════════════
+// MANUAL MODE — 4 live status cards (Winning/Losing/Resting/Late Arrivals)
+// + host-built matches. No auto-pairing: the host picks who plays next.
+// ════════════════════════════════════════════
+window._manualSelected = window._manualSelected || new Set();
+
+function elapsedLabel(iso) {
+  if (!iso) return '0m';
+  const ms = Math.max(0, Date.now() - new Date(iso).getTime());
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function smallAvatarHtml(p) {
+  if (p.photo_url) return `<img src="${p.photo_url}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;flex-shrink:0;">`;
+  return `<div style="width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${colorFromName(p.name)};color:#fff;font-size:11px;font-weight:800;">${initialsFromName(p.name)}</div>`;
+}
+
+async function manualBoardHtml() {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const teamSize = activeSession?.format === 'singles' ? 1 : 2;
+  const needed = teamSize * 2;
+
+  const byOldest = (a, b) => new Date(a.became_free_at || 0) - new Date(b.became_free_at || 0);
+  const winning = players.filter(p => p.status === 'waiting' && p.last_match_result === 'won').sort(byOldest);
+  const losing  = players.filter(p => p.status === 'waiting' && p.last_match_result === 'lost').sort(byOldest);
+  const resting = players.filter(p => p.status === 'resting').sort(byOldest);
+  // Late Arrivals also absorbs any 'waiting' player with no result yet —
+  // e.g. someone returned to the queue from Resting before ever playing.
+  const lateArrivals = players.filter(p => p.status === 'late_arrival' || (p.status === 'waiting' && !p.last_match_result)).sort(byOldest);
+
+  // Drop stale selections — a player pulled onto a court elsewhere
+  // shouldn't stay checked here.
+  const eligibleIds = new Set([...winning, ...losing, ...resting, ...lateArrivals].map(p => p.id));
+  for (const id of [...window._manualSelected]) if (!eligibleIds.has(id)) window._manualSelected.delete(id);
+
+  const prepared = await SessionAPI.getPreparedMatches(activeSession.id);
+  const selCount = window._manualSelected.size;
+  const ready = selCount === needed;
+
+  setTimeout(startManualBoardTimers, 0);
+
+  return `
+    <div class="card" style="padding:14px 16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:800;font-size:13px;">🎛 Build a Match</div>
+          <div style="font-size:11px;color:var(--resting-slate);">Tap players below to select them — needs exactly ${needed} (${teamSize === 1 ? 'singles' : 'doubles'}), from any card.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <span style="font-family:var(--font-mono);font-weight:800;font-size:14px;color:${ready ? 'var(--winner-green)' : 'var(--ink-muted)'};">${selCount} / ${needed}</span>
+          <button id="manualBuildBtn" onclick="handleBuildManualMatch()" ${ready ? '' : 'disabled'}
+            style="background:${ready ? 'var(--optic-yellow)' : 'var(--surface-hover)'};color:${ready ? 'var(--optic-yellow-ink)' : 'var(--resting-slate)'};border:none;padding:9px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;${ready ? 'cursor:pointer;' : 'cursor:not-allowed;'}">
+            Build Match
+          </button>
+        </div>
+      </div>
+      <div id="manualBuildError" class="auth-error" style="margin-top:6px;"></div>
+    </div>
+
+    ${prepared.length ? `
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div class="lane-header" style="background:var(--optic-yellow);color:var(--optic-yellow-ink);"><span>⏳ Up Next</span><span class="count">${prepared.length}</span></div>
+      <div style="padding:10px 14px;">
+        ${prepared.map((pm, i) => preparedMatchRowHtml(pm, i)).join('')}
+      </div>
+    </div>` : ''}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      ${manualCardHtml('🏆 Winning', 'var(--winner-green)', winning, 'Waiting')}
+      ${manualCardHtml('💔 Losing', 'var(--loser-coral)', losing, 'Waiting')}
+      ${manualCardHtml('☕ Resting', 'var(--bench-slate)', resting, 'Resting')}
+      ${manualCardHtml('🆕 Late Arrivals', 'var(--waiting-blue)', lateArrivals, 'Arrived')}
+    </div>
+  `;
+}
+
+function manualCardHtml(title, colorVar, list, verb) {
+  return `
+    <div class="card" style="padding:0;overflow:hidden;min-width:0;">
+      <div class="lane-header" style="background:${colorVar};"><span>${title}</span><span class="count">${list.length}</span></div>
+      <div style="padding:8px;max-height:340px;overflow-y:auto;">
+        ${list.length ? list.map(p => manualPlayerRowHtml(p, verb)).join('')
+          : `<div style="text-align:center;padding:16px 0;color:var(--resting-slate);font-size:12px;">Nobody here</div>`}
+      </div>
+    </div>`;
+}
+
+function manualPlayerRowHtml(p, verb) {
+  const selected = window._manualSelected.has(p.id);
+  return `
+    <div class="manual-player-row" data-id="${p.id}" onclick="toggleManualSelect('${p.id}')"
+      style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:4px;
+        border:1.5px solid ${selected ? 'var(--optic-yellow)' : 'transparent'};background:${selected ? 'rgba(215,242,61,0.1)' : 'var(--surface-hover)'};">
+      ${smallAvatarHtml(p)}
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name)}${p.notes ? ` <span title="${escapeHtml(p.notes)}">📝</span>` : ''}</div>
+        <div class="manual-timer" data-since="${p.became_free_at || ''}" data-verb="${verb}" style="font-size:10px;color:var(--resting-slate);">${verb} ${elapsedLabel(p.became_free_at)}</div>
+      </div>
+    </div>`;
+}
+
+function preparedMatchRowHtml(pm, i) {
+  const namesFor = team => (team?.player_ids || []).length
+    ? `${team.player_ids.length} player${team.player_ids.length > 1 ? 's' : ''}` : '—';
+  return `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:12px;">
+      <span style="font-family:var(--font-mono);font-weight:800;color:var(--bench-slate);width:18px;">${i + 1}</span>
+      <span style="flex:1;font-weight:700;">${escapeHtml(namesFor(pm.team_a))} <span style="color:var(--bench-slate);font-weight:400;">vs</span> ${escapeHtml(namesFor(pm.team_b))}</span>
+      <button onclick="handleCancelPreparedMatch('${pm.id}')" style="background:none;border:none;color:var(--fault-coral);font-size:11px;font-weight:700;cursor:pointer;min-height:0;padding:4px 6px;">✕ Cancel</button>
+    </div>`;
+}
+
+function toggleManualSelect(playerId) {
+  const teamSize = activeSession?.format === 'singles' ? 1 : 2;
+  const needed = teamSize * 2;
+  if (window._manualSelected.has(playerId)) {
+    window._manualSelected.delete(playerId);
+  } else {
+    if (window._manualSelected.size >= needed) return; // full — ignore extra taps
+    window._manualSelected.add(playerId);
+  }
+  renderActiveTab();
+}
+
+async function handleBuildManualMatch() {
+  if (!uiGuardStart('buildManualMatch')) return;
+  const btn = document.getElementById('manualBuildBtn');
+  const errEl = document.getElementById('manualBuildError');
+  if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+  try {
+    const result = await SessionAPI.buildManualMatch(activeSession.id, [...window._manualSelected]);
+    window._manualSelected.clear();
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+    if (!result.started) {
+      // Every court's busy — this one's queued as Up Next, not a failure.
+    }
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not build this match.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Build Match'; }
+  } finally {
+    uiGuardEnd('buildManualMatch');
+  }
+}
+
+async function handleCancelPreparedMatch(matchId) {
+  if (!uiGuardStart('cancelPrepared-' + matchId)) return;
+  try {
+    await SessionAPI.cancelPreparedMatch(matchId);
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  } catch (err) { alert(err.message || 'Could not cancel this match.'); }
+  finally { uiGuardEnd('cancelPrepared-' + matchId); }
+}
+
+// Ticks every live timer in the 4 cards once a second without re-rendering
+// the whole board (avoids flicker + loses no scroll position / selection).
+function startManualBoardTimers() {
+  if (window._manualTimerInterval) clearInterval(window._manualTimerInterval);
+  window._manualTimerInterval = setInterval(() => {
+    document.querySelectorAll('.manual-timer').forEach(el => {
+      const since = el.dataset.since;
+      const verb  = el.dataset.verb;
+      if (since) el.textContent = `${verb} ${elapsedLabel(since)}`;
+    });
+  }, 1000);
+}
+
 async function queueTabHtml() {
+  if (activeSession?.open_play_mode === 'manual') return manualBoardHtml();
+
   const players = await SessionAPI.getPlayers(activeSession.id);
   const waiting = players.filter(p => p.status === 'waiting')
     .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
@@ -3017,19 +3358,30 @@ async function rosterTabHtml() {
       <p style="font-size:12px;color:var(--resting-slate);margin:-8px 0 12px;">Add expected attendees from your group chat or club list. Tap the circle to add a photo (optional). Mark them Arrived when they show up.</p>
       <div style="display:flex;gap:12px;align-items:flex-start;">
         ${avatarUploadWidget('newPlayerPhoto', '', '')}
-        <div class="add-player-row" style="flex:1;">
-          <input type="text" id="newPlayerName" placeholder="Player name" onkeydown="if(event.key==='Enter')handlePreRegister()">
-          <select id="newPlayerTier">
-            <option value="open">No tier / Open</option>
-            <option value="beginner">Beginner</option>
-            <option value="intermediate">Intermediate</option>
-            <option value="advanced">Advanced</option>
-          </select>
-          <button onclick="handlePreRegister()">+ Add to List</button>
+        <div style="flex:1;">
+          <div class="add-player-row">
+            <input type="text" id="newPlayerName" placeholder="Player name" onkeydown="if(event.key==='Enter')handlePreRegister()">
+            <select id="newPlayerTier">
+              <option value="open">No tier / Open</option>
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+            <button onclick="handlePreRegister()">+ Add to List</button>
+          </div>
+          <input type="text" id="newPlayerNotes" placeholder="Notes (optional) — e.g. plays right side, recovering ankle"
+            style="width:100%;margin-top:8px;padding:9px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--surface-raised);color:var(--ink);font-size:13px;min-height:0;">
         </div>
       </div>
     </div>
 
+    ${activeSession.open_play_mode === 'manual' ? `
+    <div class="card" style="border:1px solid rgba(215,242,61,0.2);">
+      <h2 style="margin:0 0 4px;">🎛 Semi-Automated Mode</h2>
+      <p style="font-size:12px;color:var(--resting-slate);margin:0;">
+        This session builds every match by hand — mark players Arrived here, then head to the <strong>Board</strong> tab to place them into matches from the Winning / Losing / Resting / Late Arrivals cards.
+      </p>
+    </div>` : `
     <div class="card" style="border:1px solid rgba(215,242,61,0.2);">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
         <div>
@@ -3045,7 +3397,7 @@ async function rosterTabHtml() {
           ${_queueStarted ? '✓ Queuing Started' : '🔀 Shuffle Queue &amp; Fill Courts'}
         </button>
       </div>
-    </div>
+    </div>`}
 
     ${expected.length ? `
     <div class="card">
@@ -3114,23 +3466,28 @@ async function handlePreRegister() {
   const name = document.getElementById('newPlayerName').value.trim();
   const tier = document.getElementById('newPlayerTier').value;
   const photo = document.getElementById('newPlayerPhoto')?.value || null;
+  const notes = document.getElementById('newPlayerNotes')?.value?.trim() || null;
   if (!name) return;
   try {
-    await SessionAPI.preRegisterPlayer(activeSession.id, name, tier, photo);
+    await SessionAPI.preRegisterPlayer(activeSession.id, name, tier, photo, notes);
     document.getElementById('newPlayerName').value = '';
+    document.getElementById('newPlayerNotes').value = '';
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
   } catch (err) { alert(err.message || 'Could not add player.'); }
 }
 
 async function handleArrived(playerId) {
   if (!uiGuardStart('arrived-' + playerId)) return;
+  const isManualMode = activeSession?.open_play_mode === 'manual';
   try {
-    await SessionAPI.markArrived(playerId);
+    await SessionAPI.markArrived(playerId, isManualMode);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
-    // Only auto-fill courts AFTER the host has started queuing (pressed Shuffle).
-    // Before that, arrivals just sit in the waiting list so the host can
-    // shuffle/balance them all at once — arriving ≠ playing.
-    if (_queueStarted && activeTab === 'roster') {
+    // Manual mode never auto-fills courts — the host builds every match
+    // by hand from the live cards, so arrivals just sit in Late Arrivals.
+    // Automated mode: only auto-fill AFTER the host has started queuing
+    // (pressed Shuffle). Before that, arrivals just sit in the waiting
+    // list so the host can shuffle/balance them all at once.
+    if (!isManualMode && _queueStarted && activeTab === 'roster') {
       const courts = await SessionAPI.getCourts(activeSession.id);
       for (const court of courts) {
         if (court.status === 'open') {
@@ -3162,7 +3519,7 @@ async function openEditPlayerModal(playerId) {
     <div class="modal-backdrop" id="editPlayerModal">
       <div class="modal-box">
         <h2>Edit Player</h2>
-        <p class="modal-sub">Update ${escapeHtml(p.name)}'s name, tier, or photo.</p>
+        <p class="modal-sub">Update ${escapeHtml(p.name)}'s name, tier, photo, or notes.</p>
         <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;">
           ${avatarUploadWidget('editPlayerPhoto', p.photo_url || '', p.name)}
           <div style="flex:1;">
@@ -3177,6 +3534,7 @@ async function openEditPlayerModal(playerId) {
             </div>
           </div>
         </div>
+        <div class="field"><label>Notes (optional)</label><input type="text" id="editPlayerNotes" value="${escapeHtml(p.notes || '')}" placeholder="e.g. plays right side, recovering ankle"></div>
         <div class="auth-error" id="editPlayerError"></div>
         <div class="confirm-actions">
           <button class="btn-no" onclick="document.getElementById('editPlayerModal').remove()">Cancel</button>
@@ -3190,10 +3548,11 @@ async function handleSaveEditPlayer(playerId) {
   const name = document.getElementById('editPlayerName').value.trim();
   const tier = document.getElementById('editPlayerTier').value;
   const photo = document.getElementById('editPlayerPhoto')?.value || null;
+  const notes = document.getElementById('editPlayerNotes')?.value ?? '';
   const errEl = document.getElementById('editPlayerError');
   if (!name) { errEl.textContent = 'Name cannot be empty.'; return; }
   try {
-    await SessionAPI.updatePlayer(playerId, { name, skillTier: tier, photoUrl: photo });
+    await SessionAPI.updatePlayer(playerId, { name, skillTier: tier, photoUrl: photo, notes });
     document.getElementById('editPlayerModal').remove();
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
   } catch (err) { errEl.textContent = err.message || 'Could not save changes.'; }
