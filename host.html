@@ -410,7 +410,6 @@
   .status-playing  { background: var(--court-paint); }
   .status-resting  { background: var(--bench-slate); }
   .status-left     { background: var(--bench-slate); opacity: 0.55; }
-  .status-late_arrival { background: var(--optic-yellow); color: var(--optic-yellow-ink); }
 
   /* ── Roster action buttons — ≥44px on mobile ── */
   .arrive-btn, .rest-btn, .back-btn, .edit-btn { border: none; padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; min-height: 36px; cursor: pointer; }
@@ -1437,19 +1436,19 @@ const SessionAPI = (() => {
   }
 
   /**
-   * Mark a player as arrived.
-   *
-   * Automated mode: sets status 'waiting' and stamps became_free_at NOW so
-   * they enter the FIFO pool at the current time.
-   *
-   * Manual (semi-automated) mode: sets status 'late_arrival' instead — they
-   * sit in the Late Arrivals card (became_free_at stamped as their
-   * check-in time, shown as "Arrived Xm ago") until the host builds them
-   * into a match by hand. They are NOT auto-queued.
+   * Mark a player as arrived — sets status 'waiting' and stamps
+   * became_free_at NOW (their check-in time). 'waiting' + no
+   * last_match_result yet is what the Manual Mode board reads as
+   * "Late Arrival" (see manualBoardHtml) — deliberately NOT a separate
+   * status value, since the players table's CHECK constraint only allows
+   * a fixed set of statuses and 'late_arrival' isn't one of them.
+   * Manual mode's actual difference from automated is behavioral, not
+   * data-shaped: callers skip the auto-refill-courts step for manual
+   * sessions (see handleArrived / applyQueuePlacement).
    */
-  async function markArrived(playerId, manualMode = false) {
+  async function markArrived(playerId) {
     const { error } = await supabaseClient.from('players')
-      .update({ status: manualMode ? 'late_arrival' : 'waiting', became_free_at: new Date().toISOString() })
+      .update({ status: 'waiting', became_free_at: new Date().toISOString() })
       .eq('id', playerId);
     if (error) throw error;
   }
@@ -1914,7 +1913,7 @@ const SessionAPI = (() => {
     if (!players || players.length !== ids.length) {
       throw new Error('One of the selected players is no longer available.');
     }
-    const notReady = players.find(p => !['waiting', 'late_arrival', 'resting'].includes(p.status));
+    const notReady = players.find(p => !['waiting', 'resting'].includes(p.status));
     if (notReady) throw new Error('One of the selected players is already in a match.');
 
     let teamAIds, teamBIds;
@@ -3135,9 +3134,10 @@ async function manualBoardHtml() {
   const winning = players.filter(p => p.status === 'waiting' && p.last_match_result === 'won').sort(byOldest);
   const losing  = players.filter(p => p.status === 'waiting' && p.last_match_result === 'lost').sort(byOldest);
   const resting = players.filter(p => p.status === 'resting').sort(byOldest);
-  // Late Arrivals also absorbs any 'waiting' player with no result yet —
-  // e.g. someone returned to the queue from Resting before ever playing.
-  const lateArrivals = players.filter(p => p.status === 'late_arrival' || (p.status === 'waiting' && !p.last_match_result)).sort(byOldest);
+  // Late Arrivals = anyone 'waiting' with no result yet — a brand new
+  // check-in, or someone who returned to the queue from Resting before
+  // ever playing a match.
+  const lateArrivals = players.filter(p => p.status === 'waiting' && !p.last_match_result).sort(byOldest);
 
   // Drop stale selections — a player pulled onto a court elsewhere
   // shouldn't stay checked here.
@@ -3480,7 +3480,7 @@ async function handleArrived(playerId) {
   if (!uiGuardStart('arrived-' + playerId)) return;
   const isManualMode = activeSession?.open_play_mode === 'manual';
   try {
-    await SessionAPI.markArrived(playerId, isManualMode);
+    await SessionAPI.markArrived(playerId);
     document.getElementById('tabPanel').innerHTML = await rosterTabHtml();
     // Manual mode never auto-fills courts — the host builds every match
     // by hand from the live cards, so arrivals just sit in Late Arrivals.
