@@ -1927,8 +1927,12 @@ const SessionAPI = (() => {
       teamBIds = split.teamBPlayerIds;
     }
 
-    const teamA = await createTeam(sessionId, teamAIds, 'prepared');
-    const teamB = await createTeam(sessionId, teamBIds, 'prepared');
+    // 'waiting' (not a new lane value) — teams.queue_lane has a check
+    // constraint allowing only 'waiting'/'playing', same issue as the
+    // players.status constraint. A host-built pair sitting in Up Next
+    // really is just "waiting" for a court, so this is accurate as-is.
+    const teamA = await createTeam(sessionId, teamAIds, 'waiting');
+    const teamB = await createTeam(sessionId, teamBIds, 'waiting');
 
     // An open court right now? Start immediately instead of queueing.
     const { data: openCourts } = await supabaseClient.from('courts')
