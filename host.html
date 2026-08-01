@@ -3137,12 +3137,15 @@ window._queuePageIndex = 0;
 // ════════════════════════════════════════════
 window._manualSelected = window._manualSelected || new Set();
 
+// Proper stopwatch format — HH:MM:SS, always, extending naturally for
+// however long someone's actually been waiting (not "1h 5m" shorthand).
 function elapsedLabel(iso) {
-  if (!iso) return '0m';
-  const ms = Math.max(0, Date.now() - new Date(iso).getTime());
-  const mins = Math.floor(ms / 60000);
-  if (mins < 60) return `${mins}m`;
-  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  if (!iso) return '00:00:00';
+  const totalSecs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const hrs  = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 function smallAvatarHtml(p) {
@@ -3155,21 +3158,33 @@ async function manualBoardHtml() {
   const teamSize = activeSession?.format === 'singles' ? 1 : 2;
   const needed = teamSize * 2;
 
+  const prepared = await SessionAPI.getPreparedMatches(activeSession.id);
+  const teams = await SessionAPI.getTeams(activeSession.id);
+  const teamById = new Map(teams.map(t => [t.id, t]));
+  // Anyone already committed to a queued-but-not-yet-started match can't
+  // be picked for a DIFFERENT one too — they're spoken for the moment
+  // they're queued, not just once they're actually on a court.
+  const queuedPlayerIds = new Set();
+  for (const pm of prepared) {
+    (teamById.get(pm.team_a_id)?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
+    (teamById.get(pm.team_b_id)?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
+  }
+
   const byOldest = (a, b) => new Date(a.became_free_at || 0) - new Date(b.became_free_at || 0);
-  const winning = players.filter(p => p.status === 'waiting' && p.last_match_result === 'won').sort(byOldest);
-  const losing  = players.filter(p => p.status === 'waiting' && p.last_match_result === 'lost').sort(byOldest);
-  const resting = players.filter(p => p.status === 'resting').sort(byOldest);
+  const eligible = (p) => !queuedPlayerIds.has(p.id);
+  const winning = players.filter(p => p.status === 'waiting' && p.last_match_result === 'won' && eligible(p)).sort(byOldest);
+  const losing  = players.filter(p => p.status === 'waiting' && p.last_match_result === 'lost' && eligible(p)).sort(byOldest);
+  const resting = players.filter(p => p.status === 'resting' && eligible(p)).sort(byOldest);
   // Late Arrivals = anyone 'waiting' with no result yet — a brand new
   // check-in, or someone who returned to the queue from Resting before
   // ever playing a match.
-  const lateArrivals = players.filter(p => p.status === 'waiting' && !p.last_match_result).sort(byOldest);
+  const lateArrivals = players.filter(p => p.status === 'waiting' && !p.last_match_result && eligible(p)).sort(byOldest);
 
-  // Drop stale selections — a player pulled onto a court elsewhere
-  // shouldn't stay checked here.
+  // Drop stale selections — a player pulled onto a court (or just queued)
+  // elsewhere shouldn't stay checked here.
   const eligibleIds = new Set([...winning, ...losing, ...resting, ...lateArrivals].map(p => p.id));
   for (const id of [...window._manualSelected]) if (!eligibleIds.has(id)) window._manualSelected.delete(id);
 
-  const prepared = await SessionAPI.getPreparedMatches(activeSession.id);
   const selCount = window._manualSelected.size;
   const ready = selCount === needed;
 
@@ -3221,16 +3236,38 @@ function manualCardHtml(title, colorVar, list, verb) {
     </div>`;
 }
 
+// Compact paddle icon for list rows — same shape/face as the full paddle
+// chip elsewhere, just sized for an inline row instead of a court grid
+// (no name-underneath, since these rows already show the name separately).
+function smallPaddleHtml(p) {
+  const name = p?.name || '—';
+  return `<div style="width:30px;height:40px;flex-shrink:0;position:relative;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.35));">
+    ${paddleSvg()}${paddleFaceHtml(name, p?.photo_url)}
+  </div>`;
+}
+
+const TIER_LABELS = { beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced', open: null };
+const TIER_COLORS = { beginner: 'var(--waiting-blue)', intermediate: 'var(--optic-yellow)', advanced: 'var(--fault-coral)' };
+function tierBadgeHtml(tier) {
+  const label = TIER_LABELS[tier];
+  if (!label) return ''; // 'open'/no tier — nothing meaningful to show
+  const color = TIER_COLORS[tier] || 'var(--bench-slate)';
+  return `<span style="font-size:9px;font-weight:800;color:${color};background:${color}22;padding:1px 6px;border-radius:999px;letter-spacing:.03em;flex-shrink:0;">${label}</span>`;
+}
+
 function manualPlayerRowHtml(p, verb) {
   const selected = window._manualSelected.has(p.id);
   return `
     <div class="manual-player-row" data-id="${p.id}" onclick="toggleManualSelect('${p.id}')"
       style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:4px;
         border:1.5px solid ${selected ? 'var(--optic-yellow)' : 'transparent'};background:${selected ? 'rgba(215,242,61,0.1)' : 'var(--surface-hover)'};">
-      ${smallAvatarHtml(p)}
+      ${smallPaddleHtml(p)}
       <div style="flex:1;min-width:0;">
-        <div style="font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name)}${p.notes ? ` <span title="${escapeHtml(p.notes)}">📝</span>` : ''}</div>
-        <div class="manual-timer" data-since="${p.became_free_at || ''}" data-verb="${verb}" style="font-size:10px;color:var(--resting-slate);">${verb} ${elapsedLabel(p.became_free_at)}</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name)}${p.notes ? ` <span title="${escapeHtml(p.notes)}">📝</span>` : ''}</span>
+          ${tierBadgeHtml(p.skill_tier)}
+        </div>
+        <div class="manual-timer" data-since="${p.became_free_at || ''}" data-verb="${verb}" style="font-size:10px;font-family:var(--font-mono);color:var(--resting-slate);margin-top:1px;">${verb} ${elapsedLabel(p.became_free_at)}</div>
       </div>
     </div>`;
 }
