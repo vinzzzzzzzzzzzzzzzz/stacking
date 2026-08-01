@@ -3059,9 +3059,6 @@ async function handleShuffleQueue() {
 // Per-session flag — true once the host has shuffled/started queuing.
 let _queueStarted = false;
 
-// ============================================================
-// ROSTER TAB
-// ============================================================
 // ════════════════════════════════════════════
 // QUEUE TAB — same "Up Next" paddle-stack preview as the spectator page,
 // available to the host directly. Reuses the REAL engine functions
@@ -3148,11 +3145,6 @@ function elapsedLabel(iso) {
   return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-function smallAvatarHtml(p) {
-  if (p.photo_url) return `<img src="${p.photo_url}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;flex-shrink:0;">`;
-  return `<div style="width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:${colorFromName(p.name)};color:#fff;font-size:11px;font-weight:800;">${initialsFromName(p.name)}</div>`;
-}
-
 async function manualBoardHtml() {
   const players = await SessionAPI.getPlayers(activeSession.id);
   const teamSize = activeSession?.format === 'singles' ? 1 : 2;
@@ -3210,9 +3202,9 @@ async function manualBoardHtml() {
 
     ${prepared.length ? `
     <div class="card" style="padding:0;overflow:hidden;">
-      <div class="lane-header" style="background:var(--optic-yellow);color:var(--optic-yellow-ink);"><span>⏳ Up Next</span><span class="count">${prepared.length}</span></div>
-      <div style="padding:10px 14px;">
-        ${prepared.map((pm, i) => preparedMatchRowHtml(pm, i)).join('')}
+      <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">${prepared.length}</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;padding:14px 12px;">
+        ${prepared.map((pm, i) => preparedMatchCardHtml(pm, i, players)).join('')}
       </div>
     </div>` : ''}
 
@@ -3272,15 +3264,24 @@ function manualPlayerRowHtml(p, verb) {
     </div>`;
 }
 
-function preparedMatchRowHtml(pm, i) {
-  const namesFor = team => (team?.player_ids || []).length
-    ? `${team.player_ids.length} player${team.player_ids.length > 1 ? 's' : ''}` : '—';
-  return `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:12px;">
-      <span style="font-family:var(--font-mono);font-weight:800;color:var(--bench-slate);width:18px;">${i + 1}</span>
-      <span style="flex:1;font-weight:700;">${escapeHtml(namesFor(pm.team_a))} <span style="color:var(--bench-slate);font-weight:400;">vs</span> ${escapeHtml(namesFor(pm.team_b))}</span>
-      <button onclick="handleCancelPreparedMatch('${pm.id}')" style="background:none;border:none;color:var(--fault-coral);font-size:11px;font-weight:700;cursor:pointer;min-height:0;padding:4px 6px;">✕ Cancel</button>
-    </div>`;
+// Rich paddle card for a queued (not-yet-started) manual match — same
+// visual language as the spectator page's Up Next, plus a Cancel button
+// since the host (unlike a spectator) can actually act on it.
+function preparedMatchCardHtml(pm, i, players) {
+  const byId = id => players.find(p => p.id === id) || { name: '—', photo_url: null };
+  const teamA = (pm.team_a?.player_ids || []).map(byId);
+  const teamB = (pm.team_b?.player_ids || []).map(byId);
+  return `<div class="mp-card" style="flex:1 1 280px;max-width:340px;">
+    <div class="mp-card-label">
+      <span>Queued #${i + 1}${i === 0 ? ' <span style="opacity:.7;font-weight:600">(Next)</span>' : ''}</span>
+      <button onclick="handleCancelPreparedMatch('${pm.id}')" style="background:none;border:none;color:var(--fault-coral);font-size:10px;font-weight:800;cursor:pointer;min-height:0;padding:2px 4px;">✕ Cancel</button>
+    </div>
+    <div class="mp-teams">
+      <div class="mp-team-row">${teamA.map(p => paddleChipHost(p)).join('')}</div>
+      <span class="mp-vs">VS</span>
+      <div class="mp-team-row">${teamB.map(p => paddleChipHost(p)).join('')}</div>
+    </div>
+  </div>`;
 }
 
 function toggleManualSelect(playerId) {
