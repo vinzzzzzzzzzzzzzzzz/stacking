@@ -570,7 +570,19 @@ const SessionAPI = (() => {
     const { error } = await supabaseClient.from('rest_requests').insert({ session_id: sessionId, player_id: playerId, status: 'pending' });
     if (error) throw error;
   }
-  return { getSession, getSessionByReferenceCode, getPlayers, getTeams, getCourts, getRecentMatches, sendMessage, requestRest };
+  async function getPreparedMatches(sessionId) {
+    const { data, error } = await supabaseClient.from('prepared_matches')
+      .select('*').eq('session_id', sessionId).eq('status', 'pending')
+      .order('created_at', { ascending: true });
+    if (error) {
+      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
+      if (missingTable || rlsBlocked) return [];
+      throw error;
+    }
+    return data || [];
+  }
+  return { getSession, getSessionByReferenceCode, getPlayers, getTeams, getCourts, getRecentMatches, sendMessage, requestRest, getPreparedMatches };
 })();
 
 // ============================================================
@@ -765,12 +777,13 @@ function renderOpenPlaySessionComplete(players) {
 // ============================================================
 async function refreshAll() {
   if (!currentSessionId) return;
-  const [players, teams, courts, recentMatches, session] = await Promise.all([
+  const [players, teams, courts, recentMatches, session, preparedMatches] = await Promise.all([
     SessionAPI.getPlayers(currentSessionId),
     SessionAPI.getTeams(currentSessionId),
     SessionAPI.getCourts(currentSessionId),
     SessionAPI.getRecentMatches(currentSessionId),
     SessionAPI.getSession(currentSessionId),
+    SessionAPI.getPreparedMatches(currentSessionId),
   ]);
   currentSession = session;
   const previousCourts = _courtsCache;
@@ -791,7 +804,7 @@ async function refreshAll() {
     const completeEl = document.getElementById('sessionCompleteSection');
     if (completeEl) completeEl.innerHTML = '';
     renderCourts(courts, players, previousCourts);
-    renderQueues(players);
+    renderQueues(players, teams, preparedMatches);
     renderLeaderboard(players, session);
   }
   renderRecentResults(recentMatches, players);
@@ -1058,6 +1071,44 @@ function computeCardsPerPage(containerEl){
   return 4;
 }
 
+// Manual mode's Up Next — real committed matches only, never a simulation.
+// Reuses the exact same .mp-card visual design as the automated preview so
+// the two modes look consistent, just fed real data instead of a forecast.
+function renderUpNextSectionManual(preparedMatches, players, teams) {
+  const el = document.getElementById('upNextSection');
+  if (!el) return;
+  if (!preparedMatches.length) {
+    el.innerHTML = `<div class="card" style="padding:0;overflow:hidden;margin-bottom:20px;">
+      <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">0</span></div>
+      <div style="text-align:center;padding:24px;color:var(--resting-slate);font-size:13px;">No matches queued yet — the host is still setting up the next pairing.</div>
+    </div>`;
+    return;
+  }
+  const playersById = (id) => players.find(p => p.id === id);
+  const teamsById    = (id) => teams.find(t => t.id === id);
+  const teamToPlayers = (teamId) => (teamsById(teamId)?.player_ids || []).map(playersById).filter(Boolean);
+
+  el.innerHTML = `
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px;">
+      <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">${preparedMatches.length}</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;padding:14px 12px;">
+        ${preparedMatches.map((pm, i) => {
+          const teamA = teamToPlayers(pm.team_a_id);
+          const teamB = teamToPlayers(pm.team_b_id);
+          return `<div class="mp-card" style="flex:1 1 280px;max-width:340px;">
+            <div class="mp-card-label"><span>Queued #${i + 1}${i === 0 ? ' <span style="opacity:.7;font-weight:600">(Next)</span>' : ''}</span></div>
+            <div class="mp-teams">
+              <div class="mp-team-row">${teamA.map(p => paddleChip(p)).join('')}</div>
+              <span class="mp-vs">VS</span>
+              <div class="mp-team-row">${teamB.map(p => paddleChip(p)).join('')}</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderUpNextSection(waiting) {
   const el = document.getElementById('upNextSection');
   if (!el) return;
@@ -1122,7 +1173,7 @@ function navigateUpNext(direction) {
   renderUpNextCard();
 }
 
-function renderQueues(players) {
+function renderQueues(players, teams, preparedMatches) {
   const grid = document.getElementById('queuesGrid');
   if (!grid) return;
 
@@ -1139,7 +1190,16 @@ function renderQueues(players) {
     .filter(p => p.status === 'waiting')
     .sort((a, b) => new Date(a.became_free_at) - new Date(b.became_free_at));
 
-  renderUpNextSection(waiting);
+  if (currentSession?.open_play_mode === 'manual') {
+    // Manual mode never auto-pairs — showing a SIMULATED "if a court freed
+    // up right now" preview here would be actively misleading (it'd show
+    // a pairing the host never actually chose). Show the REAL matches the
+    // host has committed to the queue instead — could be empty, and that's
+    // the correct, honest state until the host actually builds one.
+    renderUpNextSectionManual(preparedMatches || [], players, teams);
+  } else {
+    renderUpNextSection(waiting);
+  }
 
   const resting  = players.filter(p => p.status === 'resting');
   const expected = players.filter(p => p.status === 'expected');
