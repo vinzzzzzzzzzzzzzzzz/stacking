@@ -1959,10 +1959,26 @@ const SessionAPI = (() => {
     const { error: prepErr } = await supabaseClient.from('prepared_matches')
       .insert({ session_id: sessionId, team_a_id: teamA.id, team_b_id: teamB.id, status: 'pending' });
     if (prepErr) {
-      throw new Error('Database missing the prepared_matches table — run in Supabase SQL Editor: ' +
-        "CREATE TABLE IF NOT EXISTS prepared_matches (id uuid primary key default gen_random_uuid(), " +
-        "session_id uuid references sessions(id), team_a_id uuid references teams(id), " +
-        "team_b_id uuid references teams(id), status text default 'pending', created_at timestamptz default now());");
+      // '42P01' = relation does not exist — the table itself is genuinely
+      // missing. '42501' = insufficient privilege — usually Row Level
+      // Security blocking the write because the table exists but has no
+      // policy permitting it yet. These need DIFFERENT fixes, so checking
+      // only the error CODE (not just "did the table name appear in the
+      // message somewhere") avoids misreporting an RLS block as a missing
+      // table when the table was actually created successfully.
+      const missingTable = prepErr.code === '42P01' || /does not exist/i.test(prepErr.message || '');
+      const rlsBlocked = prepErr.code === '42501' || /row-level security|permission denied/i.test(prepErr.message || '');
+      if (missingTable) {
+        throw new Error('Database missing the prepared_matches table — run in Supabase SQL Editor: ' +
+          "CREATE TABLE IF NOT EXISTS prepared_matches (id uuid primary key default gen_random_uuid(), " +
+          "session_id uuid references sessions(id), team_a_id uuid references teams(id), " +
+          "team_b_id uuid references teams(id), status text default 'pending', created_at timestamptz default now());");
+      }
+      if (rlsBlocked) {
+        throw new Error('The prepared_matches table exists but Row Level Security is blocking it — run in Supabase SQL Editor: ' +
+          'ALTER TABLE prepared_matches DISABLE ROW LEVEL SECURITY;');
+      }
+      throw prepErr;
     }
     return { started: false };
   }
@@ -1973,7 +1989,12 @@ const SessionAPI = (() => {
       .eq('session_id', sessionId).eq('status', 'pending')
       .order('created_at', { ascending: true });
     if (error) {
-      if (/prepared_matches/.test(error.message || '')) return []; // table not migrated yet
+      // Graceful fallback either way (missing table OR RLS blocking the
+      // read) — this just means "nothing prepared yet" from the UI's
+      // perspective, not worth surfacing as an error for a background read.
+      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
+      if (missingTable || rlsBlocked) return [];
       throw error;
     }
     return data || [];
@@ -2000,7 +2021,7 @@ const SessionAPI = (() => {
       .select('*').eq('session_id', sessionId).eq('status', 'pending')
       .order('created_at', { ascending: true }).limit(1);
     if (error) {
-      if (/prepared_matches/.test(error.message || '')) return null; // table not migrated yet
+      if (error.code === '42P01' || error.code === '42501' || /does not exist|row-level security|permission denied/i.test(error.message || '')) return null; // table missing or RLS-blocked — nothing to release either way
       throw error;
     }
     const next = (prepared || [])[0];
