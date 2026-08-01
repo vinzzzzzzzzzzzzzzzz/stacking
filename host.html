@@ -1318,6 +1318,16 @@ const SessionAPI = (() => {
         .select().single();
       session = result.data;
       error = result.error;
+      if (error && /open_play_mode/.test(error.message || '')) {
+        // Migration not run yet — create the session without this column
+        // rather than blocking session creation entirely. Falls back to
+        // automated pairing behavior everywhere that reads this field.
+        const fallbackRow = { ...insertRow };
+        delete fallbackRow.open_play_mode;
+        const retryResult = await supabaseClient.from('sessions').insert(fallbackRow).select().single();
+        session = retryResult.data;
+        error = retryResult.error;
+      }
       if (!error) break;
       if (error.code !== '23505') break;
     }
@@ -2794,16 +2804,6 @@ async function confirmDeleteSession(sessionId) {
     if (btn) { btn.disabled = false; btn.textContent = 'Delete Forever'; }
   }
 }
-
-
-// ============================================================
-// PASSWORD GATE — stubs only; sessions no longer have passwords
-// ============================================================
-function rememberSessionPassword(sessionId) {
-  localStorage.setItem(`istackyyy_pw_ok_${sessionId}`, 'unlocked');
-}
-function isSessionUnlocked() { return true; }
-async function promptOpenSession(sessionId) { await openSession(sessionId); }
 
 // ============================================================
 // OPEN SESSION
