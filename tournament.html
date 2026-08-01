@@ -2708,21 +2708,51 @@ async function generateFinalManualSeed(advancePerGroup){
   // Persist which teams qualified + that R1 is manually seeded — the R1
   // dropdowns need BOTH to know a) to render as editable at all, and
   // b) to offer ONLY the qualifiers, not every team ever registered.
+  // This MUST actually succeed in the database — loadAll() re-fetches
+  // BRACKET fresh from the DB on every subsequent render, so an in-memory
+  // assignment alone (without a database write TAKING EFFECT) gets wiped
+  // out the moment anything re-renders, silently reverting the bracket to
+  // looking like a normal pre-filled one with nothing but empty "TBD"
+  // boxes — no dropdowns, no way to actually seed it.
   const qualifierIds=qualifiers.map(q=>q.id);
   let{error:updErr}=await db.from('brackets').update({seed_mode:'manual',qualifier_ids:qualifierIds}).eq('id',BRACKET.id);
-  if(updErr&&/qualifier_ids/.test(updErr.message||'')){
-    // Migration not run yet for qualifier_ids specifically — fall back to
-    // just seed_mode. R1 will still be editable, just not filtered to
-    // qualifiers only (offers every team) until the column exists.
-    ({error:updErr}=await db.from('brackets').update({seed_mode:'manual'}).eq('id',BRACKET.id));
+  if(updErr){
+    const missingQualifierIds = /qualifier_ids/i.test(updErr.message||'');
+    if(missingQualifierIds){
+      // Migration not run yet for qualifier_ids specifically — fall back to
+      // just seed_mode. R1 will still be editable, just not filtered to
+      // qualifiers only (offers every team) until the column exists.
+      ({error:updErr}=await db.from('brackets').update({seed_mode:'manual'}).eq('id',BRACKET.id));
+    }
   }
-  BRACKET.seed_mode='manual'; BRACKET.qualifier_ids=qualifierIds; // keep the in-memory copy in sync for this render
+  if(updErr){
+    const missingTable = updErr.code==='42P01' || /does not exist/i.test(updErr.message||'');
+    const rlsBlocked = updErr.code==='42501' || /row-level security|permission denied/i.test(updErr.message||'');
+    if(rlsBlocked){
+      alert('Row Level Security is blocking updates to the brackets table — run in Supabase SQL Editor:\n\nALTER TABLE brackets DISABLE ROW LEVEL SECURITY;');
+    }else if(missingTable){
+      alert('The brackets table is missing a required column. Run in Supabase SQL Editor:\n\nALTER TABLE brackets ADD COLUMN IF NOT EXISTS seed_mode text;\nALTER TABLE brackets ADD COLUMN IF NOT EXISTS qualifier_ids jsonb;');
+    }else{
+      alert('Could not set up manual seeding: '+updErr.message);
+    }
+    return; // stop here — generating bracket_matches now would create an
+             // unmarked bracket that LOOKS manual (empty boxes) but isn't
+             // actually editable, which is strictly worse than not generating it.
+  }
+  BRACKET.seed_mode='manual'; BRACKET.qualifier_ids=qualifierIds; // keep the in-memory copy in sync for THIS render, until loadAll() re-confirms it from the DB below
 
   const rows=await buildQualifierBracketRows(qualifiers,'winners',true,'manual');
   const{error}=await db.from('bracket_matches').insert(rows);
   if(error){alert('Could not create Finals bracket: '+error.message);return}
 
   await loadAll();
+  if(BRACKET?.seed_mode!=='manual'){
+    // Defensive final check — if the DB somehow still doesn't reflect
+    // manual mode after a successful-looking update (edge case, but the
+    // one thing worse than an error here is a silently broken bracket),
+    // surface it rather than rendering a dead-end "TBD, unclickable" board.
+    alert('The Finals bracket was created, but manual seeding mode did not save correctly. Try "↺ Regenerate Finals" and pick Manual again — if this keeps happening, check that your Supabase brackets table allows updates.');
+  }
   await autoFillRRCourts();
   await loadAll();render();
 }
