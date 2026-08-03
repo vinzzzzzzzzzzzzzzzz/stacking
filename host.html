@@ -1630,20 +1630,25 @@ const SessionAPI = (() => {
 
       let row;
       if (outcome === 'queue') {
-        row = { status: 'waiting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds };
+        row = { status: 'waiting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds, pending_disposition: null };
       } else if (outcome === 'rest') {
-        row = { status: 'resting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds };
+        row = { status: 'resting', became_free_at: ts, last_match_result: lastResult, recent_opponent_ids: opponentIds, pending_disposition: null };
       } else if (outcome === 'left') {
-        row = { status: 'left', last_match_result: lastResult, recent_opponent_ids: opponentIds };
+        row = { status: 'left', last_match_result: lastResult, recent_opponent_ids: opponentIds, pending_disposition: null };
       } else {
         continue;
       }
 
-      // CRITICAL: recent_opponent_ids requires a migration the host may not
-      // have run yet. If the column is missing, Postgres rejects the WHOLE
-      // update (status/timestamp included) — so retry without it rather
-      // than silently breaking the core queue-placement flow.
-      const { error } = await supabaseClient.from('players').update(row).eq('id', playerId);
+      // CRITICAL: recent_opponent_ids and pending_disposition each require
+      // their own migration the host may not have run yet. If either
+      // column is missing, Postgres rejects the WHOLE update (status/
+      // timestamp included) — so retry without them rather than silently
+      // breaking the core queue-placement flow.
+      let { error } = await supabaseClient.from('players').update(row).eq('id', playerId);
+      if (error && /pending_disposition/i.test(error.message || '')) {
+        delete row.pending_disposition;
+        ({ error } = await supabaseClient.from('players').update(row).eq('id', playerId));
+      }
       if (error && /recent_opponent_ids/.test(error.message || '')) {
         delete row.recent_opponent_ids;
         await supabaseClient.from('players').update(row).eq('id', playerId);
@@ -1979,7 +1984,22 @@ const SessionAPI = (() => {
     if (!player) throw new Error('Player not found.');
     await supabaseClient.from('rest_requests')
       .update({ status: 'confirmed', resolved_at: new Date().toISOString() }).eq('id', requestId);
-    if (player.status === 'playing') return { deferred: true };
+    if (player.status === 'playing') {
+      // Can't rest someone mid-match without breaking their court — instead,
+      // flag a preference that the disposition modal reads and pre-selects
+      // for THIS player once their match actually ends. The host still sees
+      // every player's choice in that modal and can change it there; this
+      // just sets the sensible default instead of quietly defaulting to
+      // Queue and requiring the host to remember and manually fix it.
+      const { error: updErr } = await supabaseClient.from('players')
+        .update({ pending_disposition: 'rest' }).eq('id', playerId);
+      if (updErr && /pending_disposition/i.test(updErr.message || '')) {
+        // Migration not run yet — fall back to the old "just remind the
+        // host" behavior rather than throwing and losing the confirmation.
+        return { deferred: true, migrationMissing: true };
+      }
+      return { deferred: true };
+    }
     await restPlayerNow(playerId, player.session_id);
     return { deferred: false };
   }
@@ -4035,11 +4055,14 @@ async function showPlayerDispositionModal(loserScore) {
   const winnerIds = winnerTeam?.player_ids || [];
   const loserIds  = loserTeam?.player_ids  || [];
 
-  // Initialise decisions: Queue by default, Left if pre-flagged.
+  // Initialise decisions: Queue by default, Left if pre-flagged, or
+  // whatever the player's pending_disposition says (e.g. a rest request
+  // confirmed while they were mid-match) — 'left' still wins over a
+  // pending 'rest' since leaving is the more final of the two.
   _dispositions = {};
   [...winnerIds, ...loserIds].forEach(pid => {
     const p = playerById[pid];
-    _dispositions[pid] = p?.status === 'left' ? 'left' : 'queue';
+    _dispositions[pid] = p?.status === 'left' ? 'left' : (p?.pending_disposition || 'queue');
   });
 
   function playerCard(pid, isWinner) {
@@ -4066,7 +4089,7 @@ async function showPlayerDispositionModal(loserScore) {
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:var(--radius-sm);background:var(--surface-hover);border:1px solid var(--border-card);margin-bottom:8px;gap:10px;flex-wrap:wrap;">
         <div style="flex-shrink:0;">
           ${roleLabel}
-          <div style="font-weight:700;font-size:14px;margin-top:2px;">${escapeHtml(name)}</div>
+          <div style="font-weight:700;font-size:14px;margin-top:2px;">${escapeHtml(name)}${p?.pending_disposition === 'rest' ? ' <span style="font-size:10px;font-weight:800;color:var(--bench-slate);background:var(--surface-raised);padding:2px 7px;border-radius:999px;border:1px solid var(--border-soft);">requested rest</span>' : ''}</div>
         </div>
         <div style="display:flex;gap:6px;" id="disp-btns-${pid}">
           ${['queue','rest','left'].map(opt => {
@@ -5593,7 +5616,11 @@ async function inboxTabHtml() {
 async function handleConfirmRest(requestId, playerId) {
   try {
     const result = await SessionAPI.confirmRestRequest(requestId, playerId);
-    if (result?.deferred) alert('Player is mid-match — mark them resting from the Roster tab once their game ends.');
+    if (result?.migrationMissing) {
+      alert('Player is mid-match — mark them resting from the Roster tab once their game ends.\n\n(Run the pending_disposition SQL migration to have this happen automatically next time.)');
+    } else if (result?.deferred) {
+      alert("Player is mid-match — they'll default to Resting once their game ends. You'll still see it in the end-of-match screen and can change it there if needed.");
+    }
   } catch (err) { alert(err.message || 'Could not confirm rest request.'); }
   document.getElementById('tabPanel').innerHTML = await inboxTabHtml();
   updateInboxBadge();
