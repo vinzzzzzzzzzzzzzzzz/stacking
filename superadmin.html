@@ -101,10 +101,6 @@
   .field label { display: block; font-size: 10px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); }
   .field input { width: 100%; padding: 11px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font-size: 16px; background: var(--surface-raised); color: var(--ink); transition: border-color var(--dur-fast) var(--ease-settle); }
   .field input:focus { border-color: var(--court-paint); outline: none; }
-  .password-field-wrap { position: relative; }
-  .password-field-wrap input { padding-right: 42px; }
-  .password-toggle-btn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: none; border: none; font-size: 16px; padding: 6px 8px; min-height: 0; cursor: pointer; opacity: 0.5; }
-  .password-toggle-btn:hover { opacity: 1; }
 
   /* Buttons */
   .btn-primary { width: 100%; background: var(--court-paint); color: white; border: none; padding: 13px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; margin-top: 6px; transition: filter var(--dur-fast) var(--ease-settle); }
@@ -194,6 +190,7 @@
 <div id="appRoot"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 // ============================================================
 // SUPABASE
@@ -203,20 +200,28 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
-// SUPER ADMIN CREDENTIALS — hardcoded for now
-// Change these before production deployment.
+// EMAILJS — OTP delivery (same config as host.html)
 // ============================================================
-const SA_USERNAME = 'bins';
-const SA_PASSWORD = 'bins123';
-const SA_SESSION_KEY = 'istackyyy_sa_session';
+const EMAILJS_PUBLIC_KEY  = 'IsH2Wz_S2NyIq__Dx';
+const EMAILJS_SERVICE_ID  = 'service_p6cbmex';
+const EMAILJS_TEMPLATE_ID = 'template_t569i7n';
+emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
 
 // ============================================================
-// PASSWORD UTILITY (SHA-256, same as host.html)
+// SUPER ADMIN — single fixed identity, email+OTP login (no password).
+// This is the one address allowed to sign in as superadmin at all.
 // ============================================================
-async function hashPassword(plain) {
-  const data = new TextEncoder().encode(plain);
-  const buf  = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+const SA_ALLOWED_EMAIL = 'istackyyyy@gmail.com';
+const SA_SESSION_KEY = 'istackyyy_sa_session';
+
+function generateOTP() {
+  return String(Math.floor(Math.random() * 1e8)).padStart(8, '0'); // 8 digits
+}
+async function sendOTPEmail(toEmail, otpCode) {
+  return emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+    to_email: toEmail, email: toEmail, recipient: toEmail,
+    passcode: otpCode, otp_code: otpCode, otp: otpCode, code: otpCode,
+  });
 }
 
 // ============================================================
@@ -242,47 +247,152 @@ function renderLoginScreen() {
     <div class="auth-wrap">
       <div class="auth-box">
         <h1>Admin Login</h1>
-        <p class="sub">Super-admin access only. Manage host accounts from here.</p>
+        <p class="sub">Super-admin access only. Enter your email — we'll send a one-time code.</p>
         <div class="field">
-          <label>Username</label>
-          <input type="text" id="saUser" placeholder="username" autocomplete="username"
-            onkeydown="if(event.key==='Enter')document.getElementById('saPass').focus()">
-        </div>
-        <div class="field">
-          <label>Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="saPass" placeholder="password" autocomplete="current-password"
-              onkeydown="if(event.key==='Enter')handleSaLogin()">
-            <button type="button" class="password-toggle-btn" onclick="togglePw('saPass',this)">👁</button>
-          </div>
+          <label>Email</label>
+          <input type="email" id="saEmail" placeholder="you@example.com" autocomplete="email"
+            onkeydown="if(event.key==='Enter')handleSaRequestOTP()">
         </div>
         <div class="auth-error" id="saLoginError"></div>
-        <button class="btn-primary" onclick="handleSaLogin()">Sign In</button>
+        <button class="btn-primary" id="saRequestOtpBtn" onclick="handleSaRequestOTP()">Send Code</button>
       </div>
     </div>
   `;
-  document.getElementById('saUser')?.focus();
+  document.getElementById('saEmail')?.focus();
 }
 
-async function handleSaLogin() {
-  const user  = document.getElementById('saUser')?.value?.trim();
-  const pass  = document.getElementById('saPass')?.value;
+async function handleSaRequestOTP() {
+  const email = document.getElementById('saEmail')?.value?.trim().toLowerCase();
   const errEl = document.getElementById('saLoginError');
-  const btn   = document.querySelector('.auth-box .btn-primary');
-
-  if (!user || !pass) { if(errEl) errEl.textContent = 'Enter username and password.'; return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
-
-  // Compare plaintext — superadmin credentials are hardcoded.
-  if (user !== SA_USERNAME || pass !== SA_PASSWORD) {
-    if (errEl) errEl.textContent = 'Incorrect credentials.';
-    if (btn)  { btn.disabled = false; btn.textContent = 'Sign In'; }
-    return;
+  const btn   = document.getElementById('saRequestOtpBtn');
+  if (!email) { if (errEl) errEl.textContent = 'Enter your email.'; return; }
+  if (email !== SA_ALLOWED_EMAIL) { if (errEl) errEl.textContent = 'This email is not authorized for admin access.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const { error: insErr } = await db.from('login_otps')
+      .insert({ email, otp_code: otp, purpose: 'superadmin_login', expires_at: expiresAt });
+    if (insErr) {
+      const missingTable = insErr.code === '42P01' || /does not exist|could not find the .* (table|column)/i.test(insErr.message || '');
+      const rlsBlocked = insErr.code === '42501' || /row-level security|permission denied/i.test(insErr.message || '');
+      if (missingTable) throw new Error('Database is missing the login_otps table. Run this in Supabase SQL Editor:\n\n' +
+        "CREATE TABLE IF NOT EXISTS login_otps (\n  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n  email text NOT NULL,\n  otp_code text NOT NULL,\n  purpose text NOT NULL,\n  expires_at timestamptz NOT NULL,\n  used boolean DEFAULT false,\n  created_at timestamptz DEFAULT now()\n);");
+      if (rlsBlocked) throw new Error('Row Level Security is blocking login_otps — run in Supabase SQL Editor:\n\nALTER TABLE login_otps DISABLE ROW LEVEL SECURITY;');
+      throw insErr;
+    }
+    await sendOTPEmail(email, otp);
+    renderSaOTPScreen(email);
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not send code. Please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Code'; }
   }
+}
 
-  sessionStorage.setItem(SA_SESSION_KEY, 'true');
-  saLoggedIn = true;
-  await renderDashboard();
+function renderSaOTPScreen(email) {
+  window._saOtpEmail = email;
+  window._saOtpResendCooldown = 60;
+  document.getElementById('appRoot').innerHTML = `
+    <div class="auth-wrap">
+      <div class="auth-box">
+        <h1>Enter Your Code</h1>
+        <p class="sub">A code was sent to ${email}. It expires in 10 minutes.</p>
+        <div id="saOtpDigitsRow" style="display:flex;gap:6px;justify-content:center;margin:18px 0;" onpaste="handleSaOTPPaste(event)">
+          ${Array.from({ length: 8 }, (_, i) => `
+            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" class="sa-otp-digit-box" data-idx="${i}"
+              style="width:34px;height:44px;text-align:center;font-size:18px;font-weight:800;border-radius:8px;
+                border:1.5px solid #ccc;font-family:monospace;"
+              oninput="handleSaOTPDigitInput(this,${i})" onkeydown="handleSaOTPDigitKeydown(event,${i})">
+          `).join('')}
+        </div>
+        <div class="auth-error" id="saOtpError"></div>
+        <button class="btn-primary" id="saVerifyOtpBtn" onclick="handleSaVerifyOTP()">Verify &amp; Sign In</button>
+        <p style="font-size:12px;text-align:center;margin:14px 0 0;">
+          <a href="javascript:void(0)" id="saResendOtpLink" onclick="handleSaResendOTP()">Resend code</a>
+          <span id="saResendCooldownLabel"></span>
+        </p>
+        <p style="font-size:12px;text-align:center;margin:8px 0 0;">
+          <a href="javascript:void(0)" onclick="renderLoginScreen()">← Use a different email</a>
+        </p>
+      </div>
+    </div>
+  `;
+  startSaOTPResendCooldown();
+  document.querySelector('.sa-otp-digit-box[data-idx="0"]')?.focus();
+}
+function handleSaOTPDigitInput(el, idx) {
+  el.value = el.value.replace(/\D/g, '').slice(0, 1);
+  if (el.value && idx < 7) document.querySelector(`.sa-otp-digit-box[data-idx="${idx + 1}"]`)?.focus();
+  if (getSaOTPDigitsValue().length === 8) handleSaVerifyOTP();
+}
+function handleSaOTPDigitKeydown(e, idx) {
+  if (e.key === 'Backspace' && !e.target.value && idx > 0) document.querySelector(`.sa-otp-digit-box[data-idx="${idx - 1}"]`)?.focus();
+}
+function handleSaOTPPaste(e) {
+  const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 8);
+  if (!text) return;
+  e.preventDefault();
+  [...text].forEach((d, i) => { const box = document.querySelector(`.sa-otp-digit-box[data-idx="${i}"]`); if (box) box.value = d; });
+  document.querySelector(`.sa-otp-digit-box[data-idx="${Math.min(text.length, 8) - 1}"]`)?.focus();
+  if (text.length === 8) handleSaVerifyOTP();
+}
+function getSaOTPDigitsValue() {
+  return [...document.querySelectorAll('.sa-otp-digit-box')].map(el => el.value || '').join('');
+}
+async function handleSaVerifyOTP() {
+  const code = getSaOTPDigitsValue();
+  const errEl = document.getElementById('saOtpError');
+  const btn   = document.getElementById('saVerifyOtpBtn');
+  if (code.length !== 8) { if (errEl) errEl.textContent = 'Enter all 8 digits.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+  try {
+    const { data: rows, error } = await db.from('login_otps')
+      .select('*').eq('email', window._saOtpEmail).eq('purpose', 'superadmin_login')
+      .order('created_at', { ascending: false }).limit(1);
+    if (error || !rows || !rows.length) throw new Error('No code was sent — request a new one.');
+    const otpRow = rows[0];
+    if (otpRow.used) throw new Error('This code has already been used — request a new one.');
+    if (new Date(otpRow.expires_at).getTime() < Date.now()) throw new Error('This code has expired — request a new one.');
+    if (otpRow.otp_code !== code) throw new Error('Incorrect code. Please try again.');
+    await db.from('login_otps').update({ used: true }).eq('id', otpRow.id);
+
+    sessionStorage.setItem(SA_SESSION_KEY, 'true');
+    saLoggedIn = true;
+    await renderDashboard();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not verify code.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify & Sign In'; }
+    document.querySelectorAll('.sa-otp-digit-box').forEach(el => el.value = '');
+    document.querySelector('.sa-otp-digit-box[data-idx="0"]')?.focus();
+  }
+}
+function startSaOTPResendCooldown() {
+  const link = document.getElementById('saResendOtpLink');
+  const label = document.getElementById('saResendCooldownLabel');
+  if (link) { link.style.pointerEvents = 'none'; link.style.opacity = '0.4'; }
+  const tick = () => {
+    window._saOtpResendCooldown--;
+    if (label) label.textContent = window._saOtpResendCooldown > 0 ? ` (wait ${window._saOtpResendCooldown}s)` : '';
+    if (window._saOtpResendCooldown <= 0) { clearInterval(window._saOtpResendInterval); if (link) { link.style.pointerEvents = ''; link.style.opacity = ''; } }
+  };
+  clearInterval(window._saOtpResendInterval);
+  window._saOtpResendInterval = setInterval(tick, 1000);
+}
+async function handleSaResendOTP() {
+  if (window._saOtpResendCooldown > 0) return;
+  await handleSaRequestOTPSilent(window._saOtpEmail);
+}
+async function handleSaRequestOTPSilent(email) {
+  const errEl = document.getElementById('saOtpError');
+  try {
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    await db.from('login_otps').insert({ email, otp_code: otp, purpose: 'superadmin_login', expires_at: expiresAt });
+    await sendOTPEmail(email, otp);
+    renderSaOTPScreen(email);
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not resend code.';
+  }
 }
 
 function saLogout() {
@@ -305,21 +415,7 @@ async function renderDashboard() {
         <h2>Create New Host Account</h2>
         <div class="form-grid">
           <div class="field"><label>Full Name</label><input type="text" id="newName" placeholder="e.g. Jose Santos"></div>
-          <div class="field"><label>Username</label><input type="text" id="newUsername" placeholder="e.g. jose1" autocomplete="off"></div>
-          <div class="field">
-            <label>Password</label>
-            <div class="password-field-wrap">
-              <input type="password" id="newPass" placeholder="min. 4 characters" autocomplete="new-password">
-              <button type="button" class="password-toggle-btn" onclick="togglePw('newPass',this)">👁</button>
-            </div>
-          </div>
-          <div class="field">
-            <label>Confirm Password</label>
-            <div class="password-field-wrap">
-              <input type="password" id="newPassConfirm" placeholder="re-enter password" autocomplete="new-password">
-              <button type="button" class="password-toggle-btn" onclick="togglePw('newPassConfirm',this)">👁</button>
-            </div>
-          </div>
+          <div class="field"><label>Email</label><input type="email" id="newEmail" placeholder="e.g. jose@example.com" autocomplete="off"></div>
         </div>
         <div class="field" style="margin-top:4px;">
           <label>Session Access</label>
@@ -358,9 +454,9 @@ async function loadRequests() {
   if (!el) return;
   try {
     const { data: requests, error } = await db.from('host_requests')
-      .select('*, host_accounts(name, username)').eq('status', 'pending').order('created_at', { ascending: false });
+      .select('*, host_accounts(name, email)').eq('status', 'pending').order('created_at', { ascending: false });
     if (error) {
-      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const missingTable = error.code === '42P01' || /does not exist|could not find the .* column/i.test(error.message || '');
       const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
       if (missingTable) {
         el.innerHTML = `<div class="empty-state" style="font-size:12px;">No requests table yet — run this in Supabase SQL Editor:<br><br>
@@ -388,24 +484,28 @@ async function loadRequests() {
       el.innerHTML = '<div class="empty-state">No pending requests.</div>';
       return;
     }
+    // Credential-related request types (username_change/password_reset/
+    // both_credentials) may still exist as HISTORICAL rows from before the
+    // email+OTP switch — labeled for display, but no longer actionable
+    // here since there are no credentials left to reset. Dismiss those.
     const labels = {
-      username_change: 'Change Username', password_reset: 'Reset Password', both_credentials: 'Reset Username &amp; Password',
+      username_change: 'Change Username (legacy)', password_reset: 'Reset Password (legacy)', both_credentials: 'Reset Credentials (legacy)',
       access_open_play: 'Enable Open Play', access_tournament: 'Enable Tournament', access_both: 'Enable Open Play + Tournament', other: 'Other',
     };
-    const isCredential = t => ['username_change', 'password_reset', 'both_credentials'].includes(t);
+    const isLegacyCredential = t => ['username_change', 'password_reset', 'both_credentials'].includes(t);
     el.innerHTML = requests.map(r => {
       const hostName = r.host_accounts?.name || 'Unknown host';
-      const hostUsername = r.host_accounts?.username || '';
+      const hostEmail = r.host_accounts?.email || '';
       const when = r.created_at ? new Date(r.created_at).toLocaleString() : '';
       return `
         <div class="account-row" id="req-${r.id}">
           <div class="account-info" style="flex:1;">
             <div class="account-name">${escapeHtml(hostName)} <span style="font-size:11px;background:rgba(215,242,61,0.15);color:#d7f23d;padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;">${labels[r.request_type] || r.request_type}</span></div>
-            <div class="account-username">@${escapeHtml(hostUsername)} · ${escapeHtml(when)}${r.note ? ' · "' + escapeHtml(r.note) + '"' : ''}</div>
+            <div class="account-username">${escapeHtml(hostEmail)} · ${escapeHtml(when)}${r.note ? ' · "' + escapeHtml(r.note) + '"' : ''}</div>
           </div>
           <div class="account-actions">
-            ${isCredential(r.request_type)
-              ? `<button class="btn-edit" onclick="openResolveCredentialRequest('${r.id}','${r.host_id}','${escapeHtml(hostName)}')">Set New Credentials</button>`
+            ${isLegacyCredential(r.request_type)
+              ? `<span style="font-size:11px;color:var(--text-muted,#8a9e96);align-self:center;">No longer applicable — dismiss</span>`
               : `<button class="btn-edit" onclick="openResolveAccessRequest('${r.id}','${r.host_id}','${r.request_type}','${escapeHtml(hostName)}')">Update Access</button>`}
             <button class="btn-danger" onclick="dismissHostRequest('${r.id}')">Dismiss</button>
           </div>
@@ -414,59 +514,6 @@ async function loadRequests() {
     }).join('');
   } catch (err) {
     el.innerHTML = `<div class="empty-state" style="color:var(--fault-coral);">${escapeHtml(err.message)}</div>`;
-  }
-}
-
-function openResolveCredentialRequest(requestId, hostId, hostName) {
-  if (document.getElementById('resolveCredModal')) return;
-  document.body.insertAdjacentHTML('beforeend', `
-    <div class="modal-backdrop" id="resolveCredModal">
-      <div class="modal-box">
-        <h2>Set New Credentials — ${escapeHtml(hostName)}</h2>
-        <p class="modal-sub">This becomes their temporary login. They'll be required to set their own username and password the next time they log in.</p>
-        <div class="field"><label>New Username</label><input type="text" id="resolveUsername" autocomplete="off"></div>
-        <div class="field"><label>New Temporary Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="resolvePassword" placeholder="min. 4 characters" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePw('resolvePassword',this)">👁</button>
-          </div>
-        </div>
-        <div class="field"><label>Message to host (optional)</label><input type="text" id="resolveMessage" placeholder="e.g. Here's your new login — you'll set your own on next sign-in."></div>
-        <div class="auth-error" id="resolveCredError"></div>
-        <div class="confirm-actions">
-          <button class="btn-no" onclick="document.getElementById('resolveCredModal').remove()">Cancel</button>
-          <button class="btn-yes" id="resolveCredBtn" onclick="confirmResolveCredentialRequest('${requestId}','${hostId}')">Apply &amp; Resolve</button>
-        </div>
-      </div>
-    </div>
-  `);
-}
-async function confirmResolveCredentialRequest(requestId, hostId) {
-  const username = document.getElementById('resolveUsername')?.value?.trim();
-  const password = document.getElementById('resolvePassword')?.value;
-  const message  = document.getElementById('resolveMessage')?.value?.trim();
-  const errEl = document.getElementById('resolveCredError');
-  const btn = document.getElementById('resolveCredBtn');
-  if (!username) { errEl.textContent = 'Username is required.'; return; }
-  if (!password || password.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
-  try {
-    const passwordHash = await hashPassword(password);
-    const { error } = await db.from('host_accounts')
-      .update({ username, password_hash: passwordHash, force_credential_reset: true }).eq('id', hostId);
-    if (error) {
-      if (error.code === '23505') throw new Error('That username is already taken.');
-      throw error;
-    }
-    await db.from('host_requests').update({
-      status: 'resolved', resolved_at: new Date().toISOString(),
-      admin_response: message || `Your credentials have been reset. New username: ${username} — you'll be asked to set your own password on next login.`,
-    }).eq('id', requestId);
-    document.getElementById('resolveCredModal').remove();
-    await loadRequests();
-  } catch (err) {
-    errEl.textContent = err.message || 'Could not apply changes.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Apply & Resolve'; }
   }
 }
 
@@ -520,84 +567,20 @@ async function dismissHostRequest(requestId) {
   await loadRequests();
 }
 
-// Quick one-click password reset, callable directly from the account list —
-// same security posture as resolving a "forgot password" request: the admin
-// sets a temporary password they know, and the host is required to choose
-// their own on their next login (force_credential_reset). Keeps ONE
-// consistent behavior for "admin sets a password" everywhere in the app,
-// rather than this entry point quietly working differently.
-function openQuickResetPasswordModal(hostId, hostName, currentUsername) {
-  if (document.getElementById('quickResetModal')) return;
-  document.body.insertAdjacentHTML('beforeend', `
-    <div class="modal-backdrop" id="quickResetModal">
-      <div class="modal-box">
-        <h2>Reset Password — ${escapeHtml(hostName)}</h2>
-        <p class="modal-sub">This becomes their temporary login. They'll be required to choose their own username and password the next time they sign in.</p>
-        <div class="field"><label>Username</label><input type="text" id="quickResetUsername" value="${escapeHtml(currentUsername)}" autocomplete="off"></div>
-        <div class="field"><label>New Temporary Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="quickResetPassword" placeholder="min. 4 characters" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePw('quickResetPassword',this)">👁</button>
-          </div>
-        </div>
-        <div class="field"><label>Confirm Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="quickResetPassword2" placeholder="re-enter password" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePw('quickResetPassword2',this)">👁</button>
-          </div>
-        </div>
-        <div class="auth-error" id="quickResetError"></div>
-        <div class="confirm-actions">
-          <button class="btn-no" onclick="document.getElementById('quickResetModal').remove()">Cancel</button>
-          <button class="btn-yes" id="quickResetBtn" onclick="confirmQuickResetPassword('${hostId}')">Reset Password</button>
-        </div>
-      </div>
-    </div>
-  `);
-}
-async function confirmQuickResetPassword(hostId) {
-  const username = document.getElementById('quickResetUsername')?.value?.trim();
-  const password = document.getElementById('quickResetPassword')?.value;
-  const password2 = document.getElementById('quickResetPassword2')?.value;
-  const errEl = document.getElementById('quickResetError');
-  const btn = document.getElementById('quickResetBtn');
-  if (!username) { errEl.textContent = 'Username is required.'; return; }
-  if (!password || password.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
-  if (password !== password2) { errEl.textContent = 'Passwords do not match.'; return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
-  try {
-    const passwordHash = await hashPassword(password);
-    let { error } = await db.from('host_accounts')
-      .update({ username, password_hash: passwordHash, force_credential_reset: true }).eq('id', hostId);
-    if (error && /force_credential_reset/.test(error.message || '')) {
-      ({ error } = await db.from('host_accounts').update({ username, password_hash: passwordHash }).eq('id', hostId));
-    }
-    if (error) {
-      if (error.code === '23505') throw new Error('That username is already taken.');
-      throw error;
-    }
-    document.getElementById('quickResetModal').remove();
-    await loadAccounts();
-  } catch (err) {
-    errEl.textContent = err.message || 'Could not reset password.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Reset Password'; }
-  }
-}
-
 async function loadAccounts() {
   const el = document.getElementById('accountsList');
   if (!el) return;
   try {
     let { data: accounts, error } = await db
       .from('host_accounts')
-      .select('id, name, username, is_active, created_at, allow_open_play, allow_tournament')
+      .select('id, name, email, is_active, created_at, allow_open_play, allow_tournament')
       .order('created_at', { ascending: false });
     if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
       // Migration not run yet — fall back to the base columns so the list
       // still loads; permissions just default to "both" until it's run.
       ({ data: accounts, error } = await db
         .from('host_accounts')
-        .select('id, name, username, is_active, created_at')
+        .select('id, name, email, is_active, created_at')
         .order('created_at', { ascending: false }));
     }
     if (error) throw error;
@@ -622,12 +605,13 @@ async function loadAccounts() {
         : allowOP ? '🎾 Open Play only'
         : allowT  ? '🏆 Tournament only'
         : '⚠ No session types enabled';
+      const hasEmail = !!a.email;
       return `
         <div class="account-row" id="row-${a.id}">
           <div class="account-avatar">${escapeHtml(initials)}</div>
           <div class="account-info">
             <div class="account-name">${escapeHtml(a.name)}</div>
-            <div class="account-username">@${escapeHtml(a.username)}</div>
+            <div class="account-username">${hasEmail ? escapeHtml(a.email) : '<span style="color:var(--fault-coral,#ff7a5c);font-weight:700;">⚠ No email set — cannot log in</span>'}</div>
             <div class="session-count">${sessionCount} session${sessionCount!==1?'s':''} hosted · <span style="color:${allowOP&&allowT?'var(--optic-yellow,#d7f23d)':'inherit'}">${accessLabel}</span></div>
           </div>
           <span class="account-status-pill ${a.is_active ? 'status-active' : 'status-inactive'}">
@@ -635,8 +619,7 @@ async function loadAccounts() {
           </span>
           <div class="account-actions">
             <button class="btn-edit" onclick="openSessionsBrowser('${a.id}','${escapeHtml(a.name)}')" style="background:var(--surface-hover,#263330);color:var(--optic-yellow,#d7f23d);">🗂 Sessions</button>
-            <button class="btn-edit" onclick="openQuickResetPasswordModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.username)}')" style="background:var(--surface-hover,#263330);color:#6fa8e0;">🔑 Reset Password</button>
-            <button class="btn-edit" onclick="openEditModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.username)}',${a.is_active},${allowOP},${allowT})">Edit</button>
+            <button class="btn-edit" onclick="openEditModal('${a.id}','${escapeHtml(a.name)}','${escapeHtml(a.email||'')}',${a.is_active},${allowOP},${allowT})">Edit</button>
             <button class="btn-danger" onclick="openDeleteModal('${a.id}','${escapeHtml(a.name)}')">Delete</button>
           </div>
         </div>
@@ -651,30 +634,22 @@ async function loadAccounts() {
 // CREATE ACCOUNT
 // ============================================================
 async function handleCreateAccount() {
-  const name        = document.getElementById('newName')?.value?.trim();
-  const username    = document.getElementById('newUsername')?.value?.trim();
-  const pass        = document.getElementById('newPass')?.value;
-  const passConfirm = document.getElementById('newPassConfirm')?.value;
-  const errEl       = document.getElementById('createError');
-  const btn         = document.querySelector('.card .btn-primary');
+  const name  = document.getElementById('newName')?.value?.trim();
+  const email = document.getElementById('newEmail')?.value?.trim().toLowerCase();
+  const errEl = document.getElementById('createError');
+  const btn   = document.querySelector('.card .btn-primary');
 
   errEl.textContent = '';
-  if (!name)     { errEl.textContent = 'Full name is required.'; return; }
-  if (!username) { errEl.textContent = 'Username is required.'; return; }
-  if (!pass || pass.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
-  if (pass !== passConfirm)     { errEl.textContent = 'Passwords do not match.'; return; }
+  if (!name)  { errEl.textContent = 'Full name is required.'; return; }
+  if (!email) { errEl.textContent = 'Email is required.'; return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errEl.textContent = 'Enter a valid email.'; return; }
 
   if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
   try {
-    const passwordHash = await hashPassword(pass);
     const allowOpenPlay  = document.getElementById('newAllowOpenPlay')?.checked ?? true;
     const allowTournament = document.getElementById('newAllowTournament')?.checked ?? true;
-    const row = { name, username, password_hash: passwordHash, allow_open_play: allowOpenPlay, allow_tournament: allowTournament, force_credential_reset: true };
+    const row = { name, email, allow_open_play: allowOpenPlay, allow_tournament: allowTournament };
     let { error } = await db.from('host_accounts').insert(row);
-    if (error && /force_credential_reset/.test(error.message || '')) {
-      delete row.force_credential_reset;
-      ({ error } = await db.from('host_accounts').insert(row));
-    }
     if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
       // Migration not run yet — create the account without the new columns
       // rather than blocking account creation entirely.
@@ -682,11 +657,11 @@ async function handleCreateAccount() {
       ({ error } = await db.from('host_accounts').insert(row));
     }
     if (error) {
-      if (error.code === '23505') throw new Error('That username is already taken. Choose a different one.');
+      if (error.code === '23505') throw new Error('That email is already registered to another host account.');
       throw error;
     }
     // Clear form.
-    ['newName','newUsername','newPass','newPassConfirm'].forEach(id => {
+    ['newName','newEmail'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
@@ -840,32 +815,18 @@ async function deleteSessionAsAdmin(sessionId) {
 // ============================================================
 // EDIT ACCOUNT MODAL
 // ============================================================
-function openEditModal(id, name, username, isActive, allowOpenPlay, allowTournament) {
+function openEditModal(id, name, email, isActive, allowOpenPlay, allowTournament) {
   if (document.getElementById('editModal')) return;
+  const hasEmail = !!email;
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="editModal">
       <div class="modal-box">
         <h2>Edit Account</h2>
-        <p class="modal-sub">Update name, username, password, or active status for <strong>${escapeHtml(name)}</strong>.</p>
+        <p class="modal-sub">Update name, email, or active status for <strong>${escapeHtml(name)}</strong>.</p>
 
         <div class="field"><label>Full Name</label><input type="text" id="editName" value="${escapeHtml(name)}"></div>
-        <div class="field"><label>Username</label><input type="text" id="editUsername" value="${escapeHtml(username)}" autocomplete="off"></div>
-
-        <div class="edit-section-title">Change Password (leave blank to keep current)</div>
-        <div class="field">
-          <label>New Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="editPass" placeholder="new password (optional)" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePw('editPass',this)">👁</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Confirm New Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="editPassConfirm" placeholder="re-enter new password" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePw('editPassConfirm',this)">👁</button>
-          </div>
-        </div>
+        <div class="field"><label>Email</label><input type="email" id="editEmail" value="${escapeHtml(email||'')}" autocomplete="off"></div>
+        ${!hasEmail ? '<p style="font-size:11px;color:var(--fault-coral,#ff7a5c);margin:-8px 0 10px;">⚠ No email on file — this host cannot log in until you add one and save.</p>' : ''}
 
         <div class="edit-section-title">Session Access</div>
         <div style="display:flex;gap:18px;margin:6px 0 4px;">
@@ -895,10 +856,8 @@ function openEditModal(id, name, username, isActive, allowOpenPlay, allowTournam
 }
 
 async function confirmEditAccount(id) {
-  const name        = document.getElementById('editName')?.value?.trim();
-  const username    = document.getElementById('editUsername')?.value?.trim();
-  const pass        = document.getElementById('editPass')?.value;
-  const passConfirm = document.getElementById('editPassConfirm')?.value;
+  const name  = document.getElementById('editName')?.value?.trim();
+  const email = document.getElementById('editEmail')?.value?.trim().toLowerCase();
   const isActive    = document.getElementById('editActive')?.checked;
   const allowOpenPlay   = document.getElementById('editAllowOpenPlay')?.checked;
   const allowTournament = document.getElementById('editAllowTournament')?.checked;
@@ -906,17 +865,15 @@ async function confirmEditAccount(id) {
   const btn         = document.getElementById('editSaveBtn');
 
   errEl.textContent = '';
-  if (!name)     { errEl.textContent = 'Name is required.'; return; }
-  if (!username) { errEl.textContent = 'Username is required.'; return; }
-  if (pass && pass.length < 4) { errEl.textContent = 'New password must be at least 4 characters.'; return; }
-  if (pass && pass !== passConfirm) { errEl.textContent = 'New passwords do not match.'; return; }
+  if (!name)  { errEl.textContent = 'Name is required.'; return; }
+  if (!email) { errEl.textContent = 'Email is required — this host cannot log in without one.'; return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errEl.textContent = 'Enter a valid email.'; return; }
   if (!allowOpenPlay && !allowTournament) { errEl.textContent = 'At least one session type must stay enabled.'; return; }
 
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   try {
-    const updates = { name, username, is_active: isActive, allow_open_play: allowOpenPlay, allow_tournament: allowTournament };
-    if (pass) updates.password_hash = await hashPassword(pass);
+    const updates = { name, email, is_active: isActive, allow_open_play: allowOpenPlay, allow_tournament: allowTournament };
 
     let { error } = await db.from('host_accounts').update(updates).eq('id', id);
     if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
@@ -926,7 +883,7 @@ async function confirmEditAccount(id) {
       if (!error) errEl.textContent = 'Saved — but session-access columns are missing from the database. Run the SQL migration to enable that setting.';
     }
     if (error) {
-      if (error.code === '23505') throw new Error('That username is already taken.');
+      if (error.code === '23505') throw new Error('That email is already registered to another host account.');
       throw error;
     }
     document.getElementById('editModal').remove();
@@ -981,13 +938,6 @@ async function confirmDeleteAccount(id) {
 // ============================================================
 // UTILITIES
 // ============================================================
-function togglePw(inputId, btn) {
-  const input = document.getElementById(inputId);
-  const showing = input.type === 'text';
-  input.type = showing ? 'password' : 'text';
-  btn.textContent = showing ? '👁' : '🙈';
-}
-
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = String(str || '');
