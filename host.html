@@ -686,6 +686,7 @@
 <div class="container" id="appRoot"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 // ============================================================
 // THEME
@@ -707,15 +708,6 @@ function toggleTheme() {
 }
 applyThemeIcon();
 
-// Password show/hide toggle for the eye (👁) button on password fields.
-function togglePasswordVisibility(inputId, btn) {
-  const input = document.getElementById(inputId);
-  if (!input) return;
-  const showing = input.type === 'text';
-  input.type = showing ? 'password' : 'text';
-  btn.textContent = showing ? '👁' : '🙈';
-}
-
 // ============================================================
 // SUPABASE
 // ============================================================
@@ -724,72 +716,45 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
+// EMAILJS — OTP delivery
+// Public Key / Service ID / Template ID are meant to be client-visible by
+// EmailJS's own design (they gate through EmailJS's servers, which hold
+// the actual Gmail credentials — those never touch this file).
+// ============================================================
+const EMAILJS_PUBLIC_KEY  = 'IsH2Wz_S2NyIq__Dx';
+const EMAILJS_SERVICE_ID  = 'service_p6cbmex';
+const EMAILJS_TEMPLATE_ID = 'template_t569i7n';
+emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+
+function generateOTP() {
+  // 8 digits, zero-padded — e.g. "00417392".
+  return String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
+}
+
+// Sends the OTP email. Passes several common template-variable aliases at
+// once (to_email/email, passcode/otp_code/otp/code) since the exact
+// placeholder name used inside the EmailJS template's Content tab wasn't
+// confirmed — EmailJS silently ignores any parameter a template doesn't
+// reference, so this is safe and just maximizes the chance of a match on
+// the first try without needing to inspect the template first.
+async function sendOTPEmail(toEmail, otpCode) {
+  return emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+    to_email: toEmail, email: toEmail, recipient: toEmail,
+    passcode: otpCode, otp_code: otpCode, otp: otpCode, code: otpCode,
+  });
+}
+
+// ============================================================
 // HOST ACCOUNT API
 // Manages login/logout for host accounts created by the superadmin.
-// Credentials are stored in the host_accounts table with SHA-256 hashed passwords.
+// Accounts are identified by email only — the superadmin adds a host's
+// email, and that host logs in with a one-time code sent to it. No
+// passwords anywhere in this system.
 // ============================================================
 const CURRENT_HOST_KEY = 'istackyyy_host_session';
 
 function getSavedHost() {
   try { return JSON.parse(localStorage.getItem(CURRENT_HOST_KEY)); } catch { return null; }
-}
-// ── Mandatory credential reset (new accounts, or after a superadmin reset) ──
-// Returns true if it showed the gate (caller should stop initializing the
-// normal console), false if there's nothing to enforce.
-function enforceCredentialResetIfNeeded() {
-  if (!currentHost?.force_credential_reset) return false;
-  document.getElementById('appRoot').innerHTML = `
-    <div class="auth-box" style="max-width:420px;margin:60px auto;">
-      <h2 style="margin-bottom:6px;">Set Your Login Details</h2>
-      <p style="font-size:13px;color:var(--ink-muted);margin:0 0 16px;">
-        ${currentHost.username ? `Welcome, ${escapeHtml(currentHost.name)}. ` : ''}Before you continue, choose your own username and password.
-      </p>
-      <div class="field"><label>Username</label>
-        <input type="text" id="resetUsername" value="${escapeHtml(currentHost.username || '')}" autocomplete="off">
-      </div>
-      <div class="field"><label>New Password</label>
-        <div class="password-field-wrap">
-          <input type="password" id="resetPassword1" placeholder="min. 4 characters" autocomplete="new-password">
-          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('resetPassword1',this)">👁</button>
-        </div>
-      </div>
-      <div class="field"><label>Confirm New Password</label>
-        <div class="password-field-wrap">
-          <input type="password" id="resetPassword2" placeholder="re-enter password" autocomplete="new-password"
-            onkeydown="if(event.key==='Enter')handleForcedCredentialReset()">
-          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('resetPassword2',this)">👁</button>
-        </div>
-      </div>
-      <div class="auth-error" id="resetError"></div>
-      <button class="btn-primary" onclick="handleForcedCredentialReset()">Save &amp; Continue</button>
-      <p style="font-size:12px;text-align:center;margin:14px 0 0;">
-        <a href="javascript:void(0)" onclick="hostLogout()" style="color:var(--ink-muted);font-weight:600;">Not you? Log out and let someone else sign in →</a>
-      </p>
-    </div>
-  `;
-  return true;
-}
-async function handleForcedCredentialReset() {
-  const username  = document.getElementById('resetUsername')?.value?.trim();
-  const password1  = document.getElementById('resetPassword1')?.value;
-  const password2  = document.getElementById('resetPassword2')?.value;
-  const errEl = document.getElementById('resetError');
-  const btn   = document.querySelector('.auth-box .btn-primary');
-  if (!username) { errEl.textContent = 'Username is required.'; return; }
-  if (!password1 || password1.length < 4) { errEl.textContent = 'Password must be at least 4 characters.'; return; }
-  if (password1 !== password2) { errEl.textContent = 'Passwords do not match.'; return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    await AccountAPI.updateHostCredentials(currentHost.id, username, password1);
-    currentHost.username = username;
-    currentHost.force_credential_reset = false;
-    saveHostSession(currentHost);
-    renderTopbarHost();
-    await renderSessionList();
-  } catch (err) {
-    errEl.textContent = err.message || 'Could not save. Please try again.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Save & Continue'; }
-  }
 }
 
 // Checks for resolved requests the host hasn't seen the reply to yet, and
@@ -828,45 +793,24 @@ async function handleAcknowledgeAdminNotice(requestId) {
   checkForAdminResponses(); // show the next one, if there is one
 }
 
-// ── Profile — nickname (free), credentials (requires current password) ──
+// ── Profile — nickname only. Login is email+OTP now, nothing to "change
+// credentials" for; if a host's email itself needs updating, that's a
+// superadmin action (Request From Admin → Other), not self-service. ──
 function openProfileModal() {
   if (document.getElementById('profileModal')) return;
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="profileModal">
       <div class="modal-box">
         <h2>Profile</h2>
-        <p class="modal-sub">@${escapeHtml(currentHost.username)}</p>
+        <p class="modal-sub">${escapeHtml(currentHost.email)}</p>
 
         <div class="edit-section-title">Display Name</div>
         <div class="field"><label>Name shown in the app</label><input type="text" id="profileNickname" value="${escapeHtml(currentHost.name)}"></div>
         <div class="auth-error" id="nicknameError"></div>
         <button class="btn-no" style="width:100%;margin-bottom:16px;border-radius:var(--radius-sm);padding:10px;font-weight:700;border:1px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);" onclick="handleSaveNickname()">Save Name</button>
 
-        <div class="edit-section-title">Change Username / Password</div>
-        <p style="font-size:11px;color:var(--bench-slate);margin:0 0 10px;">Enter your current password to confirm any change below.</p>
-        <div class="field"><label>Current Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="profileCurrentPw" autocomplete="current-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('profileCurrentPw',this)">👁</button>
-          </div>
-        </div>
-        <div class="field"><label>New Username (optional)</label><input type="text" id="profileNewUsername" placeholder="leave blank to keep current" autocomplete="off"></div>
-        <div class="field"><label>New Password (optional)</label>
-          <div class="password-field-wrap">
-            <input type="password" id="profileNewPw" placeholder="leave blank to keep current" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('profileNewPw',this)">👁</button>
-          </div>
-        </div>
-        <div class="field"><label>Confirm New Password</label>
-          <div class="password-field-wrap">
-            <input type="password" id="profileNewPw2" placeholder="re-enter new password" autocomplete="new-password">
-            <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('profileNewPw2',this)">👁</button>
-          </div>
-        </div>
-        <div class="auth-error" id="credentialsError"></div>
-        <button class="btn-yes" id="credentialsSaveBtn" style="width:100%;margin-bottom:6px;" onclick="handleChangeCredentials()">Save Changes</button>
         <p style="font-size:12px;text-align:center;margin:8px 0 0;">
-          <a href="javascript:void(0)" onclick="document.getElementById('profileModal').remove();openRequestAdminModal()" style="color:var(--waiting-blue);font-weight:700;">Forgot your password, or need something else? Request it from your admin →</a>
+          <a href="javascript:void(0)" onclick="document.getElementById('profileModal').remove();openRequestAdminModal()" style="color:var(--waiting-blue);font-weight:700;">Need your login email updated, or something else? Request it from your admin →</a>
         </p>
 
         <button class="btn-no" style="width:100%;margin-top:16px;border-radius:var(--radius-sm);padding:10px;font-weight:700;border:1px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);" onclick="document.getElementById('profileModal').remove()">Close</button>
@@ -887,37 +831,6 @@ async function handleSaveNickname() {
     errEl.innerHTML = '<span style="color:var(--winner-green);">✓ Saved</span>';
   } catch (err) { errEl.textContent = err.message || 'Could not save.'; }
 }
-async function handleChangeCredentials() {
-  const currentPw = document.getElementById('profileCurrentPw')?.value;
-  const newUsername = document.getElementById('profileNewUsername')?.value?.trim();
-  const newPw  = document.getElementById('profileNewPw')?.value;
-  const newPw2 = document.getElementById('profileNewPw2')?.value;
-  const errEl = document.getElementById('credentialsError');
-  const btn = document.getElementById('credentialsSaveBtn');
-
-  if (!currentPw) { errEl.textContent = 'Enter your current password to confirm this change.'; return; }
-  if (!newUsername && !newPw) { errEl.textContent = 'Enter a new username, a new password, or both.'; return; }
-  if (newPw && newPw.length < 4) { errEl.textContent = 'New password must be at least 4 characters.'; return; }
-  if (newPw && newPw !== newPw2) { errEl.textContent = 'New passwords do not match.'; return; }
-
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    const ok = await AccountAPI.verifyCurrentPassword(currentHost.id, currentPw);
-    if (!ok) {
-      errEl.textContent = 'Current password is incorrect.';
-      if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
-      return;
-    }
-    await AccountAPI.updateHostCredentials(currentHost.id, newUsername || currentHost.username, newPw || currentPw);
-    currentHost.username = newUsername || currentHost.username;
-    saveHostSession(currentHost);
-    document.getElementById('profileModal')?.remove();
-    alert('Your login details have been updated.');
-  } catch (err) {
-    errEl.textContent = err.message || 'Could not save changes.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
-  }
-}
 
 // ── Request something from the admin ──
 function openRequestAdminModal() {
@@ -929,13 +842,10 @@ function openRequestAdminModal() {
         <p class="modal-sub">Send a request to your superadmin — they'll action it and you'll see their reply next time you log in.</p>
         <div class="field"><label>What do you need?</label>
           <select id="requestType">
-            <option value="password_reset">Reset my password (forgot it)</option>
-            <option value="username_change">Change my username</option>
-            <option value="both_credentials">Reset both username and password</option>
             <option value="access_open_play">Enable Open Play access</option>
             <option value="access_tournament">Enable Tournament access</option>
             <option value="access_both">Enable Open Play + Tournament access</option>
-            <option value="other">Something else</option>
+            <option value="other">Something else (e.g. update my login email)</option>
           </select>
         </div>
         <div class="field"><label>Note (optional)</label><input type="text" id="requestNote" placeholder="Any details for your admin"></div>
@@ -966,7 +876,7 @@ async function handleSubmitHostRequest() {
 
 function saveHostSession(host) {
   localStorage.setItem(CURRENT_HOST_KEY, JSON.stringify({
-    id: host.id, name: host.name, username: host.username,
+    id: host.id, name: host.name, email: host.email,
     allow_open_play: host.allow_open_play, allow_tournament: host.allow_tournament,
   }));
 }
@@ -975,51 +885,73 @@ function clearHostSession() {
 }
 
 const AccountAPI = (() => {
-  async function loginHost(username, password) {
-    const hash = await hashPassword(password);
-    let { data, error } = await supabaseClient
-      .from('host_accounts')
-      .select('id, name, username, is_active, allow_open_play, allow_tournament, force_credential_reset')
-      .eq('username', username.trim())
-      .eq('password_hash', hash)
-      .single();
-    if (error && /allow_open_play|allow_tournament|force_credential_reset/.test(error.message || '')) {
-      // Migration not run yet — log in without the newer columns (defaults
-      // to full access / no forced reset, same as the DB column defaults).
-      ({ data, error } = await supabaseClient
-        .from('host_accounts')
-        .select('id, name, username, is_active')
-        .eq('username', username.trim())
-        .eq('password_hash', hash)
-        .single());
+  // Step 1 of login: host enters their email. If it matches an active
+  // account, generate + store + email an OTP. Never reveals whether an
+  // email exists or not beyond "check your email" — same message either
+  // way avoids leaking which addresses are registered hosts.
+  async function requestLoginOTP(email) {
+    email = (email || '').trim().toLowerCase();
+    if (!email) throw new Error('Enter your email.');
+    const { data: host, error } = await supabaseClient
+      .from('host_accounts').select('id, name, email, is_active, allow_open_play, allow_tournament')
+      .eq('email', email).single();
+    if (error || !host) {
+      throw new Error('No host account found for this email. Ask your admin to add it first.');
     }
-    if (error || !data) throw new Error('Incorrect username or password.');
-    if (!data.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
-    return data;
+    if (!host.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
+
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+    const { error: insErr } = await supabaseClient.from('login_otps')
+      .insert({ email, otp_code: otp, purpose: 'host_login', expires_at: expiresAt });
+    if (insErr) {
+      const missingTable = insErr.code === '42P01' || /does not exist|could not find the .* (table|column)/i.test(insErr.message || '');
+      const rlsBlocked = insErr.code === '42501' || /row-level security|permission denied/i.test(insErr.message || '');
+      if (missingTable) {
+        throw new Error('Database is missing the login_otps table. Run this in Supabase SQL Editor:\n\n' +
+          "CREATE TABLE IF NOT EXISTS login_otps (\n" +
+          "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n" +
+          "  email text NOT NULL,\n" +
+          "  otp_code text NOT NULL,\n" +
+          "  purpose text NOT NULL,\n" +
+          "  expires_at timestamptz NOT NULL,\n" +
+          "  used boolean DEFAULT false,\n" +
+          "  created_at timestamptz DEFAULT now()\n" +
+          ");");
+      }
+      if (rlsBlocked) throw new Error('Row Level Security is blocking login_otps — run in Supabase SQL Editor:\n\nALTER TABLE login_otps DISABLE ROW LEVEL SECURITY;');
+      throw insErr;
+    }
+    try {
+      await sendOTPEmail(email, otp);
+    } catch (mailErr) {
+      throw new Error('Could not send the login code. Check the EmailJS setup. (' + (mailErr?.text || mailErr?.message || 'unknown error') + ')');
+    }
+    return { email, hostName: host.name };
   }
 
-  // Verifies the CURRENT password matches before allowing a sensitive
-  // change — re-auth pattern, not just trusting whoever's got the session.
-  async function verifyCurrentPassword(hostId, currentPassword) {
-    const hash = await hashPassword(currentPassword);
-    const { data, error } = await supabaseClient
-      .from('host_accounts').select('id').eq('id', hostId).eq('password_hash', hash).single();
-    if (error || !data) return false;
-    return true;
-  }
+  // Step 2: verify the code, mark it used, return the account. Rejects
+  // codes that are wrong, expired, or already used.
+  async function verifyLoginOTP(email, code) {
+    email = (email || '').trim().toLowerCase();
+    code = (code || '').trim();
+    const { data: rows, error } = await supabaseClient
+      .from('login_otps').select('*').eq('email', email).eq('purpose', 'host_login')
+      .order('created_at', { ascending: false }).limit(1);
+    if (error || !rows || !rows.length) throw new Error('No code was sent to this email — request a new one.');
+    const otpRow = rows[0];
+    if (otpRow.used) throw new Error('This code has already been used — request a new one.');
+    if (new Date(otpRow.expires_at).getTime() < Date.now()) throw new Error('This code has expired — request a new one.');
+    if (otpRow.otp_code !== code) throw new Error('Incorrect code. Please try again.');
 
-  // Used both for a host setting their OWN new credentials (self-service,
-  // after verifying their current password, or on the mandatory first-login
-  // reset) and for finishing a superadmin-issued credential reset.
-  async function updateHostCredentials(hostId, newUsername, newPassword) {
-    const passwordHash = await hashPassword(newPassword);
-    const { error } = await supabaseClient.from('host_accounts')
-      .update({ username: newUsername.trim(), password_hash: passwordHash, force_credential_reset: false })
-      .eq('id', hostId);
-    if (error) {
-      if (error.code === '23505') throw new Error('That username is already taken. Choose a different one.');
-      throw error;
-    }
+    await supabaseClient.from('login_otps').update({ used: true }).eq('id', otpRow.id);
+
+    const { data: host, error: hErr } = await supabaseClient
+      .from('host_accounts').select('id, name, email, is_active, allow_open_play, allow_tournament')
+      .eq('email', email).single();
+    if (hErr || !host) throw new Error('Account not found.');
+    if (!host.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
+    return host;
   }
 
   async function updateHostNickname(hostId, newName) {
@@ -1027,13 +959,14 @@ const AccountAPI = (() => {
     if (error) throw error;
   }
 
-  // ── Requests to the superadmin (credential resets, access changes) ──
+  // ── Requests to the superadmin (access changes — credential-related
+  // requests no longer apply since login has no credentials to reset) ──
   async function submitHostRequest(hostId, requestType, note) {
     const { error } = await supabaseClient.from('host_requests')
       .insert({ host_id: hostId, request_type: requestType, note: note || null, status: 'pending' });
     if (error) {
       // '42P01' = relation does not exist — the table itself is missing.
-      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const missingTable = error.code === '42P01' || /does not exist|could not find the .* column/i.test(error.message || '');
       // '42501' = insufficient privilege — usually Row Level Security
       // blocking the insert because the table exists but has no policy
       // permitting it yet. Different fix entirely from a missing table,
@@ -1074,7 +1007,7 @@ const AccountAPI = (() => {
   }
 
   return {
-    loginHost, verifyCurrentPassword, updateHostCredentials, updateHostNickname,
+    requestLoginOTP, verifyLoginOTP, updateHostNickname,
     submitHostRequest, getUnacknowledgedResolvedRequests, acknowledgeRequest,
   };
 })();
@@ -1966,7 +1899,7 @@ const SessionAPI = (() => {
       // only the error CODE (not just "did the table name appear in the
       // message somewhere") avoids misreporting an RLS block as a missing
       // table when the table was actually created successfully.
-      const missingTable = prepErr.code === '42P01' || /does not exist/i.test(prepErr.message || '');
+      const missingTable = prepErr.code === '42P01' || /does not exist|could not find the .* column/i.test(prepErr.message || '');
       const rlsBlocked = prepErr.code === '42501' || /row-level security|permission denied/i.test(prepErr.message || '');
       if (missingTable) {
         throw new Error('Database missing the prepared_matches table — run in Supabase SQL Editor: ' +
@@ -1992,7 +1925,7 @@ const SessionAPI = (() => {
       // Graceful fallback either way (missing table OR RLS blocking the
       // read) — this just means "nothing prepared yet" from the UI's
       // perspective, not worth surfacing as an error for a background read.
-      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const missingTable = error.code === '42P01' || /does not exist|could not find the .* column/i.test(error.message || '');
       const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
       if (missingTable || rlsBlocked) return [];
       throw error;
@@ -2021,7 +1954,7 @@ const SessionAPI = (() => {
       .select('*').eq('session_id', sessionId).eq('status', 'pending')
       .order('created_at', { ascending: true }).limit(1);
     if (error) {
-      if (error.code === '42P01' || error.code === '42501' || /does not exist|row-level security|permission denied/i.test(error.message || '')) return null; // table missing or RLS-blocked — nothing to release either way
+      if (error.code === '42P01' || error.code === '42501' || /does not exist|could not find the .* column|row-level security|permission denied/i.test(error.message || '')) return null; // table missing or RLS-blocked — nothing to release either way
       throw error;
     }
     const next = (prepared || [])[0];
@@ -2378,13 +2311,13 @@ async function init() {
     try {
       let { data, error } = await supabaseClient
         .from('host_accounts')
-        .select('id, name, username, is_active, allow_open_play, allow_tournament, force_credential_reset')
+        .select('id, name, email, is_active, allow_open_play, allow_tournament')
         .eq('id', currentHost.id)
         .single();
-      if (error && /allow_open_play|allow_tournament|force_credential_reset/.test(error.message || '')) {
+      if (error && /allow_open_play|allow_tournament/.test(error.message || '')) {
         ({ data, error } = await supabaseClient
           .from('host_accounts')
-          .select('id, name, username, is_active')
+          .select('id, name, email, is_active')
           .eq('id', currentHost.id)
           .single());
       }
@@ -2396,8 +2329,8 @@ async function init() {
         renderLoginScreen();
         return;
       }
-      // Refresh currentHost with live data in case name/username/permissions changed.
-      currentHost = { id: data.id, name: data.name, username: data.username, allow_open_play: data.allow_open_play, allow_tournament: data.allow_tournament, force_credential_reset: data.force_credential_reset };
+      // Refresh currentHost with live data in case name/email/permissions changed.
+      currentHost = { id: data.id, name: data.name, email: data.email, allow_open_play: data.allow_open_play, allow_tournament: data.allow_tournament };
       saveHostSession(currentHost);
     } catch (_) {
       clearHostSession();
@@ -2413,7 +2346,6 @@ async function init() {
     return;
   }
 
-  if (enforceCredentialResetIfNeeded()) return;
   renderTopbarHost();
   try { await renderSessionList(); }
   catch (err) {
@@ -2444,44 +2376,138 @@ function renderLoginScreen() {
   document.getElementById('appRoot').innerHTML = `
     <div class="auth-box" style="margin-top:96px;">
       <h1 style="font-size:18px;margin-bottom:4px;">Host Login</h1>
-      <p class="sub">Sign in with your iStackyyy host account.</p>
+      <p class="sub">Enter your email — we'll send a one-time code.</p>
       <div class="field">
-        <label>Username</label>
-        <input type="text" id="loginUsername" placeholder="your username" autocomplete="username"
-          onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()">
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <div class="password-field-wrap">
-          <input type="password" id="loginPassword" placeholder="password" autocomplete="current-password"
-            onkeydown="if(event.key==='Enter')handleHostLogin()">
-          <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('loginPassword',this)">👁</button>
-        </div>
+        <label>Email</label>
+        <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email"
+          onkeydown="if(event.key==='Enter')handleRequestOTP()">
       </div>
       <div class="auth-error" id="loginError"></div>
-      <button class="btn-primary" onclick="handleHostLogin()">Sign In</button>
+      <button class="btn-primary" id="requestOtpBtn" onclick="handleRequestOTP()">Send Code</button>
     </div>
   `;
-  document.getElementById('loginUsername')?.focus();
+  document.getElementById('loginEmail')?.focus();
 }
 
-async function handleHostLogin() {
-  const username = document.getElementById('loginUsername')?.value?.trim();
-  const password = document.getElementById('loginPassword')?.value;
-  const errEl    = document.getElementById('loginError');
-  const btn      = document.querySelector('.auth-box .btn-primary');
-  if (!username || !password) { if(errEl) errEl.textContent = 'Enter your username and password.'; return; }
-  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+async function handleRequestOTP() {
+  const email = document.getElementById('loginEmail')?.value?.trim();
+  const errEl = document.getElementById('loginError');
+  const btn   = document.getElementById('requestOtpBtn');
+  if (!email) { if (errEl) errEl.textContent = 'Enter your email.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
   try {
-    const host = await AccountAPI.loginHost(username, password);
+    const { email: confirmedEmail, hostName } = await AccountAPI.requestLoginOTP(email);
+    renderOTPScreen(confirmedEmail, hostName);
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not send code. Please try again.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Code'; }
+  }
+}
+
+// 8 separate digit boxes, auto-advancing — matches the OTP UX already
+// proven in the Balay Maysa system this was modeled after.
+function renderOTPScreen(email, hostName) {
+  window._otpEmail = email;
+  window._otpResendCooldown = 60;
+  document.getElementById('appRoot').innerHTML = `
+    <div class="auth-box" style="margin-top:96px;">
+      <h1 style="font-size:18px;margin-bottom:4px;">Enter Your Code</h1>
+      <p class="sub">${hostName ? `Hi ${escapeHtml(hostName)} — a` : 'A'} code was sent to ${escapeHtml(email)}. It expires in 10 minutes.</p>
+      <div id="otpDigitsRow" style="display:flex;gap:6px;justify-content:center;margin:18px 0;" onpaste="handleOTPPaste(event)">
+        ${Array.from({ length: 8 }, (_, i) => `
+          <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" class="otp-digit-box" data-idx="${i}"
+            style="width:34px;height:44px;text-align:center;font-size:18px;font-weight:800;border-radius:var(--radius-sm);
+              border:1.5px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);font-family:var(--font-mono);"
+            oninput="handleOTPDigitInput(this,${i})" onkeydown="handleOTPDigitKeydown(event,${i})">
+        `).join('')}
+      </div>
+      <div class="auth-error" id="otpError"></div>
+      <button class="btn-primary" id="verifyOtpBtn" onclick="handleVerifyOTP()">Verify &amp; Sign In</button>
+      <p style="font-size:12px;text-align:center;margin:14px 0 0;">
+        <a href="javascript:void(0)" id="resendOtpLink" onclick="handleResendOTP()" style="color:var(--waiting-blue);font-weight:700;">Resend code</a>
+        <span id="resendCooldownLabel" style="color:var(--ink-muted);"></span>
+      </p>
+      <p style="font-size:12px;text-align:center;margin:8px 0 0;">
+        <a href="javascript:void(0)" onclick="renderLoginScreen()" style="color:var(--ink-muted);font-weight:600;">← Use a different email</a>
+      </p>
+    </div>
+  `;
+  startOTPResendCooldown();
+  document.querySelector('.otp-digit-box[data-idx="0"]')?.focus();
+}
+
+function handleOTPDigitInput(el, idx) {
+  el.value = el.value.replace(/\D/g, '').slice(0, 1);
+  if (el.value && idx < 7) {
+    document.querySelector(`.otp-digit-box[data-idx="${idx + 1}"]`)?.focus();
+  }
+  const full = getOTPDigitsValue();
+  if (full.length === 8) handleVerifyOTP();
+}
+function handleOTPDigitKeydown(e, idx) {
+  if (e.key === 'Backspace' && !e.target.value && idx > 0) {
+    document.querySelector(`.otp-digit-box[data-idx="${idx - 1}"]`)?.focus();
+  }
+}
+function handleOTPPaste(e) {
+  const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 8);
+  if (!text) return;
+  e.preventDefault();
+  [...text].forEach((d, i) => {
+    const box = document.querySelector(`.otp-digit-box[data-idx="${i}"]`);
+    if (box) box.value = d;
+  });
+  const last = Math.min(text.length, 8) - 1;
+  document.querySelector(`.otp-digit-box[data-idx="${last}"]`)?.focus();
+  if (text.length === 8) handleVerifyOTP();
+}
+function getOTPDigitsValue() {
+  return [...document.querySelectorAll('.otp-digit-box')].map(el => el.value || '').join('');
+}
+
+async function handleVerifyOTP() {
+  const code = getOTPDigitsValue();
+  const errEl = document.getElementById('otpError');
+  const btn   = document.getElementById('verifyOtpBtn');
+  if (code.length !== 8) { if (errEl) errEl.textContent = 'Enter all 8 digits.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+  try {
+    const host = await AccountAPI.verifyLoginOTP(window._otpEmail, code);
     currentHost = host;
     saveHostSession(host);
-    if (enforceCredentialResetIfNeeded()) return;
     renderTopbarHost();
     await renderSessionList();
   } catch (err) {
-    if (errEl) errEl.textContent = err.message || 'Login failed.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Sign In'; }
+    if (errEl) errEl.textContent = err.message || 'Could not verify code.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify & Sign In'; }
+    document.querySelectorAll('.otp-digit-box').forEach(el => el.value = '');
+    document.querySelector('.otp-digit-box[data-idx="0"]')?.focus();
+  }
+}
+
+function startOTPResendCooldown() {
+  const link = document.getElementById('resendOtpLink');
+  const label = document.getElementById('resendCooldownLabel');
+  if (link) { link.style.pointerEvents = 'none'; link.style.opacity = '0.4'; }
+  const tick = () => {
+    window._otpResendCooldown--;
+    if (label) label.textContent = window._otpResendCooldown > 0 ? ` (wait ${window._otpResendCooldown}s)` : '';
+    if (window._otpResendCooldown <= 0) {
+      clearInterval(window._otpResendInterval);
+      if (link) { link.style.pointerEvents = ''; link.style.opacity = ''; }
+    }
+  };
+  clearInterval(window._otpResendInterval);
+  window._otpResendInterval = setInterval(tick, 1000);
+}
+async function handleResendOTP() {
+  if (window._otpResendCooldown > 0) return;
+  const errEl = document.getElementById('otpError');
+  try {
+    const { hostName } = await AccountAPI.requestLoginOTP(window._otpEmail);
+    renderOTPScreen(window._otpEmail, hostName);
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not resend code.';
   }
 }
 
