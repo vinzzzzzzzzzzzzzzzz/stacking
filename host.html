@@ -1449,6 +1449,52 @@ const SessionAPI = (() => {
       .update({ status: 'resting', became_free_at: new Date().toISOString() }).eq('id', playerId);
   }
 
+  // Swaps ONE player on a team for a substitute — used both for an active
+  // court mid-match and for a queued-but-not-yet-started team. This is the
+  // single place that changes team.player_ids for a substitution, so stat
+  // crediting downstream (logMatchResult re-reads player_ids fresh at
+  // match-completion time) automatically follows whoever is CURRENTLY on
+  // the team — the substitute gets credit for however the match turns out,
+  // the departed player doesn't, with no special-casing needed anywhere
+  // else. The departed player's status is set exactly once, to exactly
+  // one value (resting/left) — never left dangling at 'playing' while
+  // also not actually on any team, which is the core invariant this
+  // whole feature exists to protect.
+  async function swapPlayerOnTeam(teamId, oldPlayerId, newPlayerId, departingDisposition) {
+    const { data: team, error: teamErr } = await supabaseClient.from('teams').select('*').eq('id', teamId).single();
+    if (teamErr || !team) throw new Error('Team not found.');
+    if (!team.player_ids.includes(oldPlayerId)) throw new Error('That player is not on this team.');
+
+    const { data: incoming, error: pErr } = await supabaseClient.from('players').select('*').eq('id', newPlayerId).single();
+    if (pErr || !incoming) throw new Error('Substitute player not found.');
+    if (incoming.status === 'playing') throw new Error('That player is already on a court.');
+
+    const newPlayerIds = team.player_ids.map(id => id === oldPlayerId ? newPlayerId : id);
+    const { error: updErr } = await supabaseClient.from('teams').update({ player_ids: newPlayerIds }).eq('id', teamId);
+    if (updErr) throw updErr;
+
+    // Departed player: exactly one clean status, never 'playing' anymore
+    // and never left without a home. 'left' matches removePlayer's
+    // existing mid-match pattern (flag only, no other side effects).
+    if (departingDisposition === 'rest') {
+      await supabaseClient.from('players')
+        .update({ status: 'resting', became_free_at: new Date().toISOString() }).eq('id', oldPlayerId);
+    } else {
+      await supabaseClient.from('players').update({ status: 'left' }).eq('id', oldPlayerId);
+    }
+
+    // Incoming player: only mark 'playing' if the team they're joining is
+    // actually live on a court right now — a queued (not-yet-started) team
+    // shouldn't make its new player look like they're already on court.
+    const { data: liveCourts } = await supabaseClient.from('courts')
+      .select('id').eq('status', 'in_progress').or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`);
+    const onLiveCourt = !!(liveCourts && liveCourts.length);
+    await supabaseClient.from('players')
+      .update({ status: onLiveCourt ? 'playing' : 'waiting' }).eq('id', newPlayerId);
+
+    return { newPlayerIds };
+  }
+
   async function restPlayerManually(playerId) {
     const { data: player, error } = await supabaseClient.from('players').select('*').eq('id', playerId).single();
     if (error || !player) throw new Error('Could not find this player.');
@@ -1478,7 +1524,7 @@ const SessionAPI = (() => {
 
   async function createTeam(sessionId, playerIds, lane = 'waiting') {
     const { data, error } = await supabaseClient.from('teams')
-      .insert({ session_id: sessionId, player_ids: playerIds, pairing_mode: 'fixed', queue_lane: lane, queue_position: 0 })
+      .insert({ session_id: sessionId, player_ids: playerIds, pairing_mode: 'fixed', queue_lane: lane, queue_position: 0, is_active: true })
       .select().single();
     if (error) throw error;
     return data;
@@ -2301,7 +2347,7 @@ const SessionAPI = (() => {
     verifySessionPassword, finishSession, deleteSession, getMatchCount,
     preRegisterPlayer, updatePlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
-    createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue, reconcileOrphanedPlayers,
+    createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue, reconcileOrphanedPlayers, swapPlayerOnTeam,
     buildManualMatch, getPreparedMatches, cancelPreparedMatch, tryReleasePreparedMatch,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
@@ -3191,21 +3237,151 @@ function elapsedLabel(iso) {
   return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+// ════════════════════════════════════════════
+// PLAYER SWAP — mid-match (live court) or mid-queue (not-yet-started
+// team) substitution. Works the same way in both automated and manual
+// open-play modes, since it operates on teams.player_ids directly rather
+// than anything mode-specific.
+// ════════════════════════════════════════════
+
+// Players not currently spoken for by ANYTHING — not playing, not resting,
+// not already queued into a prepared match. Shared eligibility check so
+// the substitute picker can never offer someone who's already committed
+// elsewhere, matching the same invariant the duplicate-stacking fix
+// protects: one player, one status, at any given moment.
+async function getEligibleSubstitutes(sessionId, excludePlayerIds) {
+  const players = await SessionAPI.getPlayers(sessionId);
+  const prepared = await SessionAPI.getPreparedMatches(sessionId);
+  const queuedIds = new Set();
+  for (const pm of prepared) {
+    (pm.team_a?.player_ids || []).forEach(id => queuedIds.add(id));
+    (pm.team_b?.player_ids || []).forEach(id => queuedIds.add(id));
+  }
+  const exclude = new Set(excludePlayerIds || []);
+  return players.filter(p => p.status === 'waiting' && !queuedIds.has(p.id) && !exclude.has(p.id));
+}
+
+async function openCourtSwapModal(courtId) {
+  if (document.getElementById('swapModal')) return;
+  const courts = await SessionAPI.getCourts(activeSession.id);
+  const court = courts.find(c => c.id === courtId);
+  if (!court || !court.team_a || !court.team_b) return;
+  await renderSwapModal({
+    title: `Court ${court.court_number} — Swap a Player`,
+    teamA: court.team_a, teamB: court.team_b, isLive: true,
+  });
+}
+async function openQueueSwapModal(preparedMatchId) {
+  if (document.getElementById('swapModal')) return;
+  const prepared = await SessionAPI.getPreparedMatches(activeSession.id);
+  const pm = prepared.find(x => x.id === preparedMatchId);
+  if (!pm || !pm.team_a || !pm.team_b) return;
+  await renderSwapModal({
+    title: `Queued Match — Swap a Player`,
+    teamA: pm.team_a, teamB: pm.team_b, isLive: false,
+  });
+}
+
+async function renderSwapModal({ title, teamA, teamB, isLive }) {
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const byId = id => players.find(p => p.id === id) || { name: '—' };
+  const rowsFor = team => (team.player_ids || []).map(pid => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--surface-hover);border-radius:var(--radius-sm);margin-bottom:6px;">
+      <span style="font-weight:700;font-size:13px;">${escapeHtml(byId(pid).name)}</span>
+      <button onclick="startSwapFor('${team.id}','${pid}',${isLive})" style="background:rgba(215,242,61,0.12);border:1px solid rgba(215,242,61,0.35);color:var(--optic-yellow);font-size:11px;font-weight:800;padding:5px 10px;border-radius:var(--radius-sm);min-height:0;cursor:pointer;">Swap Out</button>
+    </div>`).join('');
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="swapModal">
+      <div class="modal-box">
+        <h2>${escapeHtml(title)}</h2>
+        <p class="modal-sub">Tap "Swap Out" next to whoever needs to step away — you'll pick who's coming in.</p>
+        <div class="edit-section-title">Team A</div>
+        ${rowsFor(teamA)}
+        <div class="edit-section-title">Team B</div>
+        ${rowsFor(teamB)}
+        <button class="btn-no" style="width:100%;margin-top:10px;border-radius:var(--radius-sm);padding:10px;font-weight:700;border:1px solid var(--border-soft);background:var(--surface-hover);color:var(--ink);" onclick="document.getElementById('swapModal').remove()">Close</button>
+      </div>
+    </div>
+  `);
+}
+
+async function startSwapFor(teamId, oldPlayerId, isLive) {
+  document.getElementById('swapModal')?.remove();
+  const players = await SessionAPI.getPlayers(activeSession.id);
+  const departing = players.find(p => p.id === oldPlayerId);
+  const eligible = await getEligibleSubstitutes(activeSession.id, [oldPlayerId]);
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="swapPickModal">
+      <div class="modal-box">
+        <h2>Substitute for ${escapeHtml(departing?.name || 'this player')}</h2>
+        <p class="modal-sub">Choose who's coming in, and what happens to ${escapeHtml(departing?.name || 'the departing player')}.</p>
+        <div class="field"><label>Substitute</label>
+          <select id="swapSubstituteSelect">
+            <option value="">— Select a player —</option>
+            ${eligible.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+          </select>
+        </div>
+        ${!eligible.length ? '<p style="font-size:12px;color:var(--fault-coral);margin:-6px 0 10px;">No eligible players waiting right now — everyone else is already playing or queued.</p>' : ''}
+        <div class="field"><label>${escapeHtml(departing?.name || 'This player')} should be marked as</label>
+          <select id="swapDispositionSelect">
+            <option value="rest">☕ Resting</option>
+            <option value="left">🚪 Left</option>
+          </select>
+        </div>
+        <div class="auth-error" id="swapError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('swapPickModal').remove()">Cancel</button>
+          <button class="btn-yes" id="swapConfirmBtn" onclick="confirmPlayerSwap('${teamId}','${oldPlayerId}')">Confirm Swap</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+async function confirmPlayerSwap(teamId, oldPlayerId) {
+  const newPlayerId = document.getElementById('swapSubstituteSelect')?.value;
+  const disposition = document.getElementById('swapDispositionSelect')?.value;
+  const errEl = document.getElementById('swapError');
+  const btn = document.getElementById('swapConfirmBtn');
+  if (!newPlayerId) { errEl.textContent = 'Choose a substitute.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Swapping…'; }
+  try {
+    await SessionAPI.swapPlayerOnTeam(teamId, oldPlayerId, newPlayerId, disposition);
+    document.getElementById('swapPickModal')?.remove();
+    renderActiveTab();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not complete the swap.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirm Swap'; }
+  }
+}
+
 async function manualBoardHtml() {
   const players = await SessionAPI.getPlayers(activeSession.id);
   const teamSize = activeSession?.format === 'singles' ? 1 : 2;
   const needed = teamSize * 2;
 
   const prepared = await SessionAPI.getPreparedMatches(activeSession.id);
-  const teams = await SessionAPI.getTeams(activeSession.id);
-  const teamById = new Map(teams.map(t => [t.id, t]));
   // Anyone already committed to a queued-but-not-yet-started match can't
   // be picked for a DIFFERENT one too — they're spoken for the moment
   // they're queued, not just once they're actually on a court.
+  //
+  // CRITICAL: this must be derived from the EXACT SAME data used to
+  // render the visible "Queued" cards below (pm.team_a/team_b, from
+  // getPreparedMatches' own join) — NOT from a separate getTeams() call.
+  // A separate call filters is_active=true independently; if a queued
+  // team's active flag were ever out of sync with reality for any reason,
+  // that filter would silently disagree with what's on screen, and a
+  // player visibly sitting in a Queued card would still show as
+  // available to pick again elsewhere — exactly the duplicate-stacking
+  // bug this exists to prevent. Reading straight off pm.team_a/team_b
+  // makes that class of bug structurally impossible: whatever's visibly
+  // queued is, by construction, exactly what gets excluded.
   const queuedPlayerIds = new Set();
   for (const pm of prepared) {
-    (teamById.get(pm.team_a_id)?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
-    (teamById.get(pm.team_b_id)?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
+    (pm.team_a?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
+    (pm.team_b?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
   }
 
   const byOldest = (a, b) => new Date(a.became_free_at || 0) - new Date(b.became_free_at || 0);
@@ -3320,7 +3496,10 @@ function preparedMatchCardHtml(pm, i, players) {
   return `<div class="mp-card" style="flex:1 1 280px;max-width:340px;">
     <div class="mp-card-label">
       <span>Queued #${i + 1}${i === 0 ? ' <span style="opacity:.7;font-weight:600">(Next)</span>' : ''}</span>
-      <button onclick="handleCancelPreparedMatch('${pm.id}')" style="background:none;border:none;color:var(--fault-coral);font-size:10px;font-weight:800;cursor:pointer;min-height:0;padding:2px 4px;">✕ Cancel</button>
+      <span style="display:flex;gap:6px;">
+        <button onclick="openQueueSwapModal('${pm.id}')" style="background:none;border:none;color:var(--optic-yellow);font-size:10px;font-weight:800;cursor:pointer;min-height:0;padding:2px 4px;">🔄 Swap</button>
+        <button onclick="handleCancelPreparedMatch('${pm.id}')" style="background:none;border:none;color:var(--fault-coral);font-size:10px;font-weight:800;cursor:pointer;min-height:0;padding:2px 4px;">✕ Cancel</button>
+      </span>
     </div>
     <div class="mp-teams">
       <div class="mp-team-row">${teamA.map(p => paddleChipHost(p)).join('')}</div>
@@ -3840,6 +4019,7 @@ function renderCourtDiagramCard(court, players) {
     <div class="court-host-card ${motionClass}${isActive ? ' court-active' : ''}" onclick="${isActive ? `handleMarkFinished('${court.id}')` : ''}">
       <div class="court-host-label">
         <span class="num">Court ${court.court_number}</span>
+        ${isActive ? `<button onclick="event.stopPropagation();openCourtSwapModal('${court.id}')" style="background:rgba(215,242,61,0.12);border:1px solid rgba(215,242,61,0.35);color:var(--optic-yellow);font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;min-height:0;cursor:pointer;">🔄 Swap</button>` : ''}
         <span class="court-host-timer ${isActive ? '' : 'idle'}" data-start="${court.game_started_at || ''}" id="hostTimer-${court.id}">${isActive ? '00:00' : 'OPEN'}</span>
       </div>
       <div class="court-host-diagram">
