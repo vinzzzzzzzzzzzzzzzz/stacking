@@ -23,77 +23,81 @@
   ═══════════════════════════════════════════════════════════ */
 
   :root, html[data-theme="dark"] {
-    --night-court: #0F1413;
-    --court-paint: #1B4D3E;
-    --court-paint-deep: #0E2820;
-    --court-paint-mid: #163D30;
-    --optic-yellow: #D7F23D;
-    --optic-yellow-ink: #0F1413;
-    --line-tape: #F2F4F0;
-    --bench-slate: #6B7872;
+    --night-court: #0A1620;
+    --court-paint: #123A5C;
+    --court-paint-deep: #081D30;
+    --court-paint-mid: #0F2E4A;
+    --optic-yellow: #2DD4E8;
+    --optic-yellow-ink: #052229;
+    --line-tape: #F0FBFC;
+    --bench-slate: #6B8290;
     --fault-coral: #FF7A5C;
-    --line: rgba(242,244,240,0.18);
+    --line: rgba(240,251,252,0.18);
+    --kitchen-blue: #8FD4E8;
 
     --bg: var(--night-court);
-    --surface: #181F1D;
-    --surface-raised: #202927;
-    --surface-hover: #263330;
+    --surface: #0F1D28;
+    --surface-raised: #17304A;
+    --surface-hover: #1F3D5C;
     --ink: var(--line-tape);
-    --ink-muted: #8A9E96;
-    --border-soft: rgba(242,244,240,0.07);
-    --border-card: rgba(242,244,240,0.05);
+    --ink-muted: #7B96A3;
+    --border-soft: rgba(240,251,252,0.14);
+    --border-card: rgba(240,251,252,0.12);
     --court-green: var(--court-paint);
     --court-green-dark: var(--court-paint-deep);
     --court-green-mid: var(--court-paint-mid);
     --accent: var(--optic-yellow);
     --accent-ink: var(--optic-yellow-ink);
-    --accent-glow: rgba(215,242,61,0.22);
+    --accent-glow: rgba(45,212,232,0.22);
     --winner-green: #4ECB7E;
     --loser-coral: var(--fault-coral);
     --resting-slate: var(--bench-slate);
-    --waiting-blue: #6FA8E0;
+    --waiting-blue: #5FA3DE;
     --line-paint: var(--line-tape);
     --kitchen-gold: var(--optic-yellow);
-    --shadow-card: 0 1px 8px rgba(0,0,0,0.45), 0 0 0 1px rgba(242,244,240,0.04);
-    --shadow-raised: 0 6px 28px rgba(0,0,0,0.55), 0 0 0 1px rgba(242,244,240,0.06);
+    --shadow-card: 0 2px 10px rgba(0,0,0,0.5), 0 0 0 1px rgba(240,251,252,0.09);
+    --shadow-raised: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(240,251,252,0.12);
     --watermark-opacity: 0.035;
-    --net-glow: 0 0 18px 4px rgba(215,242,61,0.18), 0 0 6px 1px rgba(215,242,61,0.28);
+    --net-glow: 0 0 18px 4px rgba(45,212,232,0.18), 0 0 6px 1px rgba(45,212,232,0.28);
+    --bg-gradient: radial-gradient(circle at 50% 42%, var(--court-paint-mid) 0%, var(--night-court) 68%);
   }
   html[data-theme="light"] {
-    --night-court: #F0EDE4;
-    --court-paint: #1B4D3E;
-    --court-paint-deep: #123329;
-    --court-paint-mid: #1A4339;
-    --optic-yellow: #5E7A0A;
+    --night-court: #EAF3F7;
+    --court-paint: #123A5C;
+    --court-paint-deep: #081D30;
+    --court-paint-mid: #0F2E4A;
+    --optic-yellow: #0891A8;
     --optic-yellow-ink: #FFFFFF;
-    --line-tape: #15201C;
-    --bench-slate: #8E9B97;
+    --line-tape: #0D1F2A;
+    --bench-slate: #7690A0;
     --fault-coral: #D9523A;
-    --line: rgba(21,32,28,0.2);
+    --line: rgba(13,31,42,0.2);
+    --kitchen-blue: #BEE8F2;
     --bg: var(--night-court);
-    --surface: #FAFAF7;
+    --surface: #F5FAFC;
     --surface-raised: #FFFFFF;
-    --surface-hover: #EAE7DD;
+    --surface-hover: #E3EFF4;
     --ink: var(--line-tape);
-    --ink-muted: #5A6E67;
-    --border-soft: rgba(21,32,28,0.09);
-    --border-card: rgba(21,32,28,0.07);
+    --ink-muted: #4C6875;
+    --border-soft: rgba(13,31,42,0.16);
+    --border-card: rgba(13,31,42,0.14);
     --court-green: var(--court-paint);
     --court-green-dark: var(--court-paint-deep);
     --court-green-mid: var(--court-paint-mid);
     --accent: var(--optic-yellow);
     --accent-ink: var(--optic-yellow-ink);
-    --accent-glow: rgba(94,122,10,0.18);
+    --accent-glow: rgba(8,145,168,0.18);
     --winner-green: #2F9A5C;
     --loser-coral: var(--fault-coral);
     --resting-slate: var(--bench-slate);
     --waiting-blue: #4E7FB5;
     --line-paint: #F7F5EF;
     --kitchen-gold: var(--optic-yellow);
-    --shadow-card: 0 1px 6px rgba(21,32,28,0.1), 0 0 0 1px rgba(21,32,28,0.06);
-    --shadow-raised: 0 4px 20px rgba(21,32,28,0.15), 0 0 0 1px rgba(21,32,28,0.07);
+    --shadow-card: 0 2px 10px rgba(13,31,42,0.16), 0 0 0 1px rgba(13,31,42,0.12);
+    --shadow-raised: 0 8px 28px rgba(13,31,42,0.22), 0 0 0 1px rgba(13,31,42,0.14);
     --watermark-opacity: 0.03;
-    --net-glow: 0 0 14px 3px rgba(94,122,10,0.2), 0 0 5px 1px rgba(94,122,10,0.3);
+    --net-glow: 0 0 14px 3px rgba(8,145,168,0.2), 0 0 5px 1px rgba(8,145,168,0.3);
+    --bg-gradient: radial-gradient(circle at 50% 42%, var(--court-paint) 0%, var(--night-court) 42%);
   }
   :root {
     --font-display: 'Archivo Black', 'Arial Black', sans-serif;
@@ -110,7 +114,7 @@
   *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html { color-scheme: dark; }
   html[data-theme="light"] { color-scheme: light; }
-  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); overflow-x: hidden; transition: background var(--dur-base) var(--ease-settle), color var(--dur-base) var(--ease-settle); }
+  html, body { margin: 0; padding: 0; background: var(--bg-gradient); background-color: var(--bg); background-attachment: fixed; color: var(--ink); font-family: var(--font-body); overflow-x: hidden; transition: background var(--dur-base) var(--ease-settle), color var(--dur-base) var(--ease-settle); }
   h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; }
   a { color: inherit; }
   button { font-family: var(--font-body); cursor: pointer; touch-action: manipulation; }
@@ -247,7 +251,7 @@
   .container { max-width: 1200px; margin: 0 auto; padding: 20px 18px; position: relative; z-index: 1; }
 
   /* ── Court cards ── */
-  .courts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 16px; margin-bottom: 28px; justify-content: center; }
+  .courts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 28px; justify-content: center; }
   .court-card {
     background: var(--surface); border-radius: var(--radius);
     box-shadow: var(--shadow-card); border: 1px solid var(--border-card);
@@ -293,11 +297,13 @@
   .court-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 3; padding: 8px 13px; }
   .empty-court-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--bench-slate); opacity: 0.55; font-size: 11px; font-weight: 700; z-index: 3; text-transform: uppercase; letter-spacing: 0.1em; }
 
-  .paddle-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 82px; flex: 1 1 0; max-width: 106px; }
+  .paddle-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 112px; flex: 1 1 0; max-width: 138px; }
   .paddle-chip-shape { width: 100%; aspect-ratio: 48/64; position: relative; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.38)); }
   .paddle-chip-shape svg { width: 100%; height: 100%; display: block; color: var(--line-paint); }
-  .paddle-chip-name { position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%); width: 74%; font-size: 12px; font-weight: 800; color: var(--court-paint-deep); text-align: center; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
-  .paddle-chip-face { position: absolute; top: 3.125%; left: 8.333%; width: 83.333%; height: 75%; border-radius: 50%; overflow: hidden; background: var(--line-paint); display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1.5px rgba(0,0,0,0.15); }
+  /* Position/size/border-radius set per-instance as an inline style (see
+     paddleFaceHtml) — each of the 4 paddle head shapes needs its own face
+     geometry to fill nearly the whole head, so this only holds shared props. */
+  .paddle-chip-face { position: absolute; overflow: hidden; background: var(--line-paint); display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1.5px rgba(0,0,0,0.15); }
   .paddle-chip-face img { width: 100%; height: 100%; object-fit: cover; }
   .paddle-chip-face .initials { font-size: 17px; font-weight: 800; color: #fff; }
   .paddle-chip-name-out { font-size: 11px; font-weight: 700; color: var(--line-paint); text-align: center; line-height: 1.1; max-width: 78px; word-break: break-word; }
@@ -416,7 +422,7 @@
     .courts-grid { grid-template-columns: 1fr; gap: 10px; margin-bottom: 20px; }
     .queues { grid-template-columns: 1fr; gap: 10px; margin-bottom: 20px; }
     .court-diagram { aspect-ratio: 3/4; }
-    .paddle-chip { width: 66px; }
+    .paddle-chip { width: 84px; }
     .paddle-chip-name { font-size: 11px; }
     .message-row { flex-direction: column; }
     .message-row input[name="from"], .message-row input[name="msg"], .message-row button { width: 100%; }
@@ -570,19 +576,31 @@ const SessionAPI = (() => {
     const { error } = await supabaseClient.from('rest_requests').insert({ session_id: sessionId, player_id: playerId, status: 'pending' });
     if (error) throw error;
   }
+  // Coming BACK from resting is self-service — no host approval needed,
+  // unlike going TO resting (which the host confirms so it doesn't
+  // conflict with a live match). Fresh became_free_at keeps FIFO fairness
+  // in the queue, same as any other return-to-waiting transition.
+  async function returnFromRest(playerId) {
+    const { data: player, error: fetchErr } = await supabaseClient.from('players').select('status').eq('id', playerId).single();
+    if (fetchErr || !player) throw new Error('Player not found.');
+    if (player.status !== 'resting') throw new Error('This player is not currently resting.');
+    const { error } = await supabaseClient.from('players')
+      .update({ status: 'waiting', became_free_at: new Date().toISOString() }).eq('id', playerId);
+    if (error) throw error;
+  }
   async function getPreparedMatches(sessionId) {
     const { data, error } = await supabaseClient.from('prepared_matches')
       .select('*').eq('session_id', sessionId).eq('status', 'pending')
       .order('created_at', { ascending: true });
     if (error) {
-      const missingTable = error.code === '42P01' || /does not exist/i.test(error.message || '');
+      const missingTable = error.code === '42P01' || /does not exist|could not find the .* column/i.test(error.message || '');
       const rlsBlocked = error.code === '42501' || /row-level security|permission denied/i.test(error.message || '');
       if (missingTable || rlsBlocked) return [];
       throw error;
     }
     return data || [];
   }
-  return { getSession, getSessionByReferenceCode, getPlayers, getTeams, getCourts, getRecentMatches, sendMessage, requestRest, getPreparedMatches };
+  return { getSession, getSessionByReferenceCode, getPlayers, getTeams, getCourts, getRecentMatches, sendMessage, requestRest, returnFromRest, getPreparedMatches };
 })();
 
 // ============================================================
@@ -647,6 +665,12 @@ async function loadSession(sessionId) {
       return;
     }
     renderShell();
+    const dateEl = document.getElementById('sessionDateLabel');
+    if (dateEl && session.created_at) {
+      dateEl.textContent = new Date(session.created_at).toLocaleDateString('en-US', {
+        weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+      });
+    }
     await refreshAll();
     subscribeRealtime();
     startTimerLoop();
@@ -664,6 +688,7 @@ async function loadSession(sessionId) {
 // ============================================================
 function renderShell() {
   document.getElementById('mainContent').innerHTML = `
+    <div id="sessionDateLabel" style="text-align:center;font-size:12px;font-weight:700;color:var(--ink-muted);letter-spacing:.03em;margin:-4px 0 16px;"></div>
     <div id="sessionCompleteSection"></div>
     <div class="courts-grid" id="courtsGrid"></div>
     <div class="court-line-divider" role="separator"></div>
@@ -817,27 +842,81 @@ async function refreshAll() {
 function colorFromName(name){const s=String(name||'?');let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;return `hsl(${h},52%,42%)`;}
 function initialsFromName(name){const p=String(name||'').trim().split(/\s+/).filter(Boolean);if(!p.length)return '?';if(p.length===1)return p[0].slice(0,2).toUpperCase();return (p[0][0]+p[p.length-1][0]).toUpperCase();}
 let _paddleGripCounter = 0;
+
+// Four real pickleball paddle head shapes, each with its own outline and a
+// matching face-fill geometry so the photo/initials fill nearly the WHOLE
+// face regardless of which shape a player gets. Shape is picked once per
+// player (deterministic hash of their name) so it never flickers between
+// renders — same system as host.html, kept identical across both files.
+const PADDLE_SHAPES = {
+  widebody: {
+    head: `<rect x="1" y="0" width="46" height="50" rx="15"/>`,
+    face: { top: '4.7%', left: '8.3%', width: '83.3%', height: '68.75%', radius: '24%' },
+  },
+  hybrid: {
+    head: `<rect x="5" y="0" width="38" height="51" rx="13"/>`,
+    face: { top: '4.7%', left: '16.7%', width: '66.7%', height: '70.3%', radius: '23%' },
+  },
+  elongated: {
+    head: `<rect x="9" y="-1" width="30" height="53" rx="11"/>`,
+    face: { top: '4.7%', left: '25%', width: '50%', height: '73.4%', radius: '22%' },
+  },
+  oblong: {
+    head: `<path d="M24 1 C35 1,46 8,46 24 C46 40,38 51,24 51 C10 51,2 40,2 24 C2 8,13 1,24 1 Z"/>`,
+    face: { top: '4.7%', left: '10.4%', width: '79.2%', height: '73.4%', radius: '50%' },
+  },
+};
+function pickPaddleShape(name) {
+  const s = String(name || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 17 + s.charCodeAt(i)) % 97;
+  const keys = Object.keys(PADDLE_SHAPES);
+  return keys[h % keys.length];
+}
+function paddleSvg(shapeKey) {
+  const shape = PADDLE_SHAPES[shapeKey] || PADDLE_SHAPES.oblong;
+  const gid = `pg${_paddleGripCounter++}`;
+  return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <linearGradient id="${gid}-frame" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#0B6E7A"/>
+        <stop offset="45%" stop-color="#17B8C4"/>
+        <stop offset="100%" stop-color="#7CEAF0"/>
+      </linearGradient>
+      <linearGradient id="${gid}-grip" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#12838F"/>
+        <stop offset="100%" stop-color="#0A4B54"/>
+      </linearGradient>
+      <pattern id="${gid}-overgrip" width="4.2" height="4.2" patternUnits="userSpaceOnUse" patternTransform="rotate(58)">
+        <rect width="4.2" height="4.2" fill="transparent"/>
+        <rect width="4.2" height="2.1" fill="#0E5C66" fill-opacity="0.55"/>
+      </pattern>
+      <filter id="${gid}-glow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="1.1" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g fill="url(#${gid}-frame)" stroke="#BFF8FC" stroke-width="0.6" stroke-opacity="0.7" filter="url(#${gid}-glow)">
+      ${shape.head}
+    </g>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid}-grip)"/>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid}-overgrip)"/>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="none" stroke="#BFF8FC" stroke-opacity="0.4" stroke-width="0.5"/>
+  </svg>`;
+}
+function paddleFaceHtml(name, photoUrl, shapeKey) {
+  const shape = PADDLE_SHAPES[shapeKey] || PADDLE_SHAPES.oblong;
+  const f = shape.face;
+  const styleBase = `top:${f.top};left:${f.left};width:${f.width};height:${f.height};border-radius:${f.radius};`;
+  if (photoUrl) return `<div class="paddle-chip-face" style="${styleBase}"><img src="${photoUrl}" alt=""></div>`;
+  return `<div class="paddle-chip-face" style="${styleBase}background:${colorFromName(name)}"><span class="initials">${initialsFromName(name)}</span></div>`;
+}
 function paddleChip(player) {
   const name = typeof player === 'string' ? player : (player?.name || '—');
   const photo = typeof player === 'string' ? null : (player?.photo_url || null);
-  const face = photo
-    ? `<div class="paddle-chip-face"><img src="${photo}" alt=""></div>`
-    : `<div class="paddle-chip-face" style="background:${colorFromName(name)}"><span class="initials">${initialsFromName(name)}</span></div>`;
-  const gid = `pgrip${_paddleGripCounter++}`;
+  const shapeKey = pickPaddleShape(name);
   return `<div class="paddle-chip">
-    <div class="paddle-chip-shape">
-      <svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-          <pattern id="${gid}" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(52)">
-            <rect width="3.2" height="3.2" fill="currentColor"/>
-            <line x1="0" y1="0" x2="0" y2="3.2" stroke="#000" stroke-opacity="0.22" stroke-width="1.1"/>
-          </pattern>
-        </defs>
-        <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid})"/>
-        <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="none" stroke="#000" stroke-opacity="0.18" stroke-width="0.6"/>
-      </svg>
-      ${face}
-    </div>
+    <div class="paddle-chip-shape">${paddleSvg(shapeKey)}${paddleFaceHtml(name, photo, shapeKey)}</div>
     <span class="paddle-chip-name-out">${escapeHtml(name)}</span>
   </div>`;
 }
@@ -1205,7 +1284,13 @@ function renderQueues(players, teams, preparedMatches) {
   const expected = players.filter(p => p.status === 'expected');
 
   const restingItems = resting.length
-    ? `<div class="lane-paddle-grid">${resting.map(p => paddleChip(p)).join('')}</div>`
+    ? `<div class="lane-paddle-grid">${resting.map(p => `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+          ${paddleChip(p)}
+          <button onclick="handleReturnFromRest('${p.id}','${escapeHtml(p.name).replace(/'/g, "\\'")}')"
+            style="background:var(--surface-hover);border:1px solid var(--border-soft);color:var(--waiting-blue);font-size:10px;font-weight:800;padding:4px 9px;border-radius:999px;min-height:0;cursor:pointer;">↩ Back to Queue</button>
+        </div>
+      `).join('')}</div>`
     : `<div class="lane-empty">Nobody resting</div>`;
 
   const expectedItems = expected.length
@@ -1369,6 +1454,16 @@ async function handleRequestRest() {
   }
 }
 
+async function handleReturnFromRest(playerId, name) {
+  if (!confirm(`Ready to rejoin the queue, ${name}?`)) return;
+  try {
+    await SessionAPI.returnFromRest(playerId);
+    await refreshAll();
+  } catch (err) {
+    alert(err.message || 'Could not return to the queue — please try again.');
+  }
+}
+
 async function sendHostMessage() {
   const from = document.getElementById('msgFrom').value.trim();
   const msg  = document.getElementById('msgText').value.trim();
@@ -1519,7 +1614,7 @@ function buildReadOnlyGroupPlayoffs(){
     return s;
   }
 
-  const champSvg =buildTree('winner','🏆 CHAMPIONSHIP','#D7F23D');
+  const champSvg =buildTree('winner','🏆 CHAMPIONSHIP','#2DD4E8');
   const bronzeSvg=buildTree('loser', '🥉 BATTLE FOR 3RD','#CD8E5A');
 
   return `<div class="card" style="margin-bottom:16px">
