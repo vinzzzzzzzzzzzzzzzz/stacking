@@ -44,8 +44,8 @@
     /* Semantic aliases — what the old CSS referenced */
     --bg: var(--night-court);
     --surface: #0F1D28;
-    --surface-raised: #152838;
-    --surface-hover: #1C3244;
+    --surface-raised: #17304A;
+    --surface-hover: #1F3D5C;
     --ink: var(--line-tape);
     --ink-muted: #7B96A3;
     --border-soft: rgba(240,251,252,0.07);
@@ -70,6 +70,8 @@
     --watermark-opacity: 0.035;
     /* Net glow: narrow, on the net line only, not a whole-court radial */
     --net-glow: 0 0 18px 4px rgba(45,212,232,0.18), 0 0 6px 1px rgba(45,212,232,0.28);
+    /* Round, centered gradient — not one-sided/top-anchored */
+    --bg-gradient: radial-gradient(circle at 50% 42%, var(--court-paint-mid) 0%, var(--night-court) 68%);
   }
   html[data-theme="light"] {
     --night-court: #EAF3F7;
@@ -108,6 +110,10 @@
     --drag-handle: rgba(13,31,42,0.14);
     --watermark-opacity: 0.03;
     --net-glow: 0 0 14px 3px rgba(8,145,168,0.2), 0 0 5px 1px rgba(8,145,168,0.3);
+    /* Light-dominant: the navy accent stays clearly visible but contained
+       to a smaller inner radius, so most of the canvas reads as the light
+       tone — not a flat plain white, but not dark-mode-heavy either */
+    --bg-gradient: radial-gradient(circle at 50% 42%, var(--court-paint) 0%, var(--night-court) 42%);
   }
   :root {
     --font-display: 'Archivo Black', 'Arial Black', sans-serif;
@@ -128,7 +134,7 @@
   *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html { color-scheme: dark; }
   html[data-theme="light"] { color-scheme: light; }
-  html, body { margin: 0; padding: 0; background: radial-gradient(ellipse 120% 80% at 50% -10%, var(--court-paint-mid) 0%, var(--bg) 55%); background-color: var(--bg); background-attachment: fixed; color: var(--ink); font-family: var(--font-body); overflow-x: hidden; transition: background var(--dur-base) var(--ease-settle), color var(--dur-base) var(--ease-settle); }
+  html, body { margin: 0; padding: 0; background: var(--bg-gradient); background-color: var(--bg); background-attachment: fixed; color: var(--ink); font-family: var(--font-body); overflow-x: hidden; transition: background var(--dur-base) var(--ease-settle), color var(--dur-base) var(--ease-settle); }
   h1, h2, h3, .display { font-family: var(--font-display); letter-spacing: -0.01em; text-transform: uppercase; }
   a { color: inherit; }
   button { font-family: var(--font-body); cursor: pointer; touch-action: manipulation; }
@@ -488,18 +494,19 @@
   .court-host-side { flex: 1; display: flex; align-items: center; justify-content: space-evenly; position: relative; z-index: 3; }
   /* Idle court message: bench-slate — calm, not decorated */
   .court-host-empty-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--bench-slate); opacity: 0.6; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; z-index: 3; text-transform: uppercase; }
-  .court-host-paddle { display: flex; flex-direction: column; align-items: center; width: 58px; gap: 3px; }
+  .court-host-paddle { display: flex; flex-direction: column; align-items: center; width: 72px; gap: 3px; }
   .court-host-paddle-shape { width: 100%; aspect-ratio: 48/64; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.4)); position: relative; }
   .court-host-paddle-shape svg { width: 100%; height: 100%; color: var(--line-paint); }
   /* Legacy name-inside-paddle (kept for fallback safety, not used when photo layout active) */
   .court-host-paddle-name { position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%); width: 74%; font-size: 10px; font-weight: 800; color: var(--court-paint-deep); text-align: center; line-height: 1.15; }
   /* Photo-as-paddle-face: the circular image sits in the paddle head */
   /* Photo-as-paddle-face: sized to EXACTLY match the paddle SVG's ellipse
-     bounding box (cx24 cy26 rx20 ry24 in a 48x64 viewBox → left 8.33%,
-     top 3.125%, width 83.33%, height 75%) so the photo fills the whole
-     paddle head with zero white ring showing around the edge. */
-  .paddle-face { position: absolute; top: 3.125%; left: 8.333%;
-    width: 83.333%; height: 75%; border-radius: 50%; overflow: hidden;
+     bounding box. Position/size/border-radius are now set per-instance as
+     an inline style (see paddleFaceHtml), since each of the 4 paddle head
+     shapes (widebody/hybrid/elongated/oblong) needs its own face geometry
+     to fill nearly the whole head — this class only holds what's shared
+     across all of them. */
+  .paddle-face { position: absolute; overflow: hidden;
     background: var(--line-paint); display: flex; align-items: center; justify-content: center;
     box-shadow: inset 0 0 0 1.5px rgba(0,0,0,0.15); }
   .paddle-face img { width: 100%; height: 100%; object-fit: cover; }
@@ -3466,8 +3473,9 @@ function manualCardHtml(title, colorVar, list, verb) {
 // (no name-underneath, since these rows already show the name separately).
 function smallPaddleHtml(p) {
   const name = p?.name || '—';
+  const shapeKey = pickPaddleShape(name);
   return `<div style="width:30px;height:40px;flex-shrink:0;position:relative;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.35));">
-    ${paddleSvg()}${paddleFaceHtml(name, p?.photo_url)}
+    ${paddleSvg(shapeKey)}${paddleFaceHtml(name, p?.photo_url, shapeKey)}
   </div>`;
 }
 
@@ -3916,8 +3924,40 @@ let _paddleGripCounter = 0;
 // grip. Keeps the EXACT SAME 48×64 coordinate space as before, so
 // .paddle-face's percentage-based positioning still lines up perfectly —
 // only what's drawn changed, not the geometry the photo/initials sit in.
-function paddleSvg() {
-  const gid = `pg${_paddleGripCounter++}`; // unique gradient/glow ids per call
+// Four real pickleball paddle head shapes, each with its own outline and a
+// matching face-fill geometry so the photo/initials fill nearly the WHOLE
+// face regardless of which shape a player gets — only a thin frame shows.
+// Shape is picked once per player (deterministic hash of their name, same
+// technique as colorFromName) so it never flickers between renders.
+const PADDLE_SHAPES = {
+  widebody: {
+    head: `<rect x="1" y="0" width="46" height="50" rx="15"/>`,
+    face: { top: '4.7%', left: '8.3%', width: '83.3%', height: '68.75%', radius: '24%' },
+  },
+  hybrid: {
+    head: `<rect x="5" y="0" width="38" height="51" rx="13"/>`,
+    face: { top: '4.7%', left: '16.7%', width: '66.7%', height: '70.3%', radius: '23%' },
+  },
+  elongated: {
+    head: `<rect x="9" y="-1" width="30" height="53" rx="11"/>`,
+    face: { top: '4.7%', left: '25%', width: '50%', height: '73.4%', radius: '22%' },
+  },
+  oblong: {
+    head: `<path d="M24 1 C35 1,46 8,46 24 C46 40,38 51,24 51 C10 51,2 40,2 24 C2 8,13 1,24 1 Z"/>`,
+    face: { top: '4.7%', left: '10.4%', width: '79.2%', height: '73.4%', radius: '50%' },
+  },
+};
+function pickPaddleShape(name) {
+  const s = String(name || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 17 + s.charCodeAt(i)) % 97;
+  const keys = Object.keys(PADDLE_SHAPES);
+  return keys[h % keys.length];
+}
+
+function paddleSvg(shapeKey) {
+  const shape = PADDLE_SHAPES[shapeKey] || PADDLE_SHAPES.oblong;
+  const gid = `pg${_paddleGripCounter++}`; // unique gradient/pattern/glow ids per call
   return `<svg viewBox="0 0 48 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
       <linearGradient id="${gid}-frame" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -3926,32 +3966,30 @@ function paddleSvg() {
         <stop offset="100%" stop-color="#7CEAF0"/>
       </linearGradient>
       <linearGradient id="${gid}-grip" x1="0%" y1="0%" x2="0%" y2="100%">
-        <stop offset="0%" stop-color="#0B6E7A"/>
+        <stop offset="0%" stop-color="#12838F"/>
         <stop offset="100%" stop-color="#0A4B54"/>
       </linearGradient>
+      <!-- Overgrip spiral-wrap texture — diagonal ridge pattern, like a
+           real grip tape wound around the handle -->
+      <pattern id="${gid}-overgrip" width="4.2" height="4.2" patternUnits="userSpaceOnUse" patternTransform="rotate(58)">
+        <rect width="4.2" height="4.2" fill="transparent"/>
+        <rect width="4.2" height="2.1" fill="#0E5C66" fill-opacity="0.55"/>
+      </pattern>
       <filter id="${gid}-glow" x="-50%" y="-50%" width="200%" height="200%">
         <feGaussianBlur stdDeviation="1.1" result="b"/>
         <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
       </filter>
     </defs>
 
-    <!-- Head: rounded, slightly tapered frame matching the logo's silhouette -->
-    <path d="M24 1
-      C 35 1, 46 8, 46 24
-      C 46 40, 38 51, 24 51
-      C 10 51, 2 40, 2 24
-      C 2 8, 13 1, 24 1 Z"
-      fill="url(#${gid}-frame)" stroke="#BFF8FC" stroke-width="0.6" stroke-opacity="0.7" filter="url(#${gid}-glow)"/>
+    <!-- Head — one of 4 real paddle shapes (widebody/hybrid/elongated/oblong) -->
+    <g fill="url(#${gid}-frame)" stroke="#BFF8FC" stroke-width="0.6" stroke-opacity="0.7" filter="url(#${gid}-glow)">
+      ${shape.head}
+    </g>
 
-    <!-- Thin ring accents echoing the logo's target motif, sitting just
-         outside where the face circle will be layered on top -->
-    <circle cx="24" cy="24" r="22.5" fill="none" stroke="#D8FBFD" stroke-opacity="0.35" stroke-width="0.5"/>
-    <circle cx="24" cy="24" r="19.5" fill="none" stroke="#D8FBFD" stroke-opacity="0.22" stroke-width="0.5"/>
-
-    <!-- Grip -->
-    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid}-grip)" stroke="#BFF8FC" stroke-opacity="0.4" stroke-width="0.5"/>
-    <text x="24" y="61.5" text-anchor="middle" font-size="3.6" font-weight="800" fill="#D8FBFD" fill-opacity="0.85"
-      font-family="Arial,sans-serif" letter-spacing="0.1">iStackyyy</text>
+    <!-- Grip: base gradient + overgrip spiral texture on top -->
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid}-grip)"/>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="url(#${gid}-overgrip)"/>
+    <rect x="18.5" y="45" width="11" height="19" rx="3.5" fill="none" stroke="#BFF8FC" stroke-opacity="0.4" stroke-width="0.5"/>
   </svg>`;
 }
 
@@ -3973,16 +4011,22 @@ function initialsFromName(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 // Face for a paddle: photo if present, else initials on name-color circle.
-function paddleFaceHtml(name, photoUrl) {
-  if (photoUrl) return `<div class="paddle-face"><img src="${photoUrl}" alt=""></div>`;
-  return `<div class="paddle-face" style="background:${colorFromName(name)}"><span class="initials">${initialsFromName(name)}</span></div>`;
+// Sized/shaped per the paddle's own head shape so it fills nearly the
+// whole face regardless of which of the 4 shapes this player got.
+function paddleFaceHtml(name, photoUrl, shapeKey) {
+  const shape = PADDLE_SHAPES[shapeKey] || PADDLE_SHAPES.oblong;
+  const f = shape.face;
+  const styleBase = `top:${f.top};left:${f.left};width:${f.width};height:${f.height};border-radius:${f.radius};`;
+  if (photoUrl) return `<div class="paddle-face" style="${styleBase}"><img src="${photoUrl}" alt=""></div>`;
+  return `<div class="paddle-face" style="${styleBase}background:${colorFromName(name)}"><span class="initials">${initialsFromName(name)}</span></div>`;
 }
 // Paddle chip with photo-face + name OUTSIDE below it. Accepts a player object.
 function paddleChipHost(player) {
   const name = typeof player === 'string' ? player : (player?.name || '—');
   const photo = typeof player === 'string' ? null : (player?.photo_url || null);
+  const shapeKey = pickPaddleShape(name);
   return `<div class="court-host-paddle">
-    <div class="court-host-paddle-shape">${paddleSvg()}${paddleFaceHtml(name, photo)}</div>
+    <div class="court-host-paddle-shape">${paddleSvg(shapeKey)}${paddleFaceHtml(name, photo, shapeKey)}</div>
     <span class="paddle-name-out">${escapeHtml(name)}</span>
   </div>`;
 }
