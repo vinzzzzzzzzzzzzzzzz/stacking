@@ -48,8 +48,8 @@
     --surface-hover: #1F3D5C;
     --ink: var(--line-tape);
     --ink-muted: #7B96A3;
-    --border-soft: rgba(240,251,252,0.07);
-    --border-card: rgba(240,251,252,0.05);
+    --border-soft: rgba(240,251,252,0.14);
+    --border-card: rgba(240,251,252,0.12);
     --court-green: var(--court-paint);
     --court-green-dark: var(--court-paint-deep);
     --court-green-mid: var(--court-paint-mid);
@@ -62,8 +62,8 @@
     --waiting-blue: #5FA3DE;
     --line-paint: var(--line-tape);
     --kitchen-gold: var(--optic-yellow); /* alias kept for JS-injected markup */
-    --shadow-card: 0 1px 8px rgba(0,0,0,0.45), 0 0 0 1px rgba(240,251,252,0.04);
-    --shadow-raised: 0 6px 28px rgba(0,0,0,0.55), 0 0 0 1px rgba(240,251,252,0.06);
+    --shadow-card: 0 2px 10px rgba(0,0,0,0.5), 0 0 0 1px rgba(240,251,252,0.09);
+    --shadow-raised: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(240,251,252,0.12);
     --shadow-modal: 0 -2px 32px rgba(0,0,0,0.6);
     --drag-handle: rgba(240,251,252,0.18);
     /* Watermark: 3-4% per brief */
@@ -74,7 +74,7 @@
     --bg-gradient: radial-gradient(circle at 50% 42%, var(--court-paint-mid) 0%, var(--night-court) 68%);
   }
   html[data-theme="light"] {
-    --night-court: #EAF3F7;
+    --night-court: #EDF7FB;
     --court-paint: #123A5C;
     --court-paint-deep: #081D30;
     --court-paint-mid: #0F2E4A;
@@ -85,13 +85,13 @@
     --fault-coral: #D9523A;
     --kitchen-blue: #BEE8F2;
     --bg: var(--night-court);
-    --surface: #F5FAFC;
+    --surface: #FBFEFF;
     --surface-raised: #FFFFFF;
-    --surface-hover: #E3EFF4;
+    --surface-hover: #E9F4F8;
     --ink: var(--line-tape);
     --ink-muted: #4C6875;
-    --border-soft: rgba(13,31,42,0.09);
-    --border-card: rgba(13,31,42,0.07);
+    --border-soft: rgba(13,31,42,0.16);
+    --border-card: rgba(13,31,42,0.14);
     --court-green: var(--court-paint);
     --court-green-dark: var(--court-paint-deep);
     --court-green-mid: var(--court-paint-mid);
@@ -104,8 +104,8 @@
     --waiting-blue: #4E7FB5;
     --line-paint: #F7F5EF;
     --kitchen-gold: var(--optic-yellow);
-    --shadow-card: 0 1px 6px rgba(13,31,42,0.1), 0 0 0 1px rgba(13,31,42,0.06);
-    --shadow-raised: 0 4px 20px rgba(13,31,42,0.15), 0 0 0 1px rgba(13,31,42,0.07);
+    --shadow-card: 0 2px 10px rgba(13,31,42,0.16), 0 0 0 1px rgba(13,31,42,0.12);
+    --shadow-raised: 0 8px 28px rgba(13,31,42,0.22), 0 0 0 1px rgba(13,31,42,0.14);
     --shadow-modal: 0 -2px 32px rgba(13,31,42,0.18);
     --drag-handle: rgba(13,31,42,0.14);
     --watermark-opacity: 0.03;
@@ -113,7 +113,7 @@
     /* Light-dominant: the navy accent stays clearly visible but contained
        to a smaller inner radius, so most of the canvas reads as the light
        tone — not a flat plain white, but not dark-mode-heavy either */
-    --bg-gradient: radial-gradient(circle at 50% 42%, var(--court-paint) 0%, var(--night-court) 42%);
+    --bg-gradient: radial-gradient(circle at 50% 32%, #D6EEF6 0%, var(--night-court) 58%);
   }
   :root {
     --font-display: 'Archivo Black', 'Arial Black', sans-serif;
@@ -284,7 +284,7 @@
   /* ── Topbar ── */
   .topbar {
     background: var(--court-paint-deep);
-    border-bottom: 1px solid rgba(242,244,240,0.07);
+    border-bottom: 1px solid rgba(240,251,252,0.07);
     color: var(--line-paint);
     padding: 13px 20px;
     display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
@@ -295,18 +295,18 @@
   .brand-paddle { width: 17px; height: 23px; color: var(--line-paint); opacity: 0.85; flex-shrink: 0; }
   .brand .display { font-size: 18px; letter-spacing: 0.01em; color: var(--line-paint); }
   /* Dot: court-paint-mid — a subtle marker, not a 4th optic-yellow use */
-  .brand .dot { color: rgba(215,242,61,0.55); }
+  .brand .dot { color: rgba(45,212,232,0.55); }
   .topbar-right-wrap { display: flex; align-items: center; gap: 10px; }
   .topbar-right { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  .topbar-right button { background: transparent; border: 1px solid rgba(242,244,240,0.2); color: var(--line-paint); padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; min-height: 36px; }
+  .topbar-right button { background: transparent; border: 1px solid rgba(240,251,252,0.2); color: var(--line-paint); padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; min-height: 36px; }
   .theme-toggle {
-    background: rgba(242,244,240,0.07); border: 1px solid rgba(242,244,240,0.1);
+    background: rgba(240,251,252,0.07); border: 1px solid rgba(240,251,252,0.1);
     border-radius: 999px; width: 36px; height: 36px;
     display: flex; align-items: center; justify-content: center;
     transition: transform var(--dur-fast) var(--ease-bounce), background var(--dur-fast) var(--ease-settle);
     flex-shrink: 0;
   }
-  .theme-toggle:hover { transform: scale(1.1) rotate(-12deg); background: rgba(242,244,240,0.12); }
+  .theme-toggle:hover { transform: scale(1.1) rotate(-12deg); background: rgba(240,251,252,0.12); }
   .theme-toggle:active { transform: scale(0.92); }
   .theme-toggle svg { width: 16px; height: 16px; color: var(--line-paint); opacity: 0.7; }
 
@@ -354,21 +354,21 @@
   /* ── Share card ── */
   .share-card {
     background: var(--court-paint-mid);
-    border: 1px solid rgba(242,244,240,0.09);
+    border: 1px solid rgba(240,251,252,0.09);
     border-radius: var(--radius); padding: 15px 18px; margin-bottom: 14px;
     display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
     box-shadow: var(--shadow-card);
   }
   .share-card-code { display: flex; flex-direction: column; gap: 3px; }
-  .ref-code-label { font-size: 9px; text-transform: uppercase; font-weight: 700; color: rgba(242,244,240,0.5); letter-spacing: 0.09em; }
+  .ref-code-label { font-size: 9px; text-transform: uppercase; font-weight: 700; color: rgba(240,251,252,0.5); letter-spacing: 0.09em; }
   /* Session code: line-tape white — informational, not urgent */
-  .ref-code-big { font-size: 20px; font-weight: 800; color: rgba(242,244,240,0.92); letter-spacing: 0.09em; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .ref-code-big { font-size: 20px; font-weight: 800; color: rgba(240,251,252,0.92); letter-spacing: 0.09em; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   .share-card-link { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 180px; }
-  .share-card-link-label { font-size: 9px; text-transform: uppercase; font-weight: 700; color: rgba(242,244,240,0.5); letter-spacing: 0.09em; }
-  .share-card-url { font-size: 11px; color: rgba(242,244,240,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; font-family: var(--font-mono); }
+  .share-card-link-label { font-size: 9px; text-transform: uppercase; font-weight: 700; color: rgba(240,251,252,0.5); letter-spacing: 0.09em; }
+  .share-card-url { font-size: 11px; color: rgba(240,251,252,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; font-family: var(--font-mono); }
   .share-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .share-btn { background: rgba(242,244,240,0.09); color: rgba(242,244,240,0.88); border: 1px solid rgba(242,244,240,0.16); padding: 8px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; white-space: nowrap; min-height: 38px; }
-  .share-btn:active { background: rgba(242,244,240,0.16); }
+  .share-btn { background: rgba(240,251,252,0.09); color: rgba(240,251,252,0.88); border: 1px solid rgba(240,251,252,0.16); padding: 8px 14px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 700; white-space: nowrap; min-height: 38px; }
+  .share-btn:active { background: rgba(240,251,252,0.16); }
   /* Copy for Chat — court-paint fill (strong CTA, not optic-yellow) */
   .share-btn-primary { background: var(--court-paint); color: white; border-color: var(--court-paint); }
 
@@ -388,7 +388,7 @@
     transition: color var(--dur-fast) var(--ease-settle), background var(--dur-fast) var(--ease-settle);
     flex: 1;
   }
-  .tab-btn.active { background: var(--court-paint); color: rgba(242,244,240,0.95); }
+  .tab-btn.active { background: var(--court-paint); color: rgba(240,251,252,0.95); }
   .inbox-badge {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 17px; height: 17px; padding: 0 4px; margin-left: 4px;
@@ -426,7 +426,7 @@
   .arrive-btn { background: var(--winner-green); color: white; }
   .rest-btn   { background: var(--bench-slate); color: white; }
   .back-btn   { background: var(--waiting-blue); color: white; }
-  .edit-btn   { background: transparent; color: var(--optic-yellow); border: 1px solid rgba(215,242,61,0.35) !important; }
+  .edit-btn   { background: transparent; color: var(--optic-yellow); border: 1px solid rgba(45,212,232,0.35) !important; }
   .remove-btn { background: none; border: none; color: var(--fault-coral); font-size: 12px; font-weight: 700; min-height: 36px; padding: 5px 8px; cursor: pointer; }
   .roster-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   @media (max-width: 768px) {
@@ -450,7 +450,7 @@
     background: var(--court-paint-deep); color: var(--line-paint);
     padding: 9px 13px; font-weight: 700; font-size: 13px;
     display: flex; justify-content: space-between; align-items: center;
-    border-bottom: 1px solid rgba(242,244,240,0.06);
+    border-bottom: 1px solid rgba(240,251,252,0.06);
   }
   .court-host-label .num { font-family: var(--font-display); font-size: 12px; letter-spacing: 0.06em; }
 
@@ -528,13 +528,13 @@
   @keyframes mpCardInHost { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .mp-card.partial { opacity: 0.88; }
   .mp-card-label { background: rgba(0,0,0,0.22); color: var(--line-paint); font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; }
-  .mp-card-label .mp-badge { background: rgba(215,242,61,0.18); color: var(--optic-yellow); padding: 2px 7px; border-radius: 999px; font-weight: 800; font-size: 9px; }
+  .mp-card-label .mp-badge { background: rgba(45,212,232,0.18); color: var(--optic-yellow); padding: 2px 7px; border-radius: 999px; font-weight: 800; font-size: 9px; }
   .mp-card-label .mp-badge.result-won  { background: rgba(78,203,126,0.22); color: var(--winner-green); }
   .mp-card-label .mp-badge.result-lost { background: rgba(255,122,92,0.18); color: var(--fault-coral); }
   .mp-teams { padding: 14px 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
   .mp-team-row { display: flex; gap: 10px; justify-content: center; align-items: flex-start; width: 100%; }
   .mp-vs { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--optic-yellow); opacity: 0.85; }
-  .mp-placeholder { flex: 1; text-align: center; padding: 14px 8px; border: 1.5px dashed rgba(242,244,240,0.25); border-radius: var(--radius-sm); color: var(--line-paint); opacity: 0.65; font-size: 11px; font-weight: 700; }
+  .mp-placeholder { flex: 1; text-align: center; padding: 14px 8px; border: 1.5px dashed rgba(240,251,252,0.25); border-radius: var(--radius-sm); color: var(--line-paint); opacity: 0.65; font-size: 11px; font-weight: 700; }
   @media (max-width: 480px) { .mp-nav-btn { width: 36px; height: 36px; font-size: 17px; } }
   .lane-header { padding: 10px 15px; font-family: var(--font-display); font-size: 11px; letter-spacing: 0.07em; color: white; display: flex; justify-content: space-between; align-items: center; }
   .lane-header .count { font-family: var(--font-mono); opacity: 0.85; font-variant-numeric: tabular-nums; }
@@ -2442,10 +2442,10 @@ function renderTopbarHost() {
   const el = document.getElementById('topbarRight');
   if (!el || !currentHost) return;
   el.innerHTML = `
-    <span style="font-size:12px;color:rgba(242,244,240,0.65);font-weight:600;">
+    <span style="font-size:12px;color:rgba(240,251,252,0.65);font-weight:600;">
       ${escapeHtml(currentHost.name)}
     </span>
-    <button onclick="openProfileModal()" style="background:rgba(242,244,240,0.08);border:1px solid rgba(242,244,240,0.15);color:rgba(242,244,240,0.85);padding:6px 12px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:34px;">
+    <button onclick="openProfileModal()" style="background:rgba(240,251,252,0.08);border:1px solid rgba(240,251,252,0.15);color:rgba(240,251,252,0.85);padding:6px 12px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:34px;">
       👤 Profile
     </button>
     <button onclick="hostLogout()" style="background:rgba(255,122,92,0.18);border:1px solid rgba(255,122,92,0.4);color:var(--fault-coral);padding:6px 12px;border-radius:var(--radius-sm);font-size:12px;font-weight:700;min-height:34px;">
@@ -2622,7 +2622,7 @@ const CATEGORY_LABELS = { novice: 'Novice', beginner: 'Beginner', intermediate: 
 function sessionTypeBadge(s) {
   if (s.session_type === 'tournament') {
     const parts = [s.category ? CATEGORY_LABELS[s.category] : null, s.division ? DIVISION_SHORT[s.division] : null].filter(Boolean);
-    return `<span style="font-size:10px;background:rgba(215,242,61,0.18);color:var(--optic-yellow);padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;letter-spacing:0.04em;">TOURNAMENT${parts.length ? ' · ' + parts.join(' · ') : ''}</span>`;
+    return `<span style="font-size:10px;background:rgba(45,212,232,0.18);color:var(--optic-yellow);padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;letter-spacing:0.04em;">TOURNAMENT${parts.length ? ' · ' + parts.join(' · ') : ''}</span>`;
   }
   return `<span style="font-size:10px;background:rgba(111,168,224,0.18);color:var(--waiting-blue);padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;letter-spacing:0.04em;">OPEN PLAY</span>`;
 }
@@ -2657,7 +2657,7 @@ async function renderSessionList() {
           </div>
           <div class="session-actions">
             ${s.session_type === 'tournament'
-              ? `<a href="tournament.html?session=${s.id}" style="background:rgba(215,242,61,0.15);color:var(--optic-yellow);border:1px solid rgba(215,242,61,0.3);padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;min-height:40px;">🏆 Manage</a>`
+              ? `<a href="tournament.html?session=${s.id}" style="background:rgba(45,212,232,0.15);color:var(--optic-yellow);border:1px solid rgba(45,212,232,0.3);padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;min-height:40px;">🏆 Manage</a>`
               : `<button style="background:var(--court-green);color:white;border:none;padding:8px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;min-height:40px;" onclick="openSession('${s.id}')">Open</button>`}
             <button onclick="handleFinishFromList('${s.id}','${escapeHtml(s.name)}')" style="background:var(--surface-raised);color:var(--ink);border:1px solid var(--border-soft);padding:8px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Finish session">✓ Finish</button>
             <button onclick="promptDeleteSession('${s.id}','${escapeHtml(s.name)}')" style="background:transparent;border:1px solid var(--fault-coral);color:var(--fault-coral);padding:7px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;" title="Delete permanently">🗑</button>
@@ -2791,7 +2791,7 @@ function selectNewSessionType(type) {
     tourFields.style.display = 'none';
     document.getElementById('newName').value = 'Open Play';
   } else {
-    tourBtn.style.background = 'rgba(215,242,61,0.12)';
+    tourBtn.style.background = 'rgba(45,212,232,0.12)';
     tourBtn.style.borderColor = 'var(--optic-yellow)';
     tourBtn.style.color = 'var(--optic-yellow)';
     openBtn.style.background = 'transparent';
@@ -3306,7 +3306,7 @@ async function renderSwapModal({ title, teamA, teamB, isLive }) {
   const rowsFor = team => (team.player_ids || []).map(pid => `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--surface-hover);border-radius:var(--radius-sm);margin-bottom:6px;">
       <span style="font-weight:700;font-size:13px;">${escapeHtml(byId(pid).name)}</span>
-      <button onclick="startSwapFor('${team.id}','${pid}',${isLive})" style="background:rgba(215,242,61,0.12);border:1px solid rgba(215,242,61,0.35);color:var(--optic-yellow);font-size:11px;font-weight:800;padding:5px 10px;border-radius:var(--radius-sm);min-height:0;cursor:pointer;">Swap Out</button>
+      <button onclick="startSwapFor('${team.id}','${pid}',${isLive})" style="background:rgba(45,212,232,0.12);border:1px solid rgba(45,212,232,0.35);color:var(--optic-yellow);font-size:11px;font-weight:800;padding:5px 10px;border-radius:var(--radius-sm);min-height:0;cursor:pointer;">Swap Out</button>
     </div>`).join('');
 
   document.body.insertAdjacentHTML('beforeend', `
@@ -3493,7 +3493,7 @@ function manualPlayerRowHtml(p, verb) {
   return `
     <div class="manual-player-row" data-id="${p.id}" onclick="toggleManualSelect('${p.id}')"
       style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:4px;
-        border:1.5px solid ${selected ? 'var(--optic-yellow)' : 'transparent'};background:${selected ? 'rgba(215,242,61,0.1)' : 'var(--surface-hover)'};">
+        border:1.5px solid ${selected ? 'var(--optic-yellow)' : 'transparent'};background:${selected ? 'rgba(45,212,232,0.1)' : 'var(--surface-hover)'};">
       ${smallPaddleHtml(p)}
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:6px;">
@@ -3683,13 +3683,13 @@ async function rosterTabHtml() {
     </div>
 
     ${activeSession.open_play_mode === 'manual' ? `
-    <div class="card" style="border:1px solid rgba(215,242,61,0.2);">
+    <div class="card" style="border:1px solid rgba(45,212,232,0.2);">
       <h2 style="margin:0 0 4px;">🎛 Semi-Automated Mode</h2>
       <p style="font-size:12px;color:var(--resting-slate);margin:0;">
         This session builds every match by hand — mark players Arrived here, then head to the <strong>Board</strong> tab to place them into matches from the Winning / Losing / Resting / Late Arrivals cards.
       </p>
     </div>` : `
-    <div class="card" style="border:1px solid rgba(215,242,61,0.2);">
+    <div class="card" style="border:1px solid rgba(45,212,232,0.2);">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
         <div>
           <h2 style="margin:0 0 4px;">🔀 Start Queuing</h2>
@@ -4103,7 +4103,7 @@ function renderCourtDiagramCard(court, players) {
     <div class="court-host-card ${motionClass}${isActive ? ' court-active' : ''}" onclick="${isActive ? `handleMarkFinished('${court.id}')` : ''}">
       <div class="court-host-label">
         <span class="num">Court ${court.court_number}</span>
-        ${isActive ? `<button onclick="event.stopPropagation();openCourtSwapModal('${court.id}')" style="background:rgba(215,242,61,0.12);border:1px solid rgba(215,242,61,0.35);color:var(--optic-yellow);font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;min-height:0;cursor:pointer;">🔄 Swap</button>` : ''}
+        ${isActive ? `<button onclick="event.stopPropagation();openCourtSwapModal('${court.id}')" style="background:rgba(45,212,232,0.12);border:1px solid rgba(45,212,232,0.35);color:var(--optic-yellow);font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;min-height:0;cursor:pointer;">🔄 Swap</button>` : ''}
         <span class="court-host-timer ${isActive ? '' : 'idle'}" data-start="${court.game_started_at || ''}" id="hostTimer-${court.id}">${isActive ? '00:00' : 'OPEN'}</span>
       </div>
       <div class="court-host-diagram">
@@ -4855,7 +4855,7 @@ async function teamsAndBracketsView() {
 
     <!-- ══ INTER-BRACKET FINALS ══ -->
     ${brackets.length >= 2 ? `
-    <div class="card" style="border:1px solid rgba(215,242,61,0.25);">
+    <div class="card" style="border:1px solid rgba(45,212,232,0.25);">
       <h2 style="margin:0 0 6px;">🏅 Finals — ${brackets.map(b=>escapeHtml(b.name)).join(' vs ')}</h2>
       <p style="font-size:12px;color:var(--bench-slate);margin:0 0 12px;">
         Winners of each bracket meet here. Complete all bracket matches first to unlock.
