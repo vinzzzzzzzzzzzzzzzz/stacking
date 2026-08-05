@@ -1487,23 +1487,38 @@ const SessionAPI = (() => {
   // one value (resting/left) — never left dangling at 'playing' while
   // also not actually on any team, which is the core invariant this
   // whole feature exists to protect.
-  async function swapPlayerOnTeam(teamId, oldPlayerId, newPlayerId, departingDisposition) {
+  // incomingSource describes where the incoming player is coming FROM:
+  //   { type: 'waiting' }                     — genuinely free
+  //   { type: 'resting' }                      — currently resting
+  //   { type: 'queued', teamId: <team uuid> }  — sitting in an Up Next match
+  // For 'queued', this is a TRUE trade: the departing player takes the
+  // incoming player's spot in that queued match (not sent to rest/left) —
+  // touches both teams so nobody ever ends up on two teams at once, or on
+  // none. For 'waiting'/'resting', departingDisposition (rest/left) still
+  // controls where the departing player goes, same as before.
+  async function swapPlayerOnTeam(teamId, oldPlayerId, newPlayerId, departingDisposition, incomingSource) {
     const { data: team, error: teamErr } = await supabaseClient.from('teams').select('*').eq('id', teamId).single();
     if (teamErr || !team) throw new Error('Team not found.');
     if (!team.player_ids.includes(oldPlayerId)) throw new Error('That player is not on this team.');
 
     const { data: incoming, error: pErr } = await supabaseClient.from('players').select('*').eq('id', newPlayerId).single();
     if (pErr || !incoming) throw new Error('Substitute player not found.');
-    if (incoming.status === 'playing') throw new Error('That player is already on a court.');
+    if (incoming.status === 'playing') throw new Error('That player is already on a court — can\'t swap two players who are both currently playing.');
 
     const newPlayerIds = team.player_ids.map(id => id === oldPlayerId ? newPlayerId : id);
     const { error: updErr } = await supabaseClient.from('teams').update({ player_ids: newPlayerIds }).eq('id', teamId);
     if (updErr) throw updErr;
 
-    // Departed player: exactly one clean status, never 'playing' anymore
-    // and never left without a home. 'left' matches removePlayer's
-    // existing mid-match pattern (flag only, no other side effects).
-    if (departingDisposition === 'rest') {
+    if (incomingSource?.type === 'queued' && incomingSource.teamId) {
+      // True trade: departing player takes the incoming player's spot in
+      // the queued team they came from.
+      const { data: queuedTeam, error: qErr } = await supabaseClient.from('teams').select('*').eq('id', incomingSource.teamId).single();
+      if (qErr || !queuedTeam) throw new Error('Could not find the queued match this player is coming from.');
+      const queuedPlayerIds = queuedTeam.player_ids.map(id => id === newPlayerId ? oldPlayerId : id);
+      const { error: qUpdErr } = await supabaseClient.from('teams').update({ player_ids: queuedPlayerIds }).eq('id', incomingSource.teamId);
+      if (qUpdErr) throw qUpdErr;
+      await supabaseClient.from('players').update({ status: 'waiting' }).eq('id', oldPlayerId);
+    } else if (departingDisposition === 'rest') {
       await supabaseClient.from('players')
         .update({ status: 'resting', became_free_at: new Date().toISOString() }).eq('id', oldPlayerId);
     } else {
@@ -3381,16 +3396,28 @@ function elapsedLabel(iso) {
 // the substitute picker can never offer someone who's already committed
 // elsewhere, matching the same invariant the duplicate-stacking fix
 // protects: one player, one status, at any given moment.
-async function getEligibleSubstitutes(sessionId, excludePlayerIds) {
+// Who can swap IN for a departing player — anyone NOT currently playing:
+// genuinely waiting, queued in an Up Next match, or resting. The one hard
+// rule is you can never swap two players who are BOTH currently playing
+// (that would mean disrupting two live matches at once) — excluded here
+// by construction, since 'playing' status is never included at all.
+async function getSwapCandidates(sessionId, excludePlayerIds) {
   const players = await SessionAPI.getPlayers(sessionId);
   const prepared = await SessionAPI.getPreparedMatches(sessionId);
-  const queuedIds = new Set();
-  for (const pm of prepared) {
-    (pm.team_a?.player_ids || []).forEach(id => queuedIds.add(id));
-    (pm.team_b?.player_ids || []).forEach(id => queuedIds.add(id));
-  }
+  const queuedSource = new Map(); // playerId -> { teamId, label }
+  prepared.forEach((pm, i) => {
+    (pm.team_a?.player_ids || []).forEach(id => queuedSource.set(id, { teamId: pm.team_a_id, label: `Queued — Up Next #${i + 1}` }));
+    (pm.team_b?.player_ids || []).forEach(id => queuedSource.set(id, { teamId: pm.team_b_id, label: `Queued — Up Next #${i + 1}` }));
+  });
   const exclude = new Set(excludePlayerIds || []);
-  return players.filter(p => p.status === 'waiting' && !queuedIds.has(p.id) && !exclude.has(p.id));
+  return players
+    .filter(p => (p.status === 'waiting' || p.status === 'resting') && !exclude.has(p.id))
+    .map(p => {
+      const q = queuedSource.get(p.id);
+      if (q) return { ...p, source: { type: 'queued', teamId: q.teamId }, sourceLabel: q.label };
+      if (p.status === 'resting') return { ...p, source: { type: 'resting' }, sourceLabel: 'Resting' };
+      return { ...p, source: { type: 'waiting' }, sourceLabel: 'Waiting' };
+    });
 }
 
 async function openCourtSwapModal(courtId) {
@@ -3442,21 +3469,22 @@ async function startSwapFor(teamId, oldPlayerId, isLive) {
   document.getElementById('swapModal')?.remove();
   const players = await SessionAPI.getPlayers(activeSession.id);
   const departing = players.find(p => p.id === oldPlayerId);
-  const eligible = await getEligibleSubstitutes(activeSession.id, [oldPlayerId]);
+  const candidates = await getSwapCandidates(activeSession.id, [oldPlayerId]);
+  window._swapCandidates = candidates; // so confirmPlayerSwap can look up the chosen one's source
 
   document.body.insertAdjacentHTML('beforeend', `
     <div class="modal-backdrop" id="swapPickModal">
       <div class="modal-box">
         <h2>Substitute for ${escapeHtml(departing?.name || 'this player')}</h2>
-        <p class="modal-sub">Choose who's coming in, and what happens to ${escapeHtml(departing?.name || 'the departing player')}.</p>
+        <p class="modal-sub">Choose who's coming in. If they're currently queued, ${escapeHtml(departing?.name || 'this player')} takes their spot in that match — you'll only be asked separately if they're just waiting or resting.</p>
         <div class="field"><label>Substitute</label>
-          <select id="swapSubstituteSelect">
+          <select id="swapSubstituteSelect" onchange="handleSwapCandidateChange()">
             <option value="">— Select a player —</option>
-            ${eligible.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+            ${candidates.map(p => `<option value="${p.id}">${escapeHtml(p.name)} — ${escapeHtml(p.sourceLabel)}</option>`).join('')}
           </select>
         </div>
-        ${!eligible.length ? '<p style="font-size:12px;color:var(--fault-coral);margin:-6px 0 10px;">No eligible players waiting right now — everyone else is already playing or queued.</p>' : ''}
-        <div class="field"><label>${escapeHtml(departing?.name || 'This player')} should be marked as</label>
+        ${!candidates.length ? '<p style="font-size:12px;color:var(--fault-coral);margin:-6px 0 10px;">Nobody eligible right now — everyone else is currently playing.</p>' : ''}
+        <div id="swapDispositionField" class="field" style="display:none;"><label>${escapeHtml(departing?.name || 'This player')} should be marked as</label>
           <select id="swapDispositionSelect">
             <option value="rest">☕ Resting</option>
             <option value="left">🚪 Left</option>
@@ -3472,16 +3500,29 @@ async function startSwapFor(teamId, oldPlayerId, isLive) {
   `);
 }
 
+// The disposition dropdown (rest/left) only matters when the incoming
+// player is genuinely free or resting — for a queued incoming player, the
+// departing player's destination is automatic (their queue spot), so
+// asking would just be a confusing, unused choice.
+function handleSwapCandidateChange() {
+  const selectedId = document.getElementById('swapSubstituteSelect')?.value;
+  const candidate = (window._swapCandidates || []).find(p => p.id === selectedId);
+  const field = document.getElementById('swapDispositionField');
+  if (field) field.style.display = candidate && candidate.source.type !== 'queued' ? '' : 'none';
+}
+
 async function confirmPlayerSwap(teamId, oldPlayerId) {
   const newPlayerId = document.getElementById('swapSubstituteSelect')?.value;
   const disposition = document.getElementById('swapDispositionSelect')?.value;
   const errEl = document.getElementById('swapError');
   const btn = document.getElementById('swapConfirmBtn');
   if (!newPlayerId) { errEl.textContent = 'Choose a substitute.'; return; }
+  const candidate = (window._swapCandidates || []).find(p => p.id === newPlayerId);
   if (btn) { btn.disabled = true; btn.textContent = 'Swapping…'; }
   try {
-    await SessionAPI.swapPlayerOnTeam(teamId, oldPlayerId, newPlayerId, disposition);
+    await SessionAPI.swapPlayerOnTeam(teamId, oldPlayerId, newPlayerId, disposition, candidate?.source);
     document.getElementById('swapPickModal')?.remove();
+    window._swapCandidates = null;
     renderActiveTab();
   } catch (err) {
     errEl.textContent = err.message || 'Could not complete the swap.';
@@ -3539,17 +3580,17 @@ async function manualBoardHtml() {
       <div id="manualBuildError" class="auth-error" style="margin-top:6px;"></div>
     </div>
 
-    ${draftCards.length ? `
-    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
-      ${draftCards.map(c => draftCardHtml(c, playerById)).join('')}
-    </div>` : ''}
-
     ${prepared.length ? `
     <div class="card" style="padding:0;overflow:hidden;">
       <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">${prepared.length}</span></div>
       <div style="display:flex;flex-wrap:wrap;gap:10px;padding:14px 12px;">
         ${prepared.map((pm, i) => preparedMatchCardHtml(pm, i, players)).join('')}
       </div>
+    </div>` : ''}
+
+    ${draftCards.length ? `
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+      ${draftCards.map(c => draftCardHtml(c, playerById)).join('')}
     </div>` : ''}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
