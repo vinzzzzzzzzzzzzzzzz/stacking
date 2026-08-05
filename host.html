@@ -539,6 +539,15 @@
   .lane-header { padding: 10px 15px; font-family: var(--font-display); font-size: 11px; letter-spacing: 0.07em; color: white; display: flex; justify-content: space-between; align-items: center; }
   .lane-header .count { font-family: var(--font-mono); opacity: 0.85; font-variant-numeric: tabular-nums; }
 
+  /* ── Draft cards — flexible pairing-arrangement board ── */
+  .draft-card { background: var(--surface); border: 1px solid var(--border-card); border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 10px; width: 176px; flex-shrink: 0; }
+  .draft-card-row { display: flex; gap: 6px; justify-content: center; }
+  .draft-card-vs { text-align: center; font-size: 9px; font-weight: 800; color: var(--optic-yellow); letter-spacing: .06em; margin: 4px 0; opacity: .8; }
+  .draft-slot { flex: 1; min-width: 0; border-radius: var(--radius-sm); cursor: pointer; transition: transform 0.12s var(--ease-bounce), box-shadow 0.12s; }
+  .draft-slot:active { transform: scale(0.96); }
+  .draft-slot-empty { aspect-ratio: 48/64; border: 1.5px dashed var(--border-soft); display: flex; align-items: center; justify-content: center; background: var(--surface-hover); }
+  .draft-slot-selected { box-shadow: 0 0 0 2px var(--optic-yellow); }
+
   /* Upload avatar circle (add/edit modals) */
   .avatar-upload { width: 72px; height: 72px; border-radius: 50%; position: relative;
     cursor: pointer; flex-shrink: 0; overflow: hidden; border: 2px dashed var(--border-soft);
@@ -1913,6 +1922,43 @@ const SessionAPI = (() => {
    * uses); singles picks are 1v1 as-is — the host already chose exactly
    * who plays whom, there's nothing left to balance.
    */
+  // Shared by buildManualMatch (auto-split pairing) AND promoteDraftCard
+  // (host-chosen exact pairing) — creates the two teams and either starts
+  // them immediately on an open court or queues them as Up Next.
+  async function queueOrStartTeams(sessionId, teamAIds, teamBIds) {
+    const teamA = await createTeam(sessionId, teamAIds, 'waiting');
+    const teamB = await createTeam(sessionId, teamBIds, 'waiting');
+
+    const { data: openCourts } = await supabaseClient.from('courts')
+      .select('*').eq('session_id', sessionId).eq('status', 'open')
+      .order('court_number', { ascending: true }).limit(1);
+    const openCourt = (openCourts || [])[0];
+
+    if (openCourt) {
+      await assignCourt(openCourt.id, teamA.id, teamB.id);
+      return { started: true, courtNumber: openCourt.court_number };
+    }
+
+    const { error: prepErr } = await supabaseClient.from('prepared_matches')
+      .insert({ session_id: sessionId, team_a_id: teamA.id, team_b_id: teamB.id, status: 'pending' });
+    if (prepErr) {
+      const missingTable = prepErr.code === '42P01' || /does not exist|could not find the .* column/i.test(prepErr.message || '');
+      const rlsBlocked = prepErr.code === '42501' || /row-level security|permission denied/i.test(prepErr.message || '');
+      if (missingTable) {
+        throw new Error('Database missing the prepared_matches table — run in Supabase SQL Editor: ' +
+          "CREATE TABLE IF NOT EXISTS prepared_matches (id uuid primary key default gen_random_uuid(), " +
+          "session_id uuid references sessions(id), team_a_id uuid references teams(id), " +
+          "team_b_id uuid references teams(id), status text default 'pending', created_at timestamptz default now());");
+      }
+      if (rlsBlocked) {
+        throw new Error('The prepared_matches table exists but Row Level Security is blocking it — run in Supabase SQL Editor: ' +
+          'ALTER TABLE prepared_matches DISABLE ROW LEVEL SECURITY;');
+      }
+      throw prepErr;
+    }
+    return { started: false };
+  }
+
   async function buildManualMatch(sessionId, playerIds) {
     const ids = [...new Set(playerIds || [])];
     if (ids.length !== 2 && ids.length !== 4) {
@@ -1939,50 +1985,113 @@ const SessionAPI = (() => {
       teamBIds = split.teamBPlayerIds;
     }
 
-    // 'waiting' (not a new lane value) — teams.queue_lane has a check
-    // constraint allowing only 'waiting'/'playing', same issue as the
-    // players.status constraint. A host-built pair sitting in Up Next
-    // really is just "waiting" for a court, so this is accurate as-is.
-    const teamA = await createTeam(sessionId, teamAIds, 'waiting');
-    const teamB = await createTeam(sessionId, teamBIds, 'waiting');
+    return queueOrStartTeams(sessionId, teamAIds, teamBIds);
+  }
 
-    // An open court right now? Start immediately instead of queueing.
-    const { data: openCourts } = await supabaseClient.from('courts')
-      .select('*').eq('session_id', sessionId).eq('status', 'open')
-      .order('court_number', { ascending: true }).limit(1);
-    const openCourt = (openCourts || [])[0];
-
-    if (openCourt) {
-      await assignCourt(openCourt.id, teamA.id, teamB.id);
-      return { started: true, courtNumber: openCourt.court_number };
+  // ════════════════════════════════════════════
+  // DRAFT CARDS — the flexible pairing-arrangement board. Each card is a
+  // 2×2 grid (slot_1/slot_2 = one team, slot_3/slot_4 = the other),
+  // fillable incrementally and rearrangeable via drag or tap before being
+  // promoted into a real queued match. This is the layer BELOW
+  // prepared_matches — nothing here touches player status or the real
+  // queue until a card is fully filled and explicitly promoted.
+  // ════════════════════════════════════════════
+  function isDraftCardsMissing(err) {
+    return err && (err.code === '42P01' || /does not exist|could not find the .* (table|column)/i.test(err.message || ''));
+  }
+  function isDraftCardsRlsBlocked(err) {
+    return err && (err.code === '42501' || /row-level security|permission denied/i.test(err.message || ''));
+  }
+  function draftCardsMigrationError(err) {
+    if (isDraftCardsMissing(err)) {
+      return new Error('Database is missing the draft_cards table. Run this in Supabase SQL Editor:\n\n' +
+        "CREATE TABLE IF NOT EXISTS draft_cards (\n" +
+        "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n" +
+        "  session_id uuid REFERENCES sessions(id) ON DELETE CASCADE,\n" +
+        "  slot_1 uuid REFERENCES players(id),\n" +
+        "  slot_2 uuid REFERENCES players(id),\n" +
+        "  slot_3 uuid REFERENCES players(id),\n" +
+        "  slot_4 uuid REFERENCES players(id),\n" +
+        "  position integer DEFAULT 0,\n" +
+        "  created_at timestamptz DEFAULT now()\n" +
+        ");");
     }
-
-    // No open court — hold this match as "Up Next", oldest-prepared-first.
-    const { error: prepErr } = await supabaseClient.from('prepared_matches')
-      .insert({ session_id: sessionId, team_a_id: teamA.id, team_b_id: teamB.id, status: 'pending' });
-    if (prepErr) {
-      // '42P01' = relation does not exist — the table itself is genuinely
-      // missing. '42501' = insufficient privilege — usually Row Level
-      // Security blocking the write because the table exists but has no
-      // policy permitting it yet. These need DIFFERENT fixes, so checking
-      // only the error CODE (not just "did the table name appear in the
-      // message somewhere") avoids misreporting an RLS block as a missing
-      // table when the table was actually created successfully.
-      const missingTable = prepErr.code === '42P01' || /does not exist|could not find the .* column/i.test(prepErr.message || '');
-      const rlsBlocked = prepErr.code === '42501' || /row-level security|permission denied/i.test(prepErr.message || '');
-      if (missingTable) {
-        throw new Error('Database missing the prepared_matches table — run in Supabase SQL Editor: ' +
-          "CREATE TABLE IF NOT EXISTS prepared_matches (id uuid primary key default gen_random_uuid(), " +
-          "session_id uuid references sessions(id), team_a_id uuid references teams(id), " +
-          "team_b_id uuid references teams(id), status text default 'pending', created_at timestamptz default now());");
-      }
-      if (rlsBlocked) {
-        throw new Error('The prepared_matches table exists but Row Level Security is blocking it — run in Supabase SQL Editor: ' +
-          'ALTER TABLE prepared_matches DISABLE ROW LEVEL SECURITY;');
-      }
-      throw prepErr;
+    if (isDraftCardsRlsBlocked(err)) {
+      return new Error('Row Level Security is blocking draft_cards — run in Supabase SQL Editor:\n\nALTER TABLE draft_cards DISABLE ROW LEVEL SECURITY;');
     }
-    return { started: false };
+    return err;
+  }
+
+  async function getDraftCards(sessionId) {
+    const { data, error } = await supabaseClient.from('draft_cards')
+      .select('*').eq('session_id', sessionId).order('position', { ascending: true });
+    if (error) {
+      if (isDraftCardsMissing(error) || isDraftCardsRlsBlocked(error)) return [];
+      throw error;
+    }
+    return data || [];
+  }
+  async function createDraftCard(sessionId) {
+    const { data: existing } = await supabaseClient.from('draft_cards')
+      .select('position').eq('session_id', sessionId).order('position', { ascending: false }).limit(1);
+    const nextPos = existing && existing.length ? existing[0].position + 1 : 0;
+    const { data, error } = await supabaseClient.from('draft_cards')
+      .insert({ session_id: sessionId, position: nextPos }).select().single();
+    if (error) throw draftCardsMigrationError(error);
+    return data;
+  }
+  async function deleteDraftCard(cardId) {
+    const { error } = await supabaseClient.from('draft_cards').delete().eq('id', cardId);
+    if (error) throw draftCardsMigrationError(error);
+  }
+  // Places a player into a specific slot. If that slot is already
+  // occupied, the two players SWAP (the slot's previous occupant goes
+  // wherever the incoming player came from, if anywhere) — callers pass
+  // the incoming player's previous location (another card+slot, or null
+  // if they were still in the waiting pool) so this can do a clean swap
+  // in one round trip instead of a lossy overwrite.
+  async function assignDraftSlot(cardId, slotNum, playerId, fromCardId, fromSlotNum) {
+    const field = `slot_${slotNum}`;
+    const { data: targetCard, error: tErr } = await supabaseClient.from('draft_cards').select('*').eq('id', cardId).single();
+    if (tErr) throw draftCardsMigrationError(tErr);
+    const displaced = targetCard[field]; // whoever was in the target slot, if anyone
+
+    const updates = [supabaseClient.from('draft_cards').update({ [field]: playerId }).eq('id', cardId)];
+    if (fromCardId && fromSlotNum) {
+      // Player came from another slot — put whoever was displaced there
+      // (or clear it if the target slot was empty).
+      const fromField = `slot_${fromSlotNum}`;
+      updates.push(supabaseClient.from('draft_cards').update({ [fromField]: displaced || null }).eq('id', fromCardId));
+    }
+    const results = await Promise.all(updates);
+    const err = results.find(r => r.error)?.error;
+    if (err) throw draftCardsMigrationError(err);
+  }
+  async function clearDraftSlot(cardId, slotNum) {
+    const field = `slot_${slotNum}`;
+    const { error } = await supabaseClient.from('draft_cards').update({ [field]: null }).eq('id', cardId);
+    if (error) throw draftCardsMigrationError(error);
+  }
+  // Once all 4 slots are filled: slot_1+slot_2 become Team A, slot_3+
+  // slot_4 become Team B — the EXACT pairing the host built, never
+  // re-split or auto-balanced. Reuses queueOrStartTeams so it goes
+  // straight to an open court if one exists, or joins Up Next otherwise —
+  // identical downstream behavior to any other manually-built match.
+  async function promoteDraftCard(cardId, sessionId) {
+    const { data: card, error } = await supabaseClient.from('draft_cards').select('*').eq('id', cardId).single();
+    if (error) throw draftCardsMigrationError(error);
+    const slots = [card.slot_1, card.slot_2, card.slot_3, card.slot_4];
+    if (slots.some(s => !s)) throw new Error('Fill all 4 slots before queueing this card.');
+
+    const { data: players, error: pErr } = await supabaseClient.from('players')
+      .select('id, status').in('id', slots);
+    if (pErr) throw pErr;
+    const notReady = (players || []).find(p => !['waiting', 'resting'].includes(p.status));
+    if (notReady) throw new Error('One of these players is no longer available — remove them from the card and try again.');
+
+    const result = await queueOrStartTeams(sessionId, [card.slot_1, card.slot_2], [card.slot_3, card.slot_4]);
+    await deleteDraftCard(cardId);
+    return result;
   }
 
   async function getPreparedMatches(sessionId) {
@@ -2367,6 +2476,7 @@ const SessionAPI = (() => {
     removePlayer, restPlayerManually, returnToQueue,
     createTeam, getTeams, getCourts, assignCourt, logMatchResult, applyQueuePlacement, tryRefillCourt, shuffleQueue, reconcileOrphanedPlayers, swapPlayerOnTeam,
     buildManualMatch, getPreparedMatches, cancelPreparedMatch, tryReleasePreparedMatch,
+    getDraftCards, createDraftCard, deleteDraftCard, assignDraftSlot, clearDraftSlot, promoteDraftCard,
     getPendingRestRequests, confirmRestRequest, declineRestRequest,
     getMessages, markMessageStatus, setLeaderboardVisible,
     correctMatchResult, deleteMatchResult, getRecentMatches,
@@ -3239,10 +3349,14 @@ window._queuePreviews = [];
 window._queuePageIndex = 0;
 
 // ════════════════════════════════════════════
-// MANUAL MODE — 4 live status cards (Winning/Losing/Resting/Late Arrivals)
-// + host-built matches. No auto-pairing: the host picks who plays next.
+// MANUAL MODE — draft cards (flexible pairing arrangement) + 4 live status
+// lanes (Winning/Losing/Resting/Late Arrivals). No auto-pairing: the host
+// builds each match by hand, one card at a time.
 // ════════════════════════════════════════════
-window._manualSelected = window._manualSelected || new Set();
+// { playerId, fromCardId, fromSlotNum } of whatever's currently "picked
+// up" via tap — null if nothing is. fromCardId/fromSlotNum are null when
+// the picked-up player came from the waiting pool rather than a card.
+window._draftSelected = window._draftSelected || null;
 
 // Proper stopwatch format — HH:MM:SS, always, extending naturally for
 // however long someone's actually been waiting (not "1h 5m" shorthand).
@@ -3377,48 +3491,39 @@ async function confirmPlayerSwap(teamId, oldPlayerId) {
 
 async function manualBoardHtml() {
   const players = await SessionAPI.getPlayers(activeSession.id);
-  const teamSize = activeSession?.format === 'singles' ? 1 : 2;
-  const needed = teamSize * 2;
+  const playerById = id => players.find(p => p.id === id);
 
   const prepared = await SessionAPI.getPreparedMatches(activeSession.id);
-  // Anyone already committed to a queued-but-not-yet-started match can't
-  // be picked for a DIFFERENT one too — they're spoken for the moment
-  // they're queued, not just once they're actually on a court.
-  //
-  // CRITICAL: this must be derived from the EXACT SAME data used to
-  // render the visible "Queued" cards below (pm.team_a/team_b, from
-  // getPreparedMatches' own join) — NOT from a separate getTeams() call.
-  // A separate call filters is_active=true independently; if a queued
-  // team's active flag were ever out of sync with reality for any reason,
-  // that filter would silently disagree with what's on screen, and a
-  // player visibly sitting in a Queued card would still show as
-  // available to pick again elsewhere — exactly the duplicate-stacking
-  // bug this exists to prevent. Reading straight off pm.team_a/team_b
-  // makes that class of bug structurally impossible: whatever's visibly
-  // queued is, by construction, exactly what gets excluded.
+  const draftCards = await SessionAPI.getDraftCards(activeSession.id);
+
+  // Anyone already committed to a queued match OR already placed on a
+  // draft card can't be picked again elsewhere — same invariant as
+  // before (one player, one spot, ever), just now covering two places
+  // instead of one. Derived straight from what's visibly on screen in
+  // both cases, same reasoning as the original duplicate-stacking fix.
   const queuedPlayerIds = new Set();
   for (const pm of prepared) {
     (pm.team_a?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
     (pm.team_b?.player_ids || []).forEach(id => queuedPlayerIds.add(id));
   }
+  const draftPlayerIds = new Set();
+  draftCards.forEach(c => [c.slot_1, c.slot_2, c.slot_3, c.slot_4].forEach(id => { if (id) draftPlayerIds.add(id); }));
 
   const byOldest = (a, b) => new Date(a.became_free_at || 0) - new Date(b.became_free_at || 0);
-  const eligible = (p) => !queuedPlayerIds.has(p.id);
+  const eligible = (p) => !queuedPlayerIds.has(p.id) && !draftPlayerIds.has(p.id);
   const winning = players.filter(p => p.status === 'waiting' && p.last_match_result === 'won' && eligible(p)).sort(byOldest);
   const losing  = players.filter(p => p.status === 'waiting' && p.last_match_result === 'lost' && eligible(p)).sort(byOldest);
   const resting = players.filter(p => p.status === 'resting' && eligible(p)).sort(byOldest);
-  // Late Arrivals = anyone 'waiting' with no result yet — a brand new
-  // check-in, or someone who returned to the queue from Resting before
-  // ever playing a match.
   const lateArrivals = players.filter(p => p.status === 'waiting' && !p.last_match_result && eligible(p)).sort(byOldest);
 
-  // Drop stale selections — a player pulled onto a court (or just queued)
-  // elsewhere shouldn't stay checked here.
-  const eligibleIds = new Set([...winning, ...losing, ...resting, ...lateArrivals].map(p => p.id));
-  for (const id of [...window._manualSelected]) if (!eligibleIds.has(id)) window._manualSelected.delete(id);
-
-  const selCount = window._manualSelected.size;
-  const ready = selCount === needed;
+  // A previously-picked-up selection can go stale (its player got queued
+  // by someone else, etc.) — drop it rather than let a tap silently fail.
+  if (window._draftSelected) {
+    const stillThere = window._draftSelected.fromCardId
+      ? draftCards.some(c => c.id === window._draftSelected.fromCardId)
+      : players.some(p => p.id === window._draftSelected.playerId && eligible(p));
+    if (!stillThere) window._draftSelected = null;
+  }
 
   setTimeout(startManualBoardTimers, 0);
 
@@ -3426,19 +3531,18 @@ async function manualBoardHtml() {
     <div class="card" style="padding:14px 16px;">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
         <div>
-          <div style="font-weight:800;font-size:13px;">🎛 Build a Match</div>
-          <div style="font-size:11px;color:var(--resting-slate);">Tap players below to select them — needs exactly ${needed} (${teamSize === 1 ? 'singles' : 'doubles'}), from any card.</div>
+          <div style="font-weight:800;font-size:13px;">🎛 Arrange Matches</div>
+          <div style="font-size:11px;color:var(--resting-slate);">Drag a paddle onto a slot, or tap one then tap where it goes — swaps automatically if the slot's taken.</div>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-          <span style="font-family:var(--font-mono);font-weight:800;font-size:14px;color:${ready ? 'var(--winner-green)' : 'var(--ink-muted)'};">${selCount} / ${needed}</span>
-          <button id="manualBuildBtn" onclick="handleBuildManualMatch()" ${ready ? '' : 'disabled'}
-            style="background:${ready ? 'var(--optic-yellow)' : 'var(--surface-hover)'};color:${ready ? 'var(--optic-yellow-ink)' : 'var(--resting-slate)'};border:none;padding:9px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;${ready ? 'cursor:pointer;' : 'cursor:not-allowed;'}">
-            Build Match
-          </button>
-        </div>
+        <button onclick="handleCreateDraftCard()" style="background:var(--optic-yellow);color:var(--optic-yellow-ink);border:none;padding:9px 16px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;min-height:40px;cursor:pointer;flex-shrink:0;">+ New Card</button>
       </div>
       <div id="manualBuildError" class="auth-error" style="margin-top:6px;"></div>
     </div>
+
+    ${draftCards.length ? `
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+      ${draftCards.map(c => draftCardHtml(c, playerById)).join('')}
+    </div>` : ''}
 
     ${prepared.length ? `
     <div class="card" style="padding:0;overflow:hidden;">
@@ -3457,11 +3561,53 @@ async function manualBoardHtml() {
   `;
 }
 
+// One draft card: two rows of two slots (top row = Team A, bottom row =
+// Team B), each slot either holding a paddle or showing an empty dashed
+// placeholder. Every paddle is BOTH draggable AND tappable — whichever
+// interaction works better on the host's device, both do the same thing.
+function draftCardHtml(card, playerById) {
+  const slots = [card.slot_1, card.slot_2, card.slot_3, card.slot_4];
+  const filledCount = slots.filter(Boolean).length;
+  const allFilled = filledCount === 4;
+
+  function slotHtml(slotNum) {
+    const pid = slots[slotNum - 1];
+    const isSelected = window._draftSelected?.fromCardId === card.id && window._draftSelected?.fromSlotNum === slotNum;
+    if (!pid) {
+      return `<div class="draft-slot draft-slot-empty${isSelected ? ' draft-slot-selected' : ''}"
+        ondragover="event.preventDefault()" ondrop="handleDraftDrop(event,'${card.id}',${slotNum})"
+        onclick="handleDraftSlotTap('${card.id}',${slotNum})">
+        <span style="font-size:20px;opacity:.3;">＋</span>
+      </div>`;
+    }
+    const p = playerById(pid) || { name: '—' };
+    return `<div class="draft-slot${isSelected ? ' draft-slot-selected' : ''}" draggable="true"
+      ondragstart="handleDraftDragStart(event,'${p.id}','${card.id}',${slotNum})"
+      ondragover="event.preventDefault()" ondrop="handleDraftDrop(event,'${card.id}',${slotNum})"
+      onclick="handleDraftSlotTap('${card.id}',${slotNum})">
+      ${paddleChipHost(p)}
+    </div>`;
+  }
+
+  return `<div class="draft-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <span style="font-size:10px;font-weight:800;color:var(--bench-slate);letter-spacing:.05em;">CARD · ${filledCount}/4</span>
+      <button onclick="handleDeleteDraftCard('${card.id}')" style="background:none;border:none;color:var(--fault-coral);font-size:10px;font-weight:800;cursor:pointer;min-height:0;padding:2px 4px;">✕ Remove</button>
+    </div>
+    <div class="draft-card-row">${slotHtml(1)}${slotHtml(2)}</div>
+    <div class="draft-card-vs">VS</div>
+    <div class="draft-card-row">${slotHtml(3)}${slotHtml(4)}</div>
+    ${allFilled
+      ? `<button onclick="handlePromoteDraftCard('${card.id}')" style="width:100%;margin-top:8px;background:var(--winner-green);color:#0A1620;border:none;padding:9px;border-radius:var(--radius-sm);font-weight:800;font-size:12px;cursor:pointer;">Queue This Match →</button>`
+      : `<p style="font-size:11px;color:var(--resting-slate);text-align:center;margin:8px 0 0;">Drag or tap players in — fill all 4 to queue.</p>`}
+  </div>`;
+}
+
 function manualCardHtml(title, colorVar, list, verb) {
   return `
     <div class="card" style="padding:0;overflow:hidden;min-width:0;">
       <div class="lane-header" style="background:${colorVar};"><span>${title}</span><span class="count">${list.length}</span></div>
-      <div style="padding:8px;max-height:340px;overflow-y:auto;">
+      <div style="padding:8px;max-height:340px;overflow-y:auto;" ondragover="event.preventDefault()" ondrop="handleDraftReturnToPool(event)">
         ${list.length ? list.map(p => manualPlayerRowHtml(p, verb)).join('')
           : `<div style="text-align:center;padding:16px 0;color:var(--resting-slate);font-size:12px;">Nobody here</div>`}
       </div>
@@ -3489,9 +3635,11 @@ function tierBadgeHtml(tier) {
 }
 
 function manualPlayerRowHtml(p, verb) {
-  const selected = window._manualSelected.has(p.id);
+  const selected = window._draftSelected?.playerId === p.id && !window._draftSelected?.fromCardId;
   return `
-    <div class="manual-player-row" data-id="${p.id}" onclick="toggleManualSelect('${p.id}')"
+    <div class="manual-player-row" data-id="${p.id}" draggable="true"
+      ondragstart="handleDraftDragStart(event,'${p.id}',null,null)"
+      onclick="handleDraftPoolTap('${p.id}')"
       style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:var(--radius-sm);cursor:pointer;margin-bottom:4px;
         border:1.5px solid ${selected ? 'var(--optic-yellow)' : 'transparent'};background:${selected ? 'rgba(45,212,232,0.1)' : 'var(--surface-hover)'};">
       ${smallPaddleHtml(p)}
@@ -3528,35 +3676,130 @@ function preparedMatchCardHtml(pm, i, players) {
   </div>`;
 }
 
-function toggleManualSelect(playerId) {
-  const teamSize = activeSession?.format === 'singles' ? 1 : 2;
-  const needed = teamSize * 2;
-  if (window._manualSelected.has(playerId)) {
-    window._manualSelected.delete(playerId);
+async function handleCreateDraftCard() {
+  if (!uiGuardStart('createDraftCard')) return;
+  const errEl = document.getElementById('manualBuildError');
+  try {
+    await SessionAPI.createDraftCard(activeSession.id);
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not create a new card.';
+  } finally {
+    uiGuardEnd('createDraftCard');
+  }
+}
+
+async function handleDeleteDraftCard(cardId) {
+  if (!uiGuardStart('deleteDraftCard-' + cardId)) return;
+  try {
+    await SessionAPI.deleteDraftCard(cardId);
+    window._draftSelected = null;
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  } catch (err) {
+    alert(err.message || 'Could not remove this card.');
+  } finally {
+    uiGuardEnd('deleteDraftCard-' + cardId);
+  }
+}
+
+// ── Tap interaction — always works, regardless of device/browser drag
+// support. Tapping "picks up" a player (from the pool OR a card slot);
+// tapping again elsewhere either places them (empty slot), swaps them
+// with whoever's there (filled slot), or deselects (tapping the same
+// spot again). ──
+function handleDraftPoolTap(playerId) {
+  const sel = window._draftSelected;
+  if (sel && sel.playerId === playerId && !sel.fromCardId) {
+    window._draftSelected = null; // tapped the same pool player again — deselect
   } else {
-    if (window._manualSelected.size >= needed) return; // full — ignore extra taps
-    window._manualSelected.add(playerId);
+    window._draftSelected = { playerId, fromCardId: null, fromSlotNum: null };
   }
   renderActiveTab();
 }
 
-async function handleBuildManualMatch() {
-  if (!uiGuardStart('buildManualMatch')) return;
-  const btn = document.getElementById('manualBuildBtn');
-  const errEl = document.getElementById('manualBuildError');
-  if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+async function handleDraftSlotTap(cardId, slotNum) {
+  const sel = window._draftSelected;
+  if (!sel) {
+    // Nothing picked up yet — if this slot is filled, pick IT up.
+    const cards = await SessionAPI.getDraftCards(activeSession.id);
+    const card = cards.find(c => c.id === cardId);
+    const pid = card ? card[`slot_${slotNum}`] : null;
+    if (!pid) return; // empty slot, nothing to pick up, nothing to do
+    window._draftSelected = { playerId: pid, fromCardId: cardId, fromSlotNum: slotNum };
+    renderActiveTab();
+    return;
+  }
+  if (sel.fromCardId === cardId && sel.fromSlotNum === slotNum) {
+    window._draftSelected = null; // tapped the same slot again — deselect
+    renderActiveTab();
+    return;
+  }
+  // Something's picked up and we tapped a DIFFERENT slot — place/swap it there.
+  if (!uiGuardStart('draftAssign')) return;
   try {
-    const result = await SessionAPI.buildManualMatch(activeSession.id, [...window._manualSelected]);
-    window._manualSelected.clear();
-    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
-    if (!result.started) {
-      // Every court's busy — this one's queued as Up Next, not a failure.
-    }
+    await SessionAPI.assignDraftSlot(cardId, slotNum, sel.playerId, sel.fromCardId, sel.fromSlotNum);
   } catch (err) {
-    if (errEl) errEl.textContent = err.message || 'Could not build this match.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Build Match'; }
+    alert(err.message || 'Could not move this player.');
   } finally {
-    uiGuardEnd('buildManualMatch');
+    window._draftSelected = null;
+    uiGuardEnd('draftAssign');
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  }
+}
+
+// ── Drag interaction — layered on TOP of the same tap targets, so both
+// work on the exact same elements. Whichever behaves better on the host's
+// device is the one they'll naturally end up using. ──
+function handleDraftDragStart(event, playerId, fromCardId, fromSlotNum) {
+  event.dataTransfer.setData('text/plain', JSON.stringify({ playerId, fromCardId, fromSlotNum }));
+  event.dataTransfer.effectAllowed = 'move';
+}
+async function handleDraftDrop(event, cardId, slotNum) {
+  event.preventDefault();
+  let data;
+  try { data = JSON.parse(event.dataTransfer.getData('text/plain')); } catch { return; }
+  if (!data || !data.playerId) return;
+  if (data.fromCardId === cardId && data.fromSlotNum === slotNum) return; // dropped back where it came from
+  if (!uiGuardStart('draftAssign')) return;
+  try {
+    await SessionAPI.assignDraftSlot(cardId, slotNum, data.playerId, data.fromCardId, data.fromSlotNum);
+  } catch (err) {
+    alert(err.message || 'Could not move this player.');
+  } finally {
+    window._draftSelected = null;
+    uiGuardEnd('draftAssign');
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  }
+}
+// Dropping onto (or tapping-away-into) a waiting-pool lane clears the
+// player's card slot, returning them to the pool.
+async function handleDraftReturnToPool(event) {
+  event.preventDefault();
+  let data;
+  try { data = JSON.parse(event.dataTransfer.getData('text/plain')); } catch { return; }
+  if (!data || !data.fromCardId) return; // came from the pool already, nothing to do
+  if (!uiGuardStart('draftReturn')) return;
+  try {
+    await SessionAPI.clearDraftSlot(data.fromCardId, data.fromSlotNum);
+  } catch (err) {
+    alert(err.message || 'Could not return this player to the pool.');
+  } finally {
+    window._draftSelected = null;
+    uiGuardEnd('draftReturn');
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  }
+}
+
+async function handlePromoteDraftCard(cardId) {
+  if (!uiGuardStart('promoteDraft-' + cardId)) return;
+  try {
+    await SessionAPI.promoteDraftCard(cardId, activeSession.id);
+    window._draftSelected = null;
+    document.getElementById('tabPanel').innerHTML = await manualBoardHtml();
+  } catch (err) {
+    alert(err.message || 'Could not queue this match.');
+  } finally {
+    uiGuardEnd('promoteDraft-' + cardId);
   }
 }
 
