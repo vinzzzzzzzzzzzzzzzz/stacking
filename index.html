@@ -665,27 +665,7 @@ async function loadSession(sessionId) {
       return;
     }
     renderShell();
-    const dateEl = document.getElementById('sessionDateLabel');
-    // scheduled_date is a plain YYYY-MM-DD (no time component) — parsing
-    // that directly via `new Date("YYYY-MM-DD")` reads it as UTC midnight,
-    // which can silently roll back to the PREVIOUS day once converted to
-    // a viewer's local time (anyone west of UTC). Parsing the numbers out
-    // and building a local-midnight Date avoids that shift entirely.
-    if (dateEl) {
-      let dateToShow = null;
-      if (session.scheduled_date) {
-        const [y, m, d] = session.scheduled_date.split('-').map(Number);
-        dateToShow = new Date(y, m - 1, d);
-      } else if (session.created_at) {
-        dateToShow = new Date(session.created_at);
-      }
-      if (dateToShow) {
-        dateEl.textContent = dateToShow.toLocaleDateString('en-US', {
-          weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-        });
-      }
-    }
-    renderClubBanner(session);
+    renderSessionHeaderBanner(session);
     await refreshAll();
     subscribeRealtime();
     startTimerLoop();
@@ -701,24 +681,50 @@ async function loadSession(sessionId) {
 // ============================================================
 // SHELL
 // ============================================================
-// Shows nothing at all if the host never set a club name or logo — this
-// is purely optional branding, never an empty placeholder box.
-function renderClubBanner(session) {
-  const el = document.getElementById('clubBanner');
-  if (!el) return;
-  if (!session.club_name && !session.club_logo_url) { el.innerHTML = ''; return; }
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin:4px 0 14px;">
-      ${session.club_logo_url ? `<img src="${session.club_logo_url}" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;box-shadow:var(--shadow-card);">` : ''}
-      ${session.club_name ? `<span style="font-weight:800;font-size:15px;letter-spacing:.01em;">${escapeHtml(session.club_name)}</span>` : ''}
+// Shared session header — club logo/name + scheduled day/date, as ONE
+// HTML string. Used identically by the open-play live view (inserted into
+// #sessionHeaderBanner), the tournament view (prepended into its own HTML
+// string, since it has no shell of its own), and the podium — so editing
+// a session's date or club info updates every view the same way the
+// moment realtime picks up the change, instead of three separate copies
+// of this logic silently drifting apart (exactly what happened with the
+// leaderboard sort before it was consolidated).
+function sessionHeaderBannerHtml(session) {
+  let dateStr = '';
+  // scheduled_date is a plain YYYY-MM-DD (no time component) — parsing
+  // that directly via `new Date("YYYY-MM-DD")` reads it as UTC midnight,
+  // which can silently roll back to the PREVIOUS day once converted to a
+  // viewer's local time (anyone west of UTC). Parsing the numbers out and
+  // building a local-midnight Date avoids that shift entirely.
+  if (session?.scheduled_date) {
+    const [y, m, d] = session.scheduled_date.split('-').map(Number);
+    dateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  } else if (session?.created_at) {
+    dateStr = new Date(session.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+  const hasClubInfo = session?.club_name || session?.club_logo_url;
+  if (!hasClubInfo && !dateStr) return '';
+  return `
+    <div style="text-align:center;margin:4px 0 16px;">
+      ${hasClubInfo ? `
+      <div style="display:flex;align-items:center;justify-content:center;gap:9px;margin-bottom:4px;">
+        ${session.club_logo_url ? `<img src="${session.club_logo_url}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;box-shadow:var(--shadow-card);">` : ''}
+        ${session.club_name ? `<span style="font-weight:800;font-size:15px;letter-spacing:.01em;">${escapeHtml(session.club_name)}</span>` : ''}
+      </div>` : ''}
+      ${dateStr ? `<div style="font-size:12px;font-weight:700;color:var(--ink-muted);letter-spacing:.03em;">${dateStr}</div>` : ''}
     </div>
   `;
+}
+// Populates the open-play shell's banner container. Safe to call on
+// every refresh (not just once at load) so a live edit shows immediately.
+function renderSessionHeaderBanner(session) {
+  const el = document.getElementById('sessionHeaderBanner');
+  if (el) el.innerHTML = sessionHeaderBannerHtml(session);
 }
 
 function renderShell() {
   document.getElementById('mainContent').innerHTML = `
-    <div id="clubBanner"></div>
-    <div id="sessionDateLabel" style="text-align:center;font-size:12px;font-weight:700;color:var(--ink-muted);letter-spacing:.03em;margin:-4px 0 16px;"></div>
+    <div id="sessionHeaderBanner"></div>
     <div id="sessionCompleteSection"></div>
     <div class="courts-grid" id="courtsGrid"></div>
     <div class="court-line-divider" role="separator"></div>
@@ -814,29 +820,9 @@ function renderOpenPlaySessionComplete(players) {
     </tr>`;
   }).join('');
 
-  // Same club banner + date treatment as the live view, using the same
-  // safe date-only parsing to avoid a UTC-midnight timezone shift.
-  let podiumDateStr = '';
-  if (currentSession?.scheduled_date) {
-    const [y, m, d] = currentSession.scheduled_date.split('-').map(Number);
-    podiumDateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  } else if (currentSession?.created_at) {
-    podiumDateStr = new Date(currentSession.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  }
-  const hasClubInfo = currentSession?.club_name || currentSession?.club_logo_url;
-  const podiumBannerHtml = (hasClubInfo || podiumDateStr) ? `
-    <div style="text-align:center;margin-bottom:14px;">
-      ${hasClubInfo ? `
-      <div style="display:flex;align-items:center;justify-content:center;gap:9px;margin-bottom:4px;">
-        ${currentSession.club_logo_url ? `<img src="${currentSession.club_logo_url}" alt="" style="width:30px;height:30px;border-radius:50%;object-fit:cover;">` : ''}
-        ${currentSession.club_name ? `<span style="font-weight:800;font-size:14px;">${escapeHtml(currentSession.club_name)}</span>` : ''}
-      </div>` : ''}
-      ${podiumDateStr ? `<div style="font-size:11px;font-weight:700;color:var(--ink-muted);letter-spacing:.03em;">${podiumDateStr}</div>` : ''}
-    </div>` : '';
-
   el.innerHTML = `
     <div class="card" style="margin-bottom:16px;background:linear-gradient(180deg,rgba(45,212,232,.06),transparent);border:1px solid rgba(45,212,232,.18)">
-      ${podiumBannerHtml}
+      ${sessionHeaderBannerHtml(currentSession)}
       <div style="text-align:center;margin-bottom:14px">
         <span style="font-size:10px;background:rgba(45,212,232,.15);color:var(--optic-yellow);padding:3px 12px;border-radius:999px;font-weight:800;letter-spacing:.08em">🎾 SESSION COMPLETE</span>
       </div>
@@ -877,6 +863,10 @@ async function refreshAll() {
   _playersCache = players;
   _teamsCache   = teams;
   _courtsCache  = courts;
+
+  document.getElementById('sessionNameLabel').textContent =
+    session.reference_code ? `${session.name} · ${session.reference_code}` : session.name;
+  renderSessionHeaderBanner(session);
 
   const isFinished = session.status === 'completed';
   ['courtsGrid', 'upNextSection', 'queuesGrid', 'restRequestBox', 'messageBox'].forEach(id => {
@@ -1600,10 +1590,14 @@ async function sendHostMessage() {
 let _tBracket=null,_tTeams=[],_tByes=[],_tMatches=[];
 
 async function refreshTournament(){
-  const [{data:brs},{data:ents}] = await Promise.all([
+  const [{data:brs},{data:ents},session]=await Promise.all([
     supabaseClient.from('brackets').select('*').eq('session_id',currentSessionId).order('created_at',{ascending:true}),
     supabaseClient.from('bracket_entries').select('*').eq('session_id',currentSessionId),
+    SessionAPI.getSession(currentSessionId),
   ]);
+  currentSession=session;
+  document.getElementById('sessionNameLabel').textContent=
+    session.reference_code?`${session.name} · ${session.reference_code}`:session.name;
   _tBracket=(brs||[])[0]||null;
   _tTeams=(ents||[]).filter(e=>!e.is_bye);
   _tByes =(ents||[]).filter(e=>e.is_bye);
@@ -1621,6 +1615,7 @@ function subscribeTournamentRealtime(){
     .on('postgres_changes',{event:'*',schema:'public',table:'bracket_matches'},refreshTournament)
     .on('postgres_changes',{event:'*',schema:'public',table:'bracket_entries'},refreshTournament)
     .on('postgres_changes',{event:'*',schema:'public',table:'brackets'},refreshTournament)
+    .on('postgres_changes',{event:'*',schema:'public',table:'sessions',filter:`id=eq.${currentSessionId}`},refreshTournament)
     .subscribe();
 }
 
@@ -2000,7 +1995,7 @@ function renderTournamentView(){
   const courtCount=currentSession?.court_count||1;
 
   if(!_tBracket||_tMatches.length===0){
-    el.innerHTML=`<div class="empty-state"><div class="display">🏆 Tournament</div>
+    el.innerHTML=sessionHeaderBannerHtml(currentSession)+`<div class="empty-state"><div class="display">🏆 Tournament</div>
       <p>The host hasn't generated the bracket yet — check back soon.</p></div>`;
     return;
   }
@@ -2187,7 +2182,7 @@ function renderTournamentView(){
     bracketSection = buildReadOnlyBracket() || `<p style="font-size:12px;color:var(--resting-slate);text-align:center;padding:20px">Bracket not generated yet.</p>`;
   }
 
-  el.innerHTML=`
+  el.innerHTML=sessionHeaderBannerHtml(currentSession)+`
     <div style="text-align:center;margin-bottom:14px">
       <span style="font-size:10px;background:rgba(45,212,232,.15);color:var(--optic-yellow);padding:3px 10px;border-radius:999px;font-weight:800;letter-spacing:.07em">🏆 TOURNAMENT · LIVE</span>
     </div>

@@ -1348,6 +1348,26 @@ const SessionAPI = (() => {
     return data;
   }
 
+  // Editing an EXISTING session's name/date/club branding after creation.
+  // Falls back progressively if newer columns are missing, same pattern
+  // as createSession, so one missing column never blocks saving the rest.
+  async function updateSessionDetails(sessionId, { name, scheduledDate, clubName, clubLogoUrl }) {
+    const updates = {
+      name,
+      scheduled_date: scheduledDate || null,
+      club_name: clubName || null,
+      club_logo_url: clubLogoUrl || null,
+    };
+    let { error } = await supabaseClient.from('sessions').update(updates).eq('id', sessionId);
+    if (error) {
+      for (const col of ['scheduled_date', 'club_name', 'club_logo_url']) {
+        if (new RegExp(col).test(error.message || '')) delete updates[col];
+      }
+      ({ error } = await supabaseClient.from('sessions').update(updates).eq('id', sessionId));
+    }
+    if (error) throw error;
+  }
+
   async function getSessionByReferenceCode(code) {
     const normalized = code.trim().toUpperCase();
     const { data, error } = await supabaseClient.from('sessions').select('*').eq('reference_code', normalized).single();
@@ -2548,7 +2568,7 @@ const SessionAPI = (() => {
   }
 
   return {
-    createSession, getSession, getSessionByReferenceCode, getMySessions,
+    createSession, getSession, updateSessionDetails, getSessionByReferenceCode, getMySessions,
     verifySessionPassword, finishSession, deleteSession, getMatchCount,
     preRegisterPlayer, updatePlayer, markArrived, getPlayers, getAllPlayersIncludingLeft,
     removePlayer, restPlayerManually, returnToQueue,
@@ -3160,13 +3180,66 @@ function backToSessionList() {
   renderSessionList();
 }
 
+// ── Edit Session — name, scheduled date, club branding, on an already-
+// created session. Saves straight to the sessions row, which every
+// spectator view (open play live, tournament live, and the podium) reads
+// fresh on every refresh — so this shows up live, no republish needed. ──
+function openEditSessionModal() {
+  if (document.getElementById('editSessionModal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="modal-backdrop" id="editSessionModal">
+      <div class="modal-box">
+        <h2>Edit Session</h2>
+        <p class="modal-sub">Updates show up live on the spectator page — no need to reshare the link.</p>
+        <div class="field"><label>Session Name</label><input type="text" id="editSessionName" value="${escapeHtml(activeSession.name)}"></div>
+        <div class="field"><label>Date</label><input type="date" id="editSessionDate" value="${activeSession.scheduled_date || ''}"></div>
+        <div class="field"><label>Club Name (optional)</label><input type="text" id="editSessionClubName" value="${escapeHtml(activeSession.club_name || '')}" placeholder="e.g. Marikina Pickleball Club"></div>
+        <div class="field">
+          <label>Club Logo (optional)</label>
+          <div style="display:flex;align-items:center;gap:10px;">
+            ${avatarUploadWidget('editSessionClubLogoUrl', activeSession.club_logo_url || '', null)}
+            <span style="font-size:11px;color:var(--ink-muted);">Shows on the spectator page and final podium.</span>
+          </div>
+        </div>
+        <div class="auth-error" id="editSessionError"></div>
+        <div class="confirm-actions">
+          <button class="btn-no" onclick="document.getElementById('editSessionModal').remove()">Cancel</button>
+          <button class="btn-yes" id="editSessionSaveBtn" onclick="confirmEditSession()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+async function confirmEditSession() {
+  const name = document.getElementById('editSessionName')?.value?.trim();
+  const scheduledDate = document.getElementById('editSessionDate')?.value || null;
+  const clubName = document.getElementById('editSessionClubName')?.value?.trim() || null;
+  const clubLogoUrl = document.getElementById('editSessionClubLogoUrl')?.value || null;
+  const errEl = document.getElementById('editSessionError');
+  const btn = document.getElementById('editSessionSaveBtn');
+  if (!name) { errEl.textContent = 'Session name is required.'; return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    await SessionAPI.updateSessionDetails(activeSession.id, { name, scheduledDate, clubName, clubLogoUrl });
+    activeSession.name = name;
+    activeSession.scheduled_date = scheduledDate;
+    activeSession.club_name = clubName;
+    activeSession.club_logo_url = clubLogoUrl;
+    document.getElementById('editSessionModal').remove();
+    await renderConsole();
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not save changes.';
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+  }
+}
+
 async function renderConsole() {
   const shareUrl = `${window.location.origin}/?session=${activeSession.id}`;
   document.getElementById('appRoot').innerHTML = `
     <div class="console-header">
       <div>
         <button class="btn-secondary" style="width:auto;padding:6px 12px;font-size:12px;margin-bottom:8px;" onclick="backToSessionList()">← All Sessions</button>
-        <h1>${escapeHtml(activeSession.name)}</h1>
+        <h1>${escapeHtml(activeSession.name)} <button onclick="openEditSessionModal()" title="Edit session details" style="background:none;border:none;font-size:15px;cursor:pointer;vertical-align:middle;opacity:.7;">✏️</button></h1>
       </div>
       <button onclick="confirmFinishSession()" class="finish-session-btn">Finish Session</button>
     </div>
