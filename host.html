@@ -1626,24 +1626,36 @@ const SessionAPI = (() => {
 
       if (winnerRow) {
         const { data: winPlayers } = await supabaseClient.from('players')
-          .select('id, wins, total_games_played, total_points').in('id', winnerRow.player_ids);
+          .select('id, wins, total_games_played, total_points, total_points_against').in('id', winnerRow.player_ids);
         for (const p of winPlayers || []) {
-          await supabaseClient.from('players').update({
+          const row = {
             wins: (p.wins || 0) + 1,
             total_games_played: (p.total_games_played || 0) + 1,
             total_points: (p.total_points || 0) + winnerScore,
-          }).eq('id', p.id);
+            total_points_against: (p.total_points_against || 0) + loserScore,
+          };
+          let { error: updErr } = await supabaseClient.from('players').update(row).eq('id', p.id);
+          if (updErr && /total_points_against/i.test(updErr.message || '')) {
+            delete row.total_points_against;
+            await supabaseClient.from('players').update(row).eq('id', p.id);
+          }
         }
       }
       if (loserRow) {
         const { data: losePlayers } = await supabaseClient.from('players')
-          .select('id, losses, total_games_played, total_points').in('id', loserRow.player_ids);
+          .select('id, losses, total_games_played, total_points, total_points_against').in('id', loserRow.player_ids);
         for (const p of losePlayers || []) {
-          await supabaseClient.from('players').update({
+          const row = {
             losses: (p.losses || 0) + 1,
             total_games_played: (p.total_games_played || 0) + 1,
             total_points: (p.total_points || 0) + loserScore,
-          }).eq('id', p.id);
+            total_points_against: (p.total_points_against || 0) + winnerScore,
+          };
+          let { error: updErr } = await supabaseClient.from('players').update(row).eq('id', p.id);
+          if (updErr && /total_points_against/i.test(updErr.message || '')) {
+            delete row.total_points_against;
+            await supabaseClient.from('players').update(row).eq('id', p.id);
+          }
         }
       }
     }
@@ -3567,6 +3579,16 @@ async function manualBoardHtml() {
   }
 
   setTimeout(startManualBoardTimers, 0);
+  window._draftCards = draftCards;
+  window._draftPlayerById = playerById;
+  setTimeout(() => {
+    renderDraftCardsPager();
+    if (!window._draftResizeBound) {
+      window._draftResizeBound = true;
+      let t;
+      window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(renderDraftCardsPager, 150); });
+    }
+  }, 0);
 
   return `
     <div class="card" style="padding:14px 16px;">
@@ -3589,8 +3611,9 @@ async function manualBoardHtml() {
     </div>` : ''}
 
     ${draftCards.length ? `
-    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
-      ${draftCards.map(c => draftCardHtml(c, playerById)).join('')}
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div class="lane-header" style="background:var(--optic-yellow);color:var(--optic-yellow-ink);"><span>Draft Cards</span><span class="count">${draftCards.length}</span></div>
+      <div class="mp-pager" id="draftCardsPager"></div>
     </div>` : ''}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
@@ -3642,6 +3665,42 @@ function draftCardHtml(card, playerById) {
       ? `<button onclick="handlePromoteDraftCard('${card.id}')" style="width:100%;margin-top:8px;background:var(--winner-green);color:#0A1620;border:none;padding:9px;border-radius:var(--radius-sm);font-weight:800;font-size:12px;cursor:pointer;">Queue This Match →</button>`
       : `<p style="font-size:11px;color:var(--resting-slate);text-align:center;margin:8px 0 0;">Drag or tap players in — fill all 4 to queue.</p>`}
   </div>`;
+}
+
+// Draft cards get their OWN bounded pager — same exact pattern as the Up
+// Next queue pager (computeCardsPerPageHost, ‹ › nav, resize-aware), just
+// with its own page-index state so paging through drafts never disturbs
+// wherever the host was in the Up Next queue, and vice versa.
+window._draftCardsPageIndex = 0;
+function renderDraftCardsPager() {
+  const pager = document.getElementById('draftCardsPager');
+  if (!pager) return;
+  const cards = window._draftCards || [];
+  const total = cards.length;
+  if (!total) { pager.innerHTML = ''; return; }
+
+  const perPage = Math.max(1, Math.min(computeCardsPerPageHost(pager.closest('.card')), total));
+  const maxStart = Math.max(0, total - perPage);
+  if (window._draftCardsPageIndex > maxStart) window._draftCardsPageIndex = maxStart;
+  const idx = window._draftCardsPageIndex;
+
+  const visible = cards.slice(idx, idx + perPage);
+  const cardsHtml = visible.map(c => draftCardHtml(c, window._draftPlayerById)).join('');
+
+  pager.innerHTML = `
+    <button class="mp-nav-btn" onclick="navigateDraftCards(-1)" ${idx === 0 ? 'disabled' : ''} aria-label="Previous">‹</button>
+    <div class="mp-pager-row">${cardsHtml}</div>
+    <button class="mp-nav-btn" onclick="navigateDraftCards(1)" ${idx + perPage >= total ? 'disabled' : ''} aria-label="Next">›</button>
+  `;
+}
+function navigateDraftCards(direction) {
+  const total = (window._draftCards || []).length;
+  const pager = document.getElementById('draftCardsPager');
+  const perPage = Math.max(1, Math.min(computeCardsPerPageHost(pager?.closest('.card')), total));
+  const next = window._draftCardsPageIndex + direction * perPage;
+  if (next < 0 || next >= total) return;
+  window._draftCardsPageIndex = next;
+  renderDraftCardsPager();
 }
 
 function manualCardHtml(title, colorVar, list, verb) {
@@ -5482,22 +5541,51 @@ function renderRRDraw(rrMatches, entries, entMap, bracketId) {
   for (const m of rrMatches) {
     if (m.entry_a_id && m.entry_b_id) scoreMap[`${m.entry_a_id}_${m.entry_b_id}`] = m;
   }
+  const completedRR = rrMatches.filter(x => x.status === 'completed');
   const standings = real.map(e => {
-    let w=0,l=0,pf=0,pa=0;
-    for (const m of rrMatches.filter(x=>x.status==='completed')) {
-      const isA = m.entry_a_id===e.id, isB = m.entry_b_id===e.id;
+    let w = 0, l = 0, pf = 0, pa = 0, gp = 0;
+    for (const m of completedRR) {
+      const isA = m.entry_a_id === e.id, isB = m.entry_b_id === e.id;
       if (!isA && !isB) continue;
-      if (m.winner_id===e.id) w++; else l++;
-      pf += isA?(m.score_a||0):(m.score_b||0);
-      pa += isA?(m.score_b||0):(m.score_a||0);
+      // Points: sum every game's points if present (Bo3), else score_a/score_b —
+      // same handling as tournament.html's computeStandings, so a Bo3 result
+      // never quietly tallies differently between the two views.
+      let ptsA = 0, ptsB = 0;
+      if (Array.isArray(m.games) && m.games.length) {
+        for (const g of m.games) { ptsA += g.a || 0; ptsB += g.b || 0; }
+      } else { ptsA = m.score_a || 0; ptsB = m.score_b || 0; }
+      if (m.winner_id === e.id) w++; else l++;
+      gp++;
+      pf += isA ? ptsA : ptsB;
+      pa += isA ? ptsB : ptsA;
     }
-    return {...e, w, l, pf, pa};
-  }).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
+    return { ...e, w, l, pf, pa, gp };
+  });
+  // Head-to-head: did idA beat idB directly in this round robin?
+  function h2hWinner(idA, idB) {
+    const m = completedRR.find(m => (m.entry_a_id === idA && m.entry_b_id === idB) || (m.entry_a_id === idB && m.entry_b_id === idA));
+    return m ? m.winner_id : null;
+  }
+  // Canonical tournament ranking: Wins -> Win% -> Point Differential ->
+  // Head-to-head -> fewer Losses as a final fallback. Kept textually
+  // identical to tournament.html's computeStandings so this host-side
+  // view and the spectator/tournament view can never disagree.
+  standings.sort((a, b) => {
+    if (b.w !== a.w) return b.w - a.w;
+    const pctA = a.gp ? a.w / a.gp : 0, pctB = b.gp ? b.w / b.gp : 0;
+    if (pctB !== pctA) return pctB - pctA;
+    const diffA = a.pf - a.pa, diffB = b.pf - b.pa;
+    if (diffB !== diffA) return diffB - diffA;
+    const h2h = h2hWinner(a.id, b.id);
+    if (h2h === a.id) return -1;
+    if (h2h === b.id) return 1;
+    return a.l - b.l;
+  });
 
   return `
     <div class="table-scroll" style="margin-bottom:14px;">
       <table class="roster-table">
-        <thead><tr><th>#</th><th>Team</th><th>W</th><th>L</th><th>PF</th><th>PA</th><th>Diff</th></tr></thead>
+        <thead><tr><th>#</th><th>Team</th><th>W</th><th>L</th><th>PF</th><th>PA</th><th>Diff</th><th>Win%</th></tr></thead>
         <tbody>
           ${standings.map((e,i)=>`
             <tr class="${i===0?'lb-highlight':''}">
@@ -5508,6 +5596,7 @@ function renderRRDraw(rrMatches, entries, entMap, bracketId) {
               <td style="font-family:var(--font-mono);">${e.pf}</td>
               <td style="font-family:var(--font-mono);">${e.pa}</td>
               <td style="font-family:var(--font-mono);font-weight:700;color:${e.pf-e.pa>=0?'var(--winner-green)':'var(--fault-coral)'};">${e.pf-e.pa>=0?'+':''}${e.pf-e.pa}</td>
+              <td style="font-family:var(--font-mono);">${e.gp ? Math.round((e.w / e.gp) * 100) : 0}%</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -5701,13 +5790,21 @@ async function leaderboardTabHtml() {
   ]);
   activeSession = session;
 
+  // Canonical open-play ranking: Wins -> Win% -> Point Differential ->
+  // fewer Losses as a final tiebreak. Kept textually identical to
+  // index.html's copy of this same function so the host view and the
+  // spectator view can never rank players differently for the same data.
   const ranked = [...players]
     .filter(p => (p.total_games_played || 0) > 0)
     .sort((a, b) => {
       const wA = a.wins || 0, wB = b.wins || 0;
       if (wB !== wA) return wB - wA;
-      const pA = a.total_points || 0, pB = b.total_points || 0;
-      if (pB !== pA) return pB - pA;
+      const gpA = a.total_games_played || 0, gpB = b.total_games_played || 0;
+      const pctA = gpA ? wA / gpA : 0, pctB = gpB ? wB / gpB : 0;
+      if (pctB !== pctA) return pctB - pctA;
+      const diffA = (a.total_points || 0) - (a.total_points_against || 0);
+      const diffB = (b.total_points || 0) - (b.total_points_against || 0);
+      if (diffB !== diffA) return diffB - diffA;
       return (a.losses || 0) - (b.losses || 0);
     });
 
@@ -5756,8 +5853,8 @@ async function leaderboardTabHtml() {
               <th style="text-align:center;">W</th>
               <th style="text-align:center;">L</th>
               <th style="text-align:center;">GP</th>
-              <th style="text-align:center;">Pts</th>
               <th style="text-align:center;">Win%</th>
+              <th style="text-align:center;">+/-</th>
             </tr>
           </thead>
           <tbody>
@@ -5765,7 +5862,7 @@ async function leaderboardTabHtml() {
               const gp  = p.total_games_played || 0;
               const w   = p.wins || 0;
               const l   = p.losses || 0;
-              const pts = p.total_points || 0;
+              const diff = (p.total_points || 0) - (p.total_points_against || 0);
               const pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
               return `
                 <tr class="${i === 0 ? 'lb-highlight' : ''}">
@@ -5775,8 +5872,8 @@ async function leaderboardTabHtml() {
                   <td class="lb-stat lb-won">${w}</td>
                   <td class="lb-stat lb-lost">${l}</td>
                   <td class="lb-stat">${gp}</td>
-                  <td class="lb-stat lb-pts">${pts}</td>
                   <td class="lb-stat">${pct}%</td>
+                  <td class="lb-stat lb-pts" style="color:${diff > 0 ? 'var(--winner-green)' : diff < 0 ? 'var(--fault-coral)' : 'inherit'};">${diff > 0 ? '+' : ''}${diff}</td>
                 </tr>`;
             }).join('')}
           </tbody>

@@ -729,13 +729,23 @@ function renderOpenPlaySessionComplete(players) {
   const el = document.getElementById('sessionCompleteSection');
   if (!el) return;
 
+  // Canonical open-play ranking: Wins -> Win% -> Point Differential ->
+  // fewer Losses as a final tiebreak. Kept textually identical to
+  // renderLeaderboard's copy of this same logic (and host.html's) so the
+  // final podium can never disagree with the live leaderboard, or with
+  // the host's own view, for the same underlying data.
   const ranked = [...players]
     .filter(p => (p.total_games_played || 0) > 0)
     .sort((a, b) => {
       const wA = a.wins || 0, wB = b.wins || 0;
       if (wB !== wA) return wB - wA;
-      const pA = a.total_points || 0, pB = b.total_points || 0;
-      return pB - pA;
+      const gpA = a.total_games_played || 0, gpB = b.total_games_played || 0;
+      const pctA = gpA ? wA / gpA : 0, pctB = gpB ? wB / gpB : 0;
+      if (pctB !== pctA) return pctB - pctA;
+      const diffA = (a.total_points || 0) - (a.total_points_against || 0);
+      const diffB = (b.total_points || 0) - (b.total_points_against || 0);
+      if (diffB !== diffA) return diffB - diffA;
+      return (a.losses || 0) - (b.losses || 0);
     });
 
   if (!ranked.length) {
@@ -761,15 +771,16 @@ function renderOpenPlaySessionComplete(players) {
 
   const tableRows = ranked.map((p, i) => {
     const gp = p.total_games_played || 0, w = p.wins || 0, l = p.losses || 0;
-    const pts = p.total_points || 0, pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
+    const diff = (p.total_points || 0) - (p.total_points_against || 0);
+    const pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
     return `<tr class="${i === 0 ? 'lb-highlight' : ''}">
       <td style="font-weight:700;">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</td>
       <td style="font-weight:700;">${escapeHtml(p.name)}</td>
       <td class="lb-won" style="text-align:center;">${w}</td>
       <td class="lb-lost" style="text-align:center;">${l}</td>
       <td style="text-align:center;font-family:var(--font-mono);">${gp}</td>
-      <td class="lb-pts" style="text-align:center;">${pts}</td>
       <td style="text-align:center;font-family:var(--font-mono);">${pct}%</td>
+      <td class="lb-pts" style="text-align:center;color:${diff > 0 ? 'var(--winner-green)' : diff < 0 ? 'var(--fault-coral)' : 'inherit'};">${diff > 0 ? '+' : ''}${diff}</td>
     </tr>`;
   }).join('');
 
@@ -788,7 +799,7 @@ function renderOpenPlaySessionComplete(players) {
       <h2 class="lb-card-title">🏅 Final Standings</h2>
       <div class="table-scroll">
         <table class="roster-table">
-          <thead><tr><th>#</th><th>Player</th><th style="text-align:center;">W</th><th style="text-align:center;">L</th><th style="text-align:center;">GP</th><th style="text-align:center;">Pts</th><th style="text-align:center;">Win%</th></tr></thead>
+          <thead><tr><th>#</th><th>Player</th><th style="text-align:center;">W</th><th style="text-align:center;">L</th><th style="text-align:center;">GP</th><th style="text-align:center;">Win%</th><th style="text-align:center;">+/-</th></tr></thead>
           <tbody>${tableRows}</tbody>
         </table>
       </div>
@@ -1339,13 +1350,22 @@ function renderLeaderboard(players, session) {
   if (!el) return;
   if (!session.leaderboard_public) { el.innerHTML = ''; return; }
 
+  // Canonical open-play ranking: Wins -> Win% -> Point Differential ->
+  // fewer Losses as a final tiebreak. Kept textually identical to
+  // host.html's copy of this same function so the host view and the
+  // spectator view can never rank players differently for the same data.
   const ranked = [...players]
     .filter(p => (p.total_games_played || 0) > 0)
     .sort((a, b) => {
       const wA = a.wins || 0, wB = b.wins || 0;
       if (wB !== wA) return wB - wA;
-      const pA = a.total_points || 0, pB = b.total_points || 0;
-      return pB - pA;
+      const gpA = a.total_games_played || 0, gpB = b.total_games_played || 0;
+      const pctA = gpA ? wA / gpA : 0, pctB = gpB ? wB / gpB : 0;
+      if (pctB !== pctA) return pctB - pctA;
+      const diffA = (a.total_points || 0) - (a.total_points_against || 0);
+      const diffB = (b.total_points || 0) - (b.total_points_against || 0);
+      if (diffB !== diffA) return diffB - diffA;
+      return (a.losses || 0) - (b.losses || 0);
     });
 
   if (!ranked.length) { el.innerHTML = ''; return; }
@@ -1361,8 +1381,8 @@ function renderLeaderboard(players, session) {
               <th style="text-align:center;">W</th>
               <th style="text-align:center;">L</th>
               <th style="text-align:center;">GP</th>
-              <th style="text-align:center;">Pts</th>
               <th style="text-align:center;">Win%</th>
+              <th style="text-align:center;">+/-</th>
             </tr>
           </thead>
           <tbody>
@@ -1370,7 +1390,7 @@ function renderLeaderboard(players, session) {
               const gp  = p.total_games_played || 0;
               const w   = p.wins || 0;
               const l   = p.losses || 0;
-              const pts = p.total_points || 0;
+              const diff = (p.total_points || 0) - (p.total_points_against || 0);
               const pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
               return `<tr class="${i === 0 ? 'lb-highlight' : ''}">
                 <td style="font-weight:700;">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}</td>
@@ -1378,8 +1398,8 @@ function renderLeaderboard(players, session) {
                 <td class="lb-won" style="text-align:center;">${w}</td>
                 <td class="lb-lost" style="text-align:center;">${l}</td>
                 <td style="text-align:center;font-family:var(--font-mono);">${gp}</td>
-                <td class="lb-pts" style="text-align:center;">${pts}</td>
                 <td style="text-align:center;font-family:var(--font-mono);">${pct}%</td>
+                <td class="lb-pts" style="text-align:center;color:${diff > 0 ? 'var(--winner-green)' : diff < 0 ? 'var(--fault-coral)' : 'inherit'};">${diff > 0 ? '+' : ''}${diff}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -1959,7 +1979,26 @@ function renderTournamentView(){
       if(stats[m.entry_a_id]){const s=stats[m.entry_a_id];s.pf+=pA;s.pa+=pB;m.winner_id===m.entry_a_id?s.w++:s.l++}
       if(stats[m.entry_b_id]){const s=stats[m.entry_b_id];s.pf+=pB;s.pa+=pA;m.winner_id===m.entry_b_id?s.w++:s.l++}
     }
-    return Object.values(stats).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
+    // Head-to-head: did idA beat idB directly?
+    function h2hWinner(idA,idB){
+      const m=done.find(m=>(m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
+      return m?m.winner_id:null;
+    }
+    // Canonical tournament ranking: Wins -> Win% -> Point Differential ->
+    // Head-to-head -> fewer Losses. Kept textually identical to host.html's
+    // renderRRDraw and tournament.html's computeStandings.
+    return Object.values(stats).sort((a,b)=>{
+      if(b.w!==a.w)return b.w-a.w;
+      const gpA=a.w+a.l, gpB=b.w+b.l;
+      const pctA=gpA?a.w/gpA:0, pctB=gpB?b.w/gpB:0;
+      if(pctB!==pctA)return pctB-pctA;
+      const diffA=a.pf-a.pa, diffB=b.pf-b.pa;
+      if(diffB!==diffA)return diffB-diffA;
+      const h2h=h2hWinner(a.id,b.id);
+      if(h2h===a.id)return -1;
+      if(h2h===b.id)return 1;
+      return a.l-b.l;
+    });
   }
   function computeAllSpectatorGroupStandings(){
     const groupNums=[...new Set(_tMatches.filter(m=>m.match_type==='round_robin'&&m.group_num!=null).map(m=>m.group_num))].sort((a,b)=>a-b);
@@ -1983,7 +2022,22 @@ function renderTournamentView(){
       if(stats[m.entry_a_id]){const s=stats[m.entry_a_id];s.pf+=pA;s.pa+=pB;m.winner_id===m.entry_a_id?s.w++:s.l++}
       if(stats[m.entry_b_id]){const s=stats[m.entry_b_id];s.pf+=pB;s.pa+=pA;m.winner_id===m.entry_b_id?s.w++:s.l++}
     }
-    return Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa));
+    function h2hWinner(idA,idB){
+      const m=done.find(m=>(m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
+      return m?m.winner_id:null;
+    }
+    return Object.values(stats).filter(s=>s.w+s.l>0).sort((a,b)=>{
+      if(b.w!==a.w)return b.w-a.w;
+      const gpA=a.w+a.l, gpB=b.w+b.l;
+      const pctA=gpA?a.w/gpA:0, pctB=gpB?b.w/gpB:0;
+      if(pctB!==pctA)return pctB-pctA;
+      const diffA=a.pf-a.pa, diffB=b.pf-b.pa;
+      if(diffB!==diffA)return diffB-diffA;
+      const h2h=h2hWinner(a.id,b.id);
+      if(h2h===a.id)return -1;
+      if(h2h===b.id)return 1;
+      return a.l-b.l;
+    });
   }
   const standings=computeSpectatorStandingsAllTypes(); // used by the non-RR (single-elim) branch below
 

@@ -2406,7 +2406,26 @@ function computeStandings(groupNum){
     if(stats[wId]){const s=stats[wId];s.w++;s.gp++;s.pf+=wScore;s.pa+=lScore}
     if(stats[lId]){const s=stats[lId];s.l++;s.gp++;s.pf+=lScore;s.pa+=wScore}
   }
-  return Object.values(stats).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa)||a.l-b.l);
+  // Head-to-head: did idA beat idB directly in this round robin?
+  function h2hWinner(idA,idB){
+    const m=rrDone.find(m=>(m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
+    return m?m.winner_id:null;
+  }
+  // Canonical tournament ranking: Wins -> Win% -> Point Differential ->
+  // Head-to-head -> fewer Losses as a final fallback. Kept textually
+  // identical to host.html's copy of this same logic (renderRRDraw) so
+  // both views can never disagree on the same standings.
+  return Object.values(stats).sort((a,b)=>{
+    if(b.w!==a.w)return b.w-a.w;
+    const pctA=a.gp?a.w/a.gp:0, pctB=b.gp?b.w/b.gp:0;
+    if(pctB!==pctA)return pctB-pctA;
+    const diffA=a.pf-a.pa, diffB=b.pf-b.pa;
+    if(diffB!==diffA)return diffB-diffA;
+    const h2h=h2hWinner(a.id,b.id);
+    if(h2h===a.id)return -1;
+    if(h2h===b.id)return 1;
+    return a.l-b.l;
+  });
 }
 // Returns [{groupNum, standings}] for every group present in the bracket
 // (or a single entry with groupNum=null if this round robin isn't grouped).
@@ -3070,14 +3089,6 @@ function renderScoreboard(){
   const stats={};
   TEAMS.forEach(t=>{stats[t.id]={id:t.id,name:t.team_name,p1:t.player1_name,p2:t.player2_name,seed:t.seed,w:0,l:0,pf:0,pa:0,gp:0}});
   for(const m of done){
-    if(m.winner_id&&stats[m.winner_id]){const s=stats[m.winner_id];s.w++;s.gp++;s.pf+=m.score_a===m.winner_id?m.score_a:m.score_b;// simplified
-    }
-    // Recalculate properly
-  }
-
-  // Recalculate stats properly
-  Object.values(stats).forEach(s=>{s.w=0;s.l=0;s.pf=0;s.pa=0;s.gp=0});
-  for(const m of done){
     const isA_w=m.winner_id===m.entry_a_id;
     const wId=m.winner_id,lId=isA_w?m.entry_b_id:m.entry_a_id;
     // Points tally: sum every game's points (Bo3 counts all games).
@@ -3090,7 +3101,26 @@ function renderScoreboard(){
     if(stats[lId]){const s=stats[lId];s.l++;s.gp++;s.pf+=lScore;s.pa+=wScore}
   }
 
-  const sorted=Object.values(stats).filter(s=>s.gp>0).sort((a,b)=>b.w-a.w||(b.pf-b.pa)-(a.pf-a.pa)||a.l-b.l);
+  // Head-to-head: did idA beat idB directly?
+  function h2hWinner(idA,idB){
+    const m=done.find(m=>(m.entry_a_id===idA&&m.entry_b_id===idB)||(m.entry_a_id===idB&&m.entry_b_id===idA));
+    return m?m.winner_id:null;
+  }
+  // Canonical tournament ranking: Wins -> Win% -> Point Differential ->
+  // Head-to-head -> fewer Losses as a final fallback — identical to
+  // computeStandings' logic above, just scoped to this flat (non-grouped)
+  // format's overall standings instead of one group.
+  const sorted=Object.values(stats).filter(s=>s.gp>0).sort((a,b)=>{
+    if(b.w!==a.w)return b.w-a.w;
+    const pctA=a.gp?a.w/a.gp:0, pctB=b.gp?b.w/b.gp:0;
+    if(pctB!==pctA)return pctB-pctA;
+    const diffA=a.pf-a.pa, diffB=b.pf-b.pa;
+    if(diffB!==diffA)return diffB-diffA;
+    const h2h=h2hWinner(a.id,b.id);
+    if(h2h===a.id)return -1;
+    if(h2h===b.id)return 1;
+    return a.l-b.l;
+  });
   const all=Object.values(stats).sort((a,b)=>(a.seed||99)-(b.seed||99));
 
   // Round results table
