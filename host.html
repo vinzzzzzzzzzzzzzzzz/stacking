@@ -916,13 +916,42 @@ const AccountAPI = (() => {
   // account, generate + store + email an OTP. Never reveals whether an
   // email exists or not beyond "check your email" — same message either
   // way avoids leaking which addresses are registered hosts.
+  // Looks up a host account by email — checking the account's own primary
+  // email FIRST, then falling back to host_account_emails (additional
+  // emails a superadmin has granted access to this same account, e.g. a
+  // co-organizer). Either match logs in as the SAME underlying account.
+  async function findHostByEmail(email) {
+    const { data: direct, error: directErr } = await supabaseClient
+      .from('host_accounts').select('id, name, email, is_active, allow_open_play, allow_tournament')
+      .eq('email', email).single();
+    if (direct) return direct;
+    // PGRST116 = "no rows found" from .single() — a genuine not-found,
+    // not a real error. Anything else (RLS blocking, etc.) needs to be
+    // surfaced, not silently treated the same as "this email isn't registered."
+    if (directErr && directErr.code !== 'PGRST116') throw directErr;
+
+    const { data: extra, error: extraErr } = await supabaseClient
+      .from('host_account_emails').select('host_id').eq('email', email).single();
+    if (extraErr && extraErr.code !== 'PGRST116') {
+      const missingTable = extraErr.code === '42P01' || /does not exist|could not find the .* (table|column)/i.test(extraErr.message || '');
+      const rlsBlocked = extraErr.code === '42501' || /row-level security|permission denied/i.test(extraErr.message || '');
+      if (missingTable) throw new Error('Database is missing the host_account_emails table — ask your admin to run the migration.');
+      if (rlsBlocked) throw new Error('Row Level Security is blocking host_account_emails — ask your admin to run: ALTER TABLE host_account_emails DISABLE ROW LEVEL SECURITY;');
+      throw extraErr;
+    }
+    if (!extra) return null;
+    const { data: viaExtra, error: viaErr } = await supabaseClient
+      .from('host_accounts').select('id, name, email, is_active, allow_open_play, allow_tournament')
+      .eq('id', extra.host_id).single();
+    if (viaErr && viaErr.code !== 'PGRST116') throw viaErr;
+    return viaExtra || null;
+  }
+
   async function requestLoginOTP(email) {
     email = (email || '').trim().toLowerCase();
     if (!email) throw new Error('Enter your email.');
-    const { data: host, error } = await supabaseClient
-      .from('host_accounts').select('id, name, email, is_active, allow_open_play, allow_tournament')
-      .eq('email', email).single();
-    if (error || !host) {
+    const host = await findHostByEmail(email);
+    if (!host) {
       throw new Error('No host account found for this email. Ask your admin to add it first.');
     }
     if (!host.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
@@ -973,10 +1002,8 @@ const AccountAPI = (() => {
 
     await supabaseClient.from('login_otps').update({ used: true }).eq('id', otpRow.id);
 
-    const { data: host, error: hErr } = await supabaseClient
-      .from('host_accounts').select('id, name, email, is_active, allow_open_play, allow_tournament')
-      .eq('email', email).single();
-    if (hErr || !host) throw new Error('Account not found.');
+    const host = await findHostByEmail(email);
+    if (!host) throw new Error('Account not found.');
     if (!host.is_active) throw new Error('This account has been deactivated. Contact the administrator.');
     return host;
   }
