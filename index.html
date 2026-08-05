@@ -666,11 +666,26 @@ async function loadSession(sessionId) {
     }
     renderShell();
     const dateEl = document.getElementById('sessionDateLabel');
-    if (dateEl && session.created_at) {
-      dateEl.textContent = new Date(session.created_at).toLocaleDateString('en-US', {
-        weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-      });
+    // scheduled_date is a plain YYYY-MM-DD (no time component) — parsing
+    // that directly via `new Date("YYYY-MM-DD")` reads it as UTC midnight,
+    // which can silently roll back to the PREVIOUS day once converted to
+    // a viewer's local time (anyone west of UTC). Parsing the numbers out
+    // and building a local-midnight Date avoids that shift entirely.
+    if (dateEl) {
+      let dateToShow = null;
+      if (session.scheduled_date) {
+        const [y, m, d] = session.scheduled_date.split('-').map(Number);
+        dateToShow = new Date(y, m - 1, d);
+      } else if (session.created_at) {
+        dateToShow = new Date(session.created_at);
+      }
+      if (dateToShow) {
+        dateEl.textContent = dateToShow.toLocaleDateString('en-US', {
+          weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+        });
+      }
     }
+    renderClubBanner(session);
     await refreshAll();
     subscribeRealtime();
     startTimerLoop();
@@ -686,8 +701,23 @@ async function loadSession(sessionId) {
 // ============================================================
 // SHELL
 // ============================================================
+// Shows nothing at all if the host never set a club name or logo — this
+// is purely optional branding, never an empty placeholder box.
+function renderClubBanner(session) {
+  const el = document.getElementById('clubBanner');
+  if (!el) return;
+  if (!session.club_name && !session.club_logo_url) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin:4px 0 14px;">
+      ${session.club_logo_url ? `<img src="${session.club_logo_url}" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;box-shadow:var(--shadow-card);">` : ''}
+      ${session.club_name ? `<span style="font-weight:800;font-size:15px;letter-spacing:.01em;">${escapeHtml(session.club_name)}</span>` : ''}
+    </div>
+  `;
+}
+
 function renderShell() {
   document.getElementById('mainContent').innerHTML = `
+    <div id="clubBanner"></div>
     <div id="sessionDateLabel" style="text-align:center;font-size:12px;font-weight:700;color:var(--ink-muted);letter-spacing:.03em;margin:-4px 0 16px;"></div>
     <div id="sessionCompleteSection"></div>
     <div class="courts-grid" id="courtsGrid"></div>
@@ -784,8 +814,29 @@ function renderOpenPlaySessionComplete(players) {
     </tr>`;
   }).join('');
 
+  // Same club banner + date treatment as the live view, using the same
+  // safe date-only parsing to avoid a UTC-midnight timezone shift.
+  let podiumDateStr = '';
+  if (currentSession?.scheduled_date) {
+    const [y, m, d] = currentSession.scheduled_date.split('-').map(Number);
+    podiumDateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  } else if (currentSession?.created_at) {
+    podiumDateStr = new Date(currentSession.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+  const hasClubInfo = currentSession?.club_name || currentSession?.club_logo_url;
+  const podiumBannerHtml = (hasClubInfo || podiumDateStr) ? `
+    <div style="text-align:center;margin-bottom:14px;">
+      ${hasClubInfo ? `
+      <div style="display:flex;align-items:center;justify-content:center;gap:9px;margin-bottom:4px;">
+        ${currentSession.club_logo_url ? `<img src="${currentSession.club_logo_url}" alt="" style="width:30px;height:30px;border-radius:50%;object-fit:cover;">` : ''}
+        ${currentSession.club_name ? `<span style="font-weight:800;font-size:14px;">${escapeHtml(currentSession.club_name)}</span>` : ''}
+      </div>` : ''}
+      ${podiumDateStr ? `<div style="font-size:11px;font-weight:700;color:var(--ink-muted);letter-spacing:.03em;">${podiumDateStr}</div>` : ''}
+    </div>` : '';
+
   el.innerHTML = `
     <div class="card" style="margin-bottom:16px;background:linear-gradient(180deg,rgba(45,212,232,.06),transparent);border:1px solid rgba(45,212,232,.18)">
+      ${podiumBannerHtml}
       <div style="text-align:center;margin-bottom:14px">
         <span style="font-size:10px;background:rgba(45,212,232,.15);color:var(--optic-yellow);padding:3px 12px;border-radius:999px;font-weight:800;letter-spacing:.08em">🎾 SESSION COMPLETE</span>
       </div>
@@ -1168,6 +1219,7 @@ function renderUpNextSectionManual(preparedMatches, players, teams) {
   const el = document.getElementById('upNextSection');
   if (!el) return;
   if (!preparedMatches.length) {
+    window._manualUpNextMatches = [];
     el.innerHTML = `<div class="card" style="padding:0;overflow:hidden;margin-bottom:20px;">
       <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">0</span></div>
       <div style="text-align:center;padding:24px;color:var(--resting-slate);font-size:13px;">No matches queued yet — the host is still setting up the next pairing.</div>
@@ -1178,25 +1230,69 @@ function renderUpNextSectionManual(preparedMatches, players, teams) {
   const teamsById    = (id) => teams.find(t => t.id === id);
   const teamToPlayers = (teamId) => (teamsById(teamId)?.player_ids || []).map(playersById).filter(Boolean);
 
+  window._manualUpNextMatches = preparedMatches.map((pm, i) => ({
+    label: `Queued #${i + 1}${i === 0 ? ' (Next)' : ''}`,
+    teamA: teamToPlayers(pm.team_a_id),
+    teamB: teamToPlayers(pm.team_b_id),
+  }));
+
   el.innerHTML = `
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:20px;">
       <div class="lane-header" style="background:var(--waiting-blue);"><span>Up Next</span><span class="count">${preparedMatches.length}</span></div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px;padding:14px 12px;">
-        ${preparedMatches.map((pm, i) => {
-          const teamA = teamToPlayers(pm.team_a_id);
-          const teamB = teamToPlayers(pm.team_b_id);
-          return `<div class="mp-card" style="flex:1 1 280px;max-width:340px;">
-            <div class="mp-card-label"><span>Queued #${i + 1}${i === 0 ? ' <span style="opacity:.7;font-weight:600">(Next)</span>' : ''}</span></div>
-            <div class="mp-teams">
-              <div class="mp-team-row">${teamA.map(p => paddleChip(p)).join('')}</div>
-              <span class="mp-vs">VS</span>
-              <div class="mp-team-row">${teamB.map(p => paddleChip(p)).join('')}</div>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
+      <div class="mp-pager" id="manualUpNextPager"></div>
     </div>
   `;
+  renderManualUpNextCard();
+  if (!window._manualUpNextResizeBound) {
+    window._manualUpNextResizeBound = true;
+    let t;
+    window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(renderManualUpNextCard, 150); });
+  }
+}
+
+// Manual mode's Up Next gets its OWN bounded pager — same exact pattern
+// (computeCardsPerPage, ‹ › nav, resize-aware) as the automated mode's
+// pager below, just with independent page-index state so paging through
+// one never disturbs the other, and each queued card shows the REAL
+// host-built pairing rather than a simulated preview.
+window._manualUpNextPageIndex = 0;
+function renderManualUpNextCard() {
+  const pager = document.getElementById('manualUpNextPager');
+  if (!pager) return;
+  const matches = window._manualUpNextMatches || [];
+  const total = matches.length;
+  if (!total) { pager.innerHTML = ''; return; }
+
+  const perPage = Math.max(1, Math.min(computeCardsPerPage(pager.closest('.card')), total));
+  const maxStart = Math.max(0, total - perPage);
+  if (window._manualUpNextPageIndex > maxStart) window._manualUpNextPageIndex = maxStart;
+  const idx = window._manualUpNextPageIndex;
+
+  const visible = matches.slice(idx, idx + perPage);
+  const cardsHtml = visible.map(m => `
+    <div class="mp-card" style="flex:1 1 280px;max-width:340px;">
+      <div class="mp-card-label"><span>${m.label.replace(' (Next)', '')}${m.label.includes('(Next)') ? ' <span style="opacity:.7;font-weight:600">(Next)</span>' : ''}</span></div>
+      <div class="mp-teams">
+        <div class="mp-team-row">${m.teamA.map(p => paddleChip(p)).join('')}</div>
+        <span class="mp-vs">VS</span>
+        <div class="mp-team-row">${m.teamB.map(p => paddleChip(p)).join('')}</div>
+      </div>
+    </div>`).join('');
+
+  pager.innerHTML = `
+    <button class="mp-nav-btn" onclick="navigateManualUpNext(-1)" ${idx === 0 ? 'disabled' : ''} aria-label="Previous">‹</button>
+    <div class="mp-pager-row">${cardsHtml}</div>
+    <button class="mp-nav-btn" onclick="navigateManualUpNext(1)" ${idx + perPage >= total ? 'disabled' : ''} aria-label="Next">›</button>
+  `;
+}
+function navigateManualUpNext(direction) {
+  const total = (window._manualUpNextMatches || []).length;
+  const pager = document.getElementById('manualUpNextPager');
+  const perPage = Math.max(1, Math.min(computeCardsPerPage(pager?.closest('.card')), total));
+  const next = window._manualUpNextPageIndex + direction * perPage;
+  if (next < 0 || next >= total) return;
+  window._manualUpNextPageIndex = next;
+  renderManualUpNextCard();
 }
 
 function renderUpNextSection(waiting) {

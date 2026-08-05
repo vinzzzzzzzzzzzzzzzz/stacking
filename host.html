@@ -1271,7 +1271,7 @@ function generateReferenceCode() {
 // ============================================================
 const SessionAPI = (() => {
 
-  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled, deuceEnabled, pairingMode }) {
+  async function createSession({ name, format, courtCount, sessionType, category, division, bestOf, restPriorityEnabled, deuceEnabled, pairingMode, scheduledDate, clubName, clubLogoUrl }) {
     if (!currentHost?.id) {
       throw new Error('Not logged in — please log out and sign in again.');
     }
@@ -1298,6 +1298,13 @@ const SessionAPI = (() => {
         deuce_enabled: deuceEnabled !== false,
         reference_code: referenceCode,
         host_id: currentHost.id,
+        // The day the session is actually meant to happen — separate from
+        // created_at, since a host may pre-create a session days ahead of
+        // when it'll actually run (e.g. building a Saturday session on a
+        // Wednesday). Defaults to today if not given.
+        scheduled_date: scheduledDate || new Date().toISOString().slice(0, 10),
+        club_name: clubName || null,
+        club_logo_url: clubLogoUrl || null,
       };
       const result = await supabaseClient
         .from('sessions')
@@ -1305,12 +1312,15 @@ const SessionAPI = (() => {
         .select().single();
       session = result.data;
       error = result.error;
-      if (error && /open_play_mode/.test(error.message || '')) {
-        // Migration not run yet — create the session without this column
-        // rather than blocking session creation entirely. Falls back to
-        // automated pairing behavior everywhere that reads this field.
+      if (error && /open_play_mode|scheduled_date|club_name|club_logo_url/.test(error.message || '')) {
+        // Migration not run yet — create the session without whichever
+        // newer column(s) are missing rather than blocking creation
+        // entirely. Retries progressively so ONE missing column doesn't
+        // take the others down with it.
         const fallbackRow = { ...insertRow };
-        delete fallbackRow.open_play_mode;
+        for (const col of ['open_play_mode', 'scheduled_date', 'club_name', 'club_logo_url']) {
+          if (error && new RegExp(col).test(error.message || '')) delete fallbackRow[col];
+        }
         const retryResult = await supabaseClient.from('sessions').insert(fallbackRow).select().single();
         session = retryResult.data;
         error = retryResult.error;
@@ -2350,7 +2360,7 @@ const SessionAPI = (() => {
 
       const playerTeamIds = new Set((playerTeams || []).map(t => t.id));
 
-      let totalWins = 0, totalLosses = 0, totalPoints = 0, totalGP = 0;
+      let totalWins = 0, totalLosses = 0, totalPoints = 0, totalPointsAgainst = 0, totalGP = 0;
 
       for (const m of sessionMatches || []) {
         const playerOnTeamA = playerTeamIds.has(m.team_a_id);
@@ -2364,19 +2374,33 @@ const SessionAPI = (() => {
         if (won) totalWins++;
         else     totalLosses++;
 
-        // Points: player's team score for this match (null-safe → 0).
-        const playerScore = playerOnTeamA
-          ? (m.team_a_score ?? 0)
-          : (m.team_b_score ?? 0);
-        totalPoints += playerScore;
+        // Points: player's team score for this match (null-safe → 0), and
+        // the OPPONENT's score too — this second half is what point
+        // differential is actually built from, and was missing entirely
+        // before, which is exactly why editing a score (e.g. 11-0 -> 11-3)
+        // never moved the +/- shown on the leaderboard: this function
+        // recomputed everything else correctly but silently left the
+        // points-against side frozen at its original value forever.
+        const playerScore   = playerOnTeamA ? (m.team_a_score ?? 0) : (m.team_b_score ?? 0);
+        const opponentScore = playerOnTeamA ? (m.team_b_score ?? 0) : (m.team_a_score ?? 0);
+        totalPoints        += playerScore;
+        totalPointsAgainst  += opponentScore;
       }
 
-      await supabaseClient.from('players').update({
-        wins:               totalWins,
-        losses:             totalLosses,
-        total_games_played: totalGP,
-        total_points:       totalPoints,
+      let { error: updErr } = await supabaseClient.from('players').update({
+        wins:                 totalWins,
+        losses:               totalLosses,
+        total_games_played:   totalGP,
+        total_points:         totalPoints,
+        total_points_against: totalPointsAgainst,
       }).eq('id', playerId);
+      if (updErr && /total_points_against/i.test(updErr.message || '')) {
+        // Migration not run yet — save everything else so a missing
+        // column doesn't block wins/losses/points from being corrected too.
+        await supabaseClient.from('players').update({
+          wins: totalWins, losses: totalLosses, total_games_played: totalGP, total_points: totalPoints,
+        }).eq('id', playerId);
+      }
     }
   }
 
@@ -2876,6 +2900,17 @@ async function renderSessionList() {
         <div class="field"><label>Session Name</label><input type="text" id="newName" placeholder="Saturday Open Play" value="${currentHost?.allow_open_play !== false ? 'Open Play' : 'Tournament'}"></div>
         <div class="field"><label>Number of Courts</label><input type="number" id="newCourtCount" value="2" min="1" max="20"></div>
       </div>
+      <div class="form-grid">
+        <div class="field"><label>Date</label><input type="date" id="newScheduledDate" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div class="field"><label>Club Name (optional)</label><input type="text" id="newClubName" placeholder="e.g. Marikina Pickleball Club"></div>
+      </div>
+      <div class="field" style="margin-bottom:16px;">
+        <label>Club Logo (optional)</label>
+        <div style="display:flex;align-items:center;gap:10px;">
+          ${avatarUploadWidget('newClubLogoUrl', '', null)}
+          <span style="font-size:11px;color:var(--ink-muted);">Shows next to the club name on the spectator page and the final podium.</span>
+        </div>
+      </div>
 
       <!-- Open Play only -->
       <div id="openPlayFields" style="display:${currentHost?.allow_open_play === false ? 'none' : ''};">
@@ -3014,9 +3049,12 @@ async function handleCreateSession() {
     : (document.getElementById('newDeuce')?.value !== 'off');
 
   const pairingMode = _newSessionType === 'open_play' ? _newPairingMode : null;
+  const scheduledDate = document.getElementById('newScheduledDate')?.value || null;
+  const clubName = document.getElementById('newClubName')?.value?.trim() || null;
+  const clubLogoUrl = document.getElementById('newClubLogoUrl')?.value || null;
 
   try {
-    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division, deuceEnabled, pairingMode });
+    const session = await SessionAPI.createSession({ name, format, courtCount, sessionType: _newSessionType, category, division, deuceEnabled, pairingMode, scheduledDate, clubName, clubLogoUrl });
     await openSession(session.id);
   } catch (err) {
     errorEl.textContent = err.message;
