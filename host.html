@@ -5992,6 +5992,8 @@ async function leaderboardTabHtml() {
               <th style="text-align:center;">L</th>
               <th style="text-align:center;">GP</th>
               <th style="text-align:center;">Win%</th>
+              <th style="text-align:center;">PF</th>
+              <th style="text-align:center;">PA</th>
               <th style="text-align:center;">+/-</th>
             </tr>
           </thead>
@@ -6000,7 +6002,9 @@ async function leaderboardTabHtml() {
               const gp  = p.total_games_played || 0;
               const w   = p.wins || 0;
               const l   = p.losses || 0;
-              const diff = (p.total_points || 0) - (p.total_points_against || 0);
+              const pf  = p.total_points || 0;
+              const pa  = p.total_points_against || 0;
+              const diff = pf - pa;
               const pct = gp > 0 ? Math.round((w / gp) * 100) : 0;
               return `
                 <tr class="${i === 0 ? 'lb-highlight' : ''}">
@@ -6011,6 +6015,8 @@ async function leaderboardTabHtml() {
                   <td class="lb-stat lb-lost">${l}</td>
                   <td class="lb-stat">${gp}</td>
                   <td class="lb-stat">${pct}%</td>
+                  <td class="lb-stat">${pf}</td>
+                  <td class="lb-stat">${pa}</td>
                   <td class="lb-stat lb-pts" style="color:${diff > 0 ? 'var(--winner-green)' : diff < 0 ? 'var(--fault-coral)' : 'inherit'};">${diff > 0 ? '+' : ''}${diff}</td>
                 </tr>`;
             }).join('')}
